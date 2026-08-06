@@ -1,0 +1,1230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>{{ branding.company_name }} | STR Income Analysis – {{ property.short_address }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;800;900&display=swap" rel="stylesheet">
+
+  <style>
+    :root{
+      --sol-forest:{{ branding.primary_color }};
+      --sol-sage:{{ branding.accent_color }};
+      --sol-cream:#f7f3ee;
+      --sol-stone:#ece7df;
+      --sol-ink:#1c1917;
+      --sol-muted:#6b6b63;
+      --sol-card:#ffffff;
+      --sol-accent:#d4af37;
+      --sol-gradient-1: linear-gradient(135deg, #1f3c34 0%, #4b7c6b 100%);
+      --sol-gradient-2: linear-gradient(135deg, #4b7c6b 0%, #6b9b88 100%);
+      --sol-gradient-3: linear-gradient(135deg, rgba(31,60,52,0.95) 0%, rgba(75,124,107,0.95) 100%);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body{
+      font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background: linear-gradient(135deg, #f7f3ee 0%, #ece7df 100%);
+      color: var(--sol-ink);
+      line-height: 1.6;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background:
+        radial-gradient(circle at 20% 50%, rgba(75,124,107,0.08) 0%, transparent 50%),
+        radial-gradient(circle at 80% 80%, rgba(31,60,52,0.06) 0%, transparent 50%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container {
+      position: relative;
+      z-index: 1;
+    }
+
+    .glass-card {
+      background: rgba(255, 255, 255, 0.85);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      box-shadow:
+        0 8px 32px rgba(31, 60, 52, 0.1),
+        0 2px 8px rgba(31, 60, 52, 0.05),
+        inset 0 1px 0 rgba(255, 255, 255, 0.5);
+    }
+
+    .glass-card-dark {
+      background: rgba(31, 60, 52, 0.15);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(75, 124, 107, 0.2);
+    }
+
+    .shadow-luxury {
+      box-shadow:
+        0 20px 60px rgba(31, 60, 52, 0.15),
+        0 8px 24px rgba(31, 60, 52, 0.1),
+        0 2px 8px rgba(31, 60, 52, 0.05);
+    }
+
+    .shadow-soft {
+      box-shadow:
+        0 4px 16px rgba(31, 60, 52, 0.08),
+        0 2px 8px rgba(31, 60, 52, 0.04);
+    }
+
+    .gradient-text {
+      background: var(--sol-gradient-1);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    @keyframes borderGlow {
+      0%, 100% { opacity: 0.5; }
+      50% { opacity: 1; }
+    }
+
+    .border-glow {
+      position: relative;
+      overflow: hidden;
+    }
+
+    .btn-primary {
+      background: var(--sol-gradient-1);
+      color: white;
+      padding: 0.75rem 1.5rem;
+      border-radius: 1rem;
+      font-weight: 600;
+      font-size: 0.875rem;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow:
+        0 4px 16px rgba(31, 60, 52, 0.3),
+        0 2px 8px rgba(31, 60, 52, 0.2);
+      border: none;
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .btn-primary::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -100%;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+      transition: left 0.5s;
+    }
+
+    .btn-primary:hover::before {
+      left: 100%;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow:
+        0 8px 24px rgba(31, 60, 52, 0.4),
+        0 4px 12px rgba(31, 60, 52, 0.3);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.9);
+      color: var(--sol-forest);
+      padding: 0.75rem 1.5rem;
+      border-radius: 1rem;
+      font-weight: 600;
+      font-size: 0.875rem;
+      border: 2px solid rgba(31, 60, 52, 0.2);
+      transition: all 0.3s ease;
+      cursor: pointer;
+    }
+
+    .btn-secondary:hover {
+      background: white;
+      border-color: var(--sol-forest);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 16px rgba(31, 60, 52, 0.15);
+    }
+
+    .pill{
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      border-radius: 9999px;
+      font-weight: 700;
+      font-size: 0.7rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      background: var(--sol-gradient-2);
+      color: white;
+      box-shadow: 0 4px 12px rgba(75, 124, 107, 0.3);
+      border: 1px solid rgba(255, 255, 255, 0.3);
+    }
+
+    .airroi-pill{
+      display: inline-flex;
+      align-items: center;
+      padding: 0.4rem 0.8rem;
+      border-radius: 9999px;
+      font-weight: 800;
+      font-size: 0.65rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      background: linear-gradient(135deg, rgba(212,175,55,0.15) 0%, rgba(212,175,55,0.25) 100%);
+      color: #b8941f;
+      border: 1.5px solid rgba(212,175,55,0.4);
+      box-shadow: 0 2px 8px rgba(212,175,55,0.2);
+    }
+
+    .metric-grid{
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+      margin-top: 1rem;
+    }
+
+    .metric{
+      background: linear-gradient(135deg, rgba(255,255,255,0.9) 0%, rgba(255,255,255,0.7) 100%);
+      border: 1px solid rgba(31,60,52,0.12);
+      border-radius: 1rem;
+      padding: 1rem;
+      line-height: 1.2;
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .metric::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 4px;
+      height: 100%;
+      background: var(--sol-gradient-1);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    .metric:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px rgba(31, 60, 52, 0.12);
+      border-color: rgba(75, 124, 107, 0.3);
+    }
+
+    .metric:hover::before {
+      opacity: 1;
+    }
+
+    .metric .k{
+      font-size: 0.7rem;
+      font-weight: 600;
+      color: var(--sol-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    .metric .v{
+      margin-top: 0.5rem;
+      font-size: 1.25rem;
+      font-weight: 900;
+      background: var(--sol-gradient-1);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .chart-container{
+      position: relative;
+      width: 100%;
+      max-width: 900px;
+      margin-inline: auto;
+      height: 380px;
+      max-height: 480px;
+      padding: 1.5rem;
+      background: rgba(255, 255, 255, 0.5);
+      backdrop-filter: blur(10px);
+      border-radius: 1.5rem;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+    }
+
+    @media (min-width: 768px){
+      .chart-container{ height: 420px; }
+    }
+
+    input[type=range]{
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 8px;
+      border-radius: 9999px;
+      background: linear-gradient(90deg, var(--sol-sage), var(--sol-forest));
+      outline: none;
+      opacity: 0.8;
+      transition: opacity 0.2s;
+    }
+
+    input[type=range]:hover{
+      opacity: 1;
+    }
+
+    input[type=range]::-webkit-slider-thumb{
+      -webkit-appearance: none;
+      appearance: none;
+      width: 24px;
+      height: 24px;
+      border-radius: 9999px;
+      background: white;
+      cursor: pointer;
+      border: 3px solid var(--sol-forest);
+      box-shadow:
+        0 4px 12px rgba(31,60,52,0.3),
+        0 2px 6px rgba(31,60,52,0.2);
+      transition: all 0.2s ease;
+    }
+
+    input[type=range]::-webkit-slider-thumb:hover{
+      transform: scale(1.1);
+      box-shadow:
+        0 6px 16px rgba(31,60,52,0.4),
+        0 3px 8px rgba(31,60,52,0.3);
+    }
+
+    input[type=range]::-moz-range-thumb{
+      width: 24px;
+      height: 24px;
+      border-radius: 9999px;
+      background: white;
+      cursor: pointer;
+      border: 3px solid var(--sol-forest);
+      box-shadow:
+        0 4px 12px rgba(31,60,52,0.3),
+        0 2px 6px rgba(31,60,52,0.2);
+      transition: all 0.2s ease;
+    }
+
+    input[type=range]::-moz-range-thumb:hover{
+      transform: scale(1.1);
+    }
+
+    @keyframes fadeInUp {
+      from {
+        opacity: 0;
+        transform: translateY(30px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .fade-in-up {
+      animation: fadeInUp 0.6s ease-out forwards;
+    }
+
+    .delay-1 { animation-delay: 0.1s; opacity: 0; }
+    .delay-2 { animation-delay: 0.2s; opacity: 0; }
+    .delay-3 { animation-delay: 0.3s; opacity: 0; }
+    .delay-4 { animation-delay: 0.4s; opacity: 0; }
+
+    .section-title {
+      font-family: 'Playfair Display', serif;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      line-height: 1.2;
+    }
+
+    .info-card {
+      background: linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(236,231,223,0.5) 100%);
+      border: 1px solid rgba(31,60,52,0.1);
+      border-radius: 1.25rem;
+      padding: 1.25rem;
+      transition: all 0.3s ease;
+    }
+
+    .info-card:hover {
+      background: rgba(255,255,255,0.98);
+      box-shadow: 0 8px 24px rgba(31,60,52,0.1);
+      transform: translateY(-2px);
+    }
+
+    .highlight-box {
+      background: linear-gradient(135deg, rgba(75,124,107,0.08) 0%, rgba(75,124,107,0.12) 100%);
+      border-left: 4px solid var(--sol-sage);
+      border-radius: 0.75rem;
+      padding: 1.25rem;
+      box-shadow: 0 4px 12px rgba(75,124,107,0.08);
+    }
+
+    .feature-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      padding: 0.35rem 0.75rem;
+      border-radius: 0.5rem;
+      font-size: 0.65rem;
+      font-weight: 600;
+      background: rgba(75, 124, 107, 0.1);
+      color: var(--sol-forest);
+      border: 1px solid rgba(75, 124, 107, 0.2);
+    }
+
+    .subject-card {
+      border-radius: 1.5rem;
+      overflow: hidden;
+      transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+      position: relative;
+    }
+
+    .subject-card:hover {
+      transform: translateY(-6px);
+      box-shadow:
+        0 24px 56px rgba(31, 60, 52, 0.2),
+        0 10px 24px rgba(31, 60, 52, 0.1);
+    }
+
+    .subject-card .subject-img-wrap {
+      position: relative;
+      overflow: hidden;
+      height: 320px;
+    }
+
+    .subject-card .subject-img-wrap img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .subject-card:hover .subject-img-wrap img {
+      transform: scale(1.05);
+    }
+
+    .subject-card .subject-img-wrap::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 60px;
+      background: linear-gradient(to top, rgba(255,255,255,1) 0%, transparent 100%);
+      pointer-events: none;
+    }
+
+    .subject-card-body {
+      padding: 1.5rem 1.75rem 1.75rem;
+      background: white;
+    }
+
+    .subject-card-title {
+      font-family: 'Playfair Display', serif;
+      font-size: 1.35rem;
+      font-weight: 800;
+      line-height: 1.25;
+      color: var(--sol-forest);
+      letter-spacing: -0.01em;
+    }
+
+    .subject-rating {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-weight: 700;
+      font-size: 0.95rem;
+      color: var(--sol-ink);
+    }
+
+    .subject-rating .star {
+      color: #d4af37;
+      font-size: 1.1rem;
+    }
+
+    .subject-reviews {
+      color: var(--sol-muted);
+      font-size: 0.9rem;
+      font-weight: 500;
+    }
+
+    .superhost-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      padding: 0.25rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.65rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      background: linear-gradient(135deg, var(--sol-forest) 0%, var(--sol-sage) 100%);
+      color: white;
+      box-shadow: 0 2px 8px rgba(31, 60, 52, 0.25);
+    }
+
+    .subject-config {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid rgba(31, 60, 52, 0.08);
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--sol-ink);
+    }
+
+    .subject-config .sep {
+      color: rgba(31, 60, 52, 0.25);
+    }
+
+    .subject-market {
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--sol-sage);
+      margin-top: 0.5rem;
+    }
+
+    .subject-card-link {
+      display: block;
+      width: calc(100% - 1.5rem);
+      margin: 0 auto 0.75rem;
+      text-align: center;
+      font-size: 0.85rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 0.85rem 1rem;
+      border-radius: 1rem;
+      color: white;
+      background: var(--sol-gradient-1);
+      text-decoration: none;
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .subject-card-link::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -100%;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.25), transparent);
+      transition: left 0.5s;
+    }
+
+    .subject-card-link:hover::before {
+      left: 100%;
+    }
+
+    .subject-card-link:hover {
+      opacity: 0.95;
+    }
+
+    .re-type-pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.35rem 0.85rem;
+      border-radius: 0.6rem;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      background: linear-gradient(135deg, rgba(31,60,52,0.08) 0%, rgba(75,124,107,0.14) 100%);
+      color: var(--sol-forest);
+      border: 1px solid rgba(75,124,107,0.2);
+    }
+
+    .comp-card {
+      flex-direction: column;
+      border-radius: 1.5rem;
+      overflow: hidden;
+      transition: all 0.3s ease;
+    }
+
+    .comp-card:hover {
+      transform: translateY(-8px);
+      box-shadow: 0 20px 40px rgba(31, 60, 52, 0.15);
+    }
+
+    .image-overlay {
+      position: relative;
+      overflow: hidden;
+      height: 240px;
+    }
+
+    .image-overlay img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transition: transform 0.3s ease;
+    }
+
+    .comp-card:hover .image-overlay img {
+      transform: scale(1.05);
+    }
+
+    .accent-line {
+      height: 3px;
+      background: var(--sol-gradient-1);
+      margin-top: 1rem;
+    }
+
+    .luxury-header {
+      background: linear-gradient(135deg, rgba(31,60,52,0.02) 0%, rgba(75,124,107,0.02) 100%);
+    }
+
+    .stat-number {
+      font-variant-numeric: tabular-nums;
+    }
+
+    @media print {
+      body { background: white; }
+      .no-print { display: none; }
+      .glass-card { background: white; border: 1px solid #e5e7eb; }
+    }
+  </style>
+</head>
+
+<body class="min-h-screen">
+  <div class="container mx-auto max-w-7xl px-4 py-8">
+
+    <!-- 1) Branded Header -->
+    <header class="mb-10 rounded-3xl glass-card shadow-luxury overflow-hidden fade-in-up">
+      <div class="luxury-header px-8 py-8 flex flex-col md:flex-row md:items-start md:justify-between gap-6">
+        <div class="flex items-start gap-6">
+          {% if branding.logo_url %}
+          <img
+            src="{{ branding.logo_url }}"
+            alt="{{ branding.company_name }}"
+            class="h-24 md:h-28 w-auto"
+          />
+          {% else %}
+          <div style="font-size: 32px; font-weight: 900; color: var(--sol-forest); line-height: 1.1;">
+            {{ branding.company_name }}
+          </div>
+          {% endif %}
+
+          <div class="pt-2">
+            <div class="text-xs font-extrabold tracking-[.3em] uppercase" style="color:var(--sol-sage); letter-spacing: 0.25em;">
+              {{ branding.company_name }} · Property Income Analysis
+            </div>
+            <h1 class="section-title text-4xl md:text-5xl mt-2 gradient-text">
+              {{ property.short_address }}
+            </h1>
+            <p class="text-base md:text-lg font-semibold mt-3" style="color:var(--sol-muted);">
+              Subject: {{ property.bedrooms }} Bed / {{ property.bathrooms | format_bath }} Bath {{ property.property_type }} · STR Underwriting &amp; Comp Benchmarking
+            </p>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-3 no-print md:pt-2">
+          <button
+            onclick="window.print()"
+            class="btn-primary"
+          >
+            📄 Print / Save PDF
+          </button>
+          {% if branding.website_url %}
+          <a
+            href="{{ branding.website_url }}"
+            target="_blank"
+            class="btn-secondary"
+          >
+            🌐 {{ branding.website_url | replace('https://', '') | replace('http://', '') }}
+          </a>
+          {% endif %}
+        </div>
+      </div>
+      <div class="accent-line"></div>
+    </header>
+
+    <!-- 2) Subject Property Details -->
+    <section class="glass-card rounded-3xl shadow-luxury p-8 mb-10 fade-in-up delay-1">
+      <div class="flex items-start justify-between gap-4 mb-6">
+        <div>
+          <span class="pill mb-4">📍 Subject Property Details</span>
+          <h2 class="section-title text-3xl mb-3" style="color:var(--sol-forest);">Listing &amp; Positioning</h2>
+          <p class="text-base leading-relaxed" style="color:#57534e;">
+            {{ narratives.positioning_summary }}
+          </p>
+        </div>
+        {% if property.listing_url %}
+        <a
+          href="{{ property.listing_url }}"
+          target="_blank"
+          class="no-print btn-secondary"
+        >
+          🔗 View Listing
+        </a>
+        {% elif property.airbnb_url %}
+        <a
+          href="{{ property.airbnb_url }}"
+          target="_blank"
+          class="no-print btn-secondary"
+        >
+          🔗 View Listing
+        </a>
+        {% endif %}
+      </div>
+
+      <div class="mt-6 grid lg:grid-cols-5 gap-8">
+        <div class="lg:col-span-2 subject-card shadow-soft glass-card">
+          <div class="subject-img-wrap">
+            {% if property.hero_image_url %}
+            <img
+              src="{{ property.hero_image_url }}"
+              alt="{{ property.short_address }} hero image"
+              onerror="this.onerror=null; this.src='https://placehold.co/1200x800/f7f3ee/1f3c34?text=No+Photo+Available';"
+            />
+            {% else %}
+            <div style="width:100%; height:300px; background:#f7f3ee; display:flex; align-items:center; justify-content:center; border-radius:12px;">
+              <div style="text-align:center; color:#1f3c34;">
+                <div style="font-size:48px; margin-bottom:8px;">🏠</div>
+                <div style="font-size:14px; font-weight:600;">No Property Photo Available</div>
+                <div style="font-size:12px; color:#9ca3af; margin-top:4px;">Photo can be provided by the property owner</div>
+              </div>
+            </div>
+            {% endif %}
+          </div>
+
+          {% if property.airbnb_url %}
+          {# ── Airbnb listing card ── #}
+          <div class="subject-card-body">
+            <div class="subject-card-title">
+              {{ property.title or property.short_address }}
+            </div>
+
+            <div class="flex items-center flex-wrap gap-2.5 mt-3">
+              {% if property.rating %}
+              <span class="subject-rating">
+                <span class="star">&#9733;</span> {{ "%.2f"|format(property.rating) }}
+              </span>
+              {% endif %}
+              {% if property.review_count %}
+              <span class="subject-reviews">&middot; {{ property.review_count }} reviews</span>
+              {% endif %}
+              {% if property.is_superhost %}
+              <span class="superhost-badge">&#9671; Superhost</span>
+              {% endif %}
+            </div>
+
+            <div class="subject-config">
+              <span>{{ property.bedrooms }} Bedrooms</span>
+              <span class="sep">&middot;</span>
+              <span>{{ property.bathrooms | format_bath }} Baths</span>
+              <span class="sep">&middot;</span>
+              <span>Sleeps {{ property.max_guests }}</span>
+            </div>
+
+            <div class="subject-market">
+              {{ property.market }}
+            </div>
+          </div>
+          <a href="{{ property.airbnb_url }}" target="_blank" class="no-print subject-card-link">
+            View on Airbnb &rarr;
+          </a>
+
+          {% else %}
+          {# ── Real estate listing card ── #}
+          <div class="subject-card-body">
+            <div style="margin-bottom: 0.75rem;">
+              <span class="re-type-pill">{{ property.property_type }}</span>
+            </div>
+
+            <div class="subject-card-title">
+              {{ property.address }}
+            </div>
+
+            <div class="subject-config">
+              <span>{{ property.bedrooms }} Bedrooms</span>
+              <span class="sep">&middot;</span>
+              <span>{{ property.bathrooms | format_bath }} Baths</span>
+              {% if property.sqft %}
+              <span class="sep">&middot;</span>
+              <span>{{ "{:,}".format(property.sqft) }} sqft</span>
+              {% endif %}
+            </div>
+
+            <div class="subject-market">
+              {{ property.market }}
+            </div>
+          </div>
+          {% if property.listing_url %}
+          <a href="{{ property.listing_url }}" target="_blank" class="no-print subject-card-link">
+            View Listing &rarr;
+          </a>
+          {% endif %}
+          {% endif %}
+        </div>
+
+        <div class="lg:col-span-3">
+          <div class="grid md:grid-cols-2 gap-5">
+            <div class="info-card">
+              <div class="text-xs font-bold uppercase tracking-wider" style="color:var(--sol-muted);">Assumed Configuration</div>
+              <div class="text-lg font-extrabold mt-2" style="color:#292524;">{{ property.property_type }} · {{ property.bedrooms }} Bed / {{ property.bathrooms | format_bath }} Bath</div>
+              <div class="text-sm mt-3 leading-relaxed" style="color:#57534e;">
+                {{ narratives.config_description }}
+              </div>
+            </div>
+            <div class="info-card">
+              <div class="text-xs font-bold uppercase tracking-wider" style="color:var(--sol-muted);">Max Guests</div>
+              <div class="text-lg font-extrabold mt-2" style="color:#292524;">{{ property.max_guests }}</div>
+              <div class="text-sm mt-3 leading-relaxed" style="color:#57534e;">
+                {{ narratives.guests_description }}
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-5 highlight-box">
+            <div class="text-base font-extrabold mb-2" style="color:var(--sol-forest);">✨ Amenity Upside (Off-Season Booking Lift)</div>
+            <div class="text-sm leading-relaxed" style="color:#57534e;">
+              {{ narratives.amenity_upside }}
+            </div>
+            <div class="mt-4 flex flex-wrap gap-2 text-xs">
+              {% for badge in narratives.amenity_badges %}
+              <span class="feature-badge">{{ badge.emoji }} {{ badge.text }}</span>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3) Market Positioning -->
+    <section class="glass-card rounded-3xl shadow-luxury p-8 mb-10 fade-in-up delay-2">
+      <span class="pill mb-4">📊 Market Positioning</span>
+      <h2 class="section-title text-3xl mb-4" style="color:var(--sol-forest);">Competitive Landscape &amp; Positioning Strategy</h2>
+
+      <div class="grid md:grid-cols-3 gap-6 mt-6">
+        {% for card in narratives.positioning_cards %}
+        <div class="info-card">
+          <div class="text-2xl mb-2">{{ card.emoji }}</div>
+          <div class="text-xs font-bold uppercase tracking-wider mb-2" style="color:var(--sol-muted);">{{ card.title }}</div>
+          <div class="text-sm leading-relaxed" style="color:#57534e;">
+            {{ card.text }}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <!-- 4) Revenue Calculator -->
+    <section class="glass-card rounded-3xl shadow-luxury p-8 mb-10 fade-in-up delay-3">
+      <span class="pill mb-4">💰 Revenue Projections</span>
+      <h2 class="section-title text-3xl mb-6" style="color:var(--sol-forest);">Comp-Based Revenue Projection</h2>
+
+      <!-- Three-Tier Projection -->
+      <div class="grid md:grid-cols-3 gap-6 mb-8">
+        <div class="glass-card-dark rounded-2xl p-6 text-center">
+          <div class="text-xs font-bold uppercase tracking-wider mb-2" style="color:var(--sol-muted);">Conservative</div>
+          <div class="stat-number text-3xl font-black" style="color:var(--sol-forest);">
+            {{ projection.conservative | format_currency(property.currency) }}
+          </div>
+          <div class="text-xs mt-2" style="color:var(--sol-muted);">
+            {{ projection.conservative_occ }}% occ · {{ projection.conservative_adr | format_currency(property.currency) }} ADR
+          </div>
+        </div>
+        <div class="rounded-2xl p-6 text-center" style="background: var(--sol-gradient-3);">
+          <div class="text-xs font-bold uppercase tracking-wider mb-2 text-white/80">Base Case</div>
+          <div class="stat-number text-4xl font-black text-white">
+            {{ projection.base_case | format_currency(property.currency) }}
+          </div>
+          <div class="text-xs mt-2 text-white/70">
+            {{ projection.base_case_occ }}% occ · {{ projection.base_case_adr | format_currency(property.currency) }} ADR
+          </div>
+        </div>
+        <div class="glass-card-dark rounded-2xl p-6 text-center">
+          <div class="text-xs font-bold uppercase tracking-wider mb-2" style="color:var(--sol-muted);">Optimistic</div>
+          <div class="stat-number text-3xl font-black" style="color:var(--sol-forest);">
+            {{ projection.optimistic | format_currency(property.currency) }}
+          </div>
+          <div class="text-xs mt-2" style="color:var(--sol-muted);">
+            {{ projection.optimistic_occ }}% occ · {{ projection.optimistic_adr | format_currency(property.currency) }} ADR
+          </div>
+        </div>
+      </div>
+      <div class="text-xs text-center mb-6" style="color:var(--sol-muted);">
+        {{ projection.source_description }}
+      </div>
+      {% if projection.airroi_divergence_flag %}
+      <div class="highlight-box mb-6" style="border-left: 4px solid #e67e22;">
+        <div class="text-sm" style="color:#57534e;">
+          <strong>Note:</strong> Third-party market model estimates {{ projection.airroi_estimate | format_currency(property.currency) }}
+          ({{ projection.airroi_divergence_pct }}% {{ 'above' if projection.airroi_estimate > projection.base_case else 'below' }} comp median).
+          This divergence may reflect differences in comparable property selection criteria.
+        </div>
+      </div>
+      {% endif %}
+
+      <h3 class="text-xl font-bold mb-4" style="color:var(--sol-forest);">Interactive Performance Model</h3>
+
+      <!-- Interactive Controls -->
+      <div class="grid md:grid-cols-3 gap-8 mt-8">
+        <!-- Occupancy Slider -->
+        <div class="glass-card-dark rounded-2xl p-6">
+          <label class="block text-sm font-bold uppercase tracking-wider mb-3" style="color:var(--sol-forest);">
+            Annual Occupancy Rate
+          </label>
+          <div class="flex items-center gap-4 mb-3">
+            <input
+              type="range"
+              id="occSlider"
+              min="{{ calculator.occ_min }}"
+              max="{{ calculator.occ_max }}"
+              value="{{ calculator.occ_default }}"
+              step="{{ calculator.occ_step }}"
+              class="flex-grow"
+            />
+            <div class="stat-number text-3xl font-bold" style="color:var(--sol-forest); min-width: 80px;">
+              <span id="occValue">{{ calculator.occ_default }}</span>%
+            </div>
+          </div>
+          <div class="text-xs" style="color:var(--sol-muted);">
+            Industry range: {{ calculator.occ_range_text }}
+          </div>
+        </div>
+
+        <!-- ADR Slider -->
+        <div class="glass-card-dark rounded-2xl p-6">
+          <label class="block text-sm font-bold uppercase tracking-wider mb-3" style="color:var(--sol-forest);">
+            Average Daily Rate (ADR)
+          </label>
+          <div class="flex items-center gap-4 mb-3">
+            <input
+              type="range"
+              id="adrSlider"
+              min="{{ calculator.adr_min }}"
+              max="{{ calculator.adr_max }}"
+              value="{{ calculator.adr_default }}"
+              step="{{ calculator.adr_step }}"
+              class="flex-grow"
+            />
+            <div class="stat-number text-3xl font-bold" style="color:var(--sol-forest); min-width: 140px;">
+              {{ property.currency }}<span id="adrValue">{{ '{:,}'.format(calculator.adr_default) }}</span>
+            </div>
+          </div>
+          <div class="text-xs" style="color:var(--sol-muted);">
+            Comp range: {{ calculator.adr_range_text }}
+          </div>
+        </div>
+
+        <!-- Days Available Slider -->
+        <div class="glass-card-dark rounded-2xl p-6">
+          <label class="block text-sm font-bold uppercase tracking-wider mb-3" style="color:var(--sol-forest);">
+            Days Available (Out of 365)
+          </label>
+          <div class="flex items-center gap-4 mb-3">
+            <input
+              type="range"
+              id="daysSlider"
+              min="{{ calculator.days_min }}"
+              max="{{ calculator.days_max }}"
+              value="{{ calculator.days_default }}"
+              step="{{ calculator.days_step }}"
+              class="flex-grow"
+            />
+            <div class="stat-number text-3xl font-bold" style="color:var(--sol-forest); min-width: 100px;">
+              <span id="daysValue">{{ calculator.days_default }}</span>
+            </div>
+          </div>
+          <div class="text-xs" style="color:var(--sol-muted);">
+            Account for maintenance, cleaning, and personal use
+          </div>
+        </div>
+      </div>
+
+      <!-- Revenue Display -->
+      <div class="mt-8 p-8 rounded-2xl text-center" style="background: var(--sol-gradient-3);">
+        <div class="text-sm font-bold uppercase tracking-[.2em] text-white/80 mb-2">
+          Projected Annual Gross Revenue
+        </div>
+        <div class="stat-number text-6xl md:text-7xl font-black text-white mb-2">
+          {{ property.currency }}<span id="totalRevenue">{{ '{:,}'.format(initial_revenue) }}</span>
+        </div>
+        <div class="text-sm text-white/70">
+          Based on <span id="displayOcc">{{ calculator.occ_default }}</span>% occupancy of <span id="displayDays">{{ calculator.days_default }}</span> available days at {{ property.currency }}<span id="displayAdr">{{ '{:,}'.format(calculator.adr_default) }}</span> ADR
+        </div>
+        <div class="mt-6 text-xs text-white/60 max-w-2xl mx-auto leading-relaxed">
+          *Gross revenue before cleaning, platform fees, utilities, HOA/strata, taxes, supplies, and management.
+          Actual performance may vary based on seasonality, market conditions, and operational execution.
+        </div>
+      </div>
+
+      <!-- Key Metrics Grid -->
+      <div class="metric-grid mt-8">
+        <div class="metric">
+          <div class="k">📅 Available Nights</div>
+          <div class="v"><span id="availNights">{{ calculator.days_default }}</span></div>
+        </div>
+        <div class="metric">
+          <div class="k">🛏️ Occupied Nights</div>
+          <div class="v"><span id="occNights">{{ initial_occ_nights }}</span></div>
+        </div>
+        <div class="metric">
+          <div class="k">💵 Revenue per Night</div>
+          <div class="v">{{ property.currency }}<span id="revPerNight">{{ '{:,}'.format(calculator.adr_default) }}</span></div>
+        </div>
+        <div class="metric">
+          <div class="k">📊 Revenue per Available Night</div>
+          <div class="v">{{ property.currency }}<span id="revPar">{{ '{:,}'.format(initial_revpar) }}</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5) Chart Section -->
+    <section class="glass-card rounded-3xl shadow-luxury p-8 mb-10 fade-in-up delay-4">
+      <span class="pill mb-4">📈 Performance Analytics</span>
+      <h2 class="section-title text-3xl mb-6" style="color:var(--sol-forest);">Seasonal Performance Patterns</h2>
+
+      <div class="chart-container">
+        <canvas id="seasonalChart"></canvas>
+      </div>
+
+      <div class="mt-8 grid md:grid-cols-2 gap-6">
+        <div class="highlight-box">
+          <div class="text-sm font-bold mb-2" style="color:var(--sol-forest);">🎿 Peak Season (Dec-Mar)</div>
+          <div class="text-sm leading-relaxed" style="color:#57534e;">
+            {{ narratives.peak_season_text }}
+          </div>
+        </div>
+        <div class="highlight-box">
+          <div class="text-sm font-bold mb-2" style="color:var(--sol-forest);">🌸 Shoulder Season (Apr-Nov)</div>
+          <div class="text-sm leading-relaxed" style="color:#57534e;">
+            {{ narratives.shoulder_season_text }}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6) Comparable Properties -->
+    <section class="glass-card rounded-3xl shadow-luxury p-8 mb-10 break-after fade-in-up delay-4">
+      <div class="flex items-start justify-between gap-4 mb-6">
+        <div>
+          <span class="pill mb-4">🏘️ Market Comparables</span>
+          <h2 class="section-title text-3xl mb-3" style="color:var(--sol-forest);">
+            Comparable Properties (Airbnb) + AirROI Performance Snapshot
+          </h2>
+          <p class="text-sm leading-relaxed" style="color:#57534e;">
+            These listings represent <strong>top-performing premium homes</strong> in {{ property.market }}. They are the best available performance anchors,
+            but the subject's caliber is above typical inventory — treat results as a benchmark range, with execution quality as the primary driver.
+          </p>
+        </div>
+        <span class="airroi-pill">✓ AirROI Verified</span>
+      </div>
+
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 print:grid-cols-2 gap-8 mt-8">
+        {% for comp in comps %}
+        <div class="comp-card avoid-break flex flex-col rounded-2xl overflow-hidden shadow-soft glass-card">
+          <div class="image-overlay">
+            <img
+              src="{{ comp.image_url }}"
+              alt="{{ comp.name }}"
+              class="w-full h-48 object-cover"
+              onerror="this.onerror=null; this.src='https://placehold.co/900x600/f7f3ee/1f3c34?text=Comp+Image';"
+            />
+          </div>
+          <div class="p-5 flex-grow">
+            <div class="flex items-center justify-between gap-2 mb-2">
+              <h4 class="text-base font-extrabold" style="color:#292524;">{{ comp.name }}</h4>
+              <span class="airroi-pill">AirROI</span>
+            </div>
+            <p class="text-xs mb-3" style="color:var(--sol-muted);">Sleeps {{ comp.sleeps }} · {{ comp.bedrooms }} BR / {{ comp.bathrooms | format_bath }} BA · ⭐ {{ comp.rating }} ({{ comp.review_count }})</p>
+            <div class="flex flex-wrap gap-2 mb-4">
+              {% for i in range(comp.feature_badges | length) %}
+              <span class="feature-badge">{{ comp.badge_emojis[i] if i < comp.badge_emojis | length else '✨' }} {{ comp.feature_badges[i] }}</span>
+              {% endfor %}
+            </div>
+            <div class="metric-grid">
+              <div class="metric"><div class="k">Revenue Potential</div><div class="v">{{ comp.revenue_potential | format_currency_k(property.currency) }}</div></div>
+              <div class="metric"><div class="k">Annual Revenue</div><div class="v">{{ comp.annual_revenue | format_currency_k(property.currency) }}</div></div>
+              <div class="metric"><div class="k">Occupancy</div><div class="v">{{ comp.occupancy_pct | int }}%</div></div>
+              <div class="metric"><div class="k">ADR</div><div class="v">{{ comp.adr | format_currency(property.currency) }}</div></div>
+              <div class="metric"><div class="k">Days Available</div><div class="v">{{ comp.days_available }}</div></div>
+              <div class="metric"><div class="k">Nights Booked</div><div class="v">{{ comp.days_booked }}</div></div>
+            </div>
+          </div>
+          <a href="{{ comp.airbnb_url }}" target="_blank"
+             class="block w-full text-center text-sm font-bold py-3 text-white transition-all hover:opacity-90"
+             style="background:var(--sol-gradient-1);">View Listing →</a>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <!-- 7) Methodology & Assumptions -->
+    <section class="glass-card rounded-3xl shadow-luxury p-8 mb-10 fade-in-up delay-4">
+      <span class="pill mb-4">📋 Methodology</span>
+      <h2 class="section-title text-3xl mb-6" style="color:var(--sol-forest);">Analysis Assumptions &amp; Methodology</h2>
+
+      <div class="grid md:grid-cols-2 gap-6">
+        <div class="info-card">
+          <div class="text-base font-bold mb-3" style="color:var(--sol-forest);">🎯 Comp Selection Criteria</div>
+          <ul class="text-sm space-y-2 leading-relaxed" style="color:#57534e;">
+            {% for item in methodology.comp_criteria %}
+            <li>• {{ item }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+
+        <div class="info-card">
+          <div class="text-base font-bold mb-3" style="color:var(--sol-forest);">📊 Data Sources</div>
+          <ul class="text-sm space-y-2 leading-relaxed" style="color:#57534e;">
+            {% for item in methodology.data_sources %}
+            <li>• {{ item }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+
+        <div class="info-card">
+          <div class="text-base font-bold mb-3" style="color:var(--sol-forest);">⚠️ Key Assumptions</div>
+          <ul class="text-sm space-y-2 leading-relaxed" style="color:#57534e;">
+            {% for item in methodology.assumptions %}
+            <li>• {{ item }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+
+        <div class="info-card">
+          <div class="text-base font-bold mb-3" style="color:var(--sol-forest);">💡 Performance Drivers</div>
+          <ul class="text-sm space-y-2 leading-relaxed" style="color:#57534e;">
+            {% for item in methodology.performance_drivers %}
+            <li>• {{ item }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+
+      <div class="mt-6 highlight-box">
+        <div class="text-sm font-bold mb-2" style="color:var(--sol-forest);">⚖️ Important Disclaimer</div>
+        <div class="text-sm leading-relaxed" style="color:#57534e;">
+          This analysis provides estimated gross revenue projections based on comparable property performance and market data.
+          Actual results will vary based on operational execution, market conditions, seasonality, and property-specific factors.
+          Revenue estimates are <strong>before</strong> all operating expenses including cleaning fees, platform commissions,
+          utilities, property taxes, HOA/strata fees, maintenance, supplies, insurance, and management fees. Net operating income
+          will be substantially lower after accounting for these costs. This report is for informational purposes only and should
+          not be considered financial or investment advice.
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="text-center py-8 mt-12 border-t border-gray-200">
+      <p class="text-xs text-gray-400 font-medium uppercase tracking-widest">
+        {{ branding.company_name }} · {{ branding.tagline }}
+      </p>
+      {% if branding.website_url %}
+      <p class="text-xs text-gray-300 mt-2">
+        <a href="{{ branding.website_url }}" class="hover:text-sol-forest transition">{{ branding.website_url | replace('https://', '') | replace('http://', '') }}</a>
+      </p>
+      {% endif %}
+      <p class="text-xs text-gray-300 mt-1">
+        Report generated {{ report_date }}
+      </p>
+    </footer>
+  </div>
+
+  <script>
+    // Revenue Calculator with 3 Toggles
+    const occSlider = document.getElementById('occSlider');
+    const adrSlider = document.getElementById('adrSlider');
+    const daysSlider = document.getElementById('daysSlider');
+
+    const occValue = document.getElementById('occValue');
+    const adrValue = document.getElementById('adrValue');
+    const daysValue = document.getElementById('daysValue');
+
+    const totalRevenue = document.getElementById('totalRevenue');
+    const displayOcc = document.getElementById('displayOcc');
+    const displayAdr = document.getElementById('displayAdr');
+    const displayDays = document.getElementById('displayDays');
+    const availNights = document.getElementById('availNights');
+    const occNights = document.getElementById('occNights');
+    const revPerNight = document.getElementById('revPerNight');
+    const revPar = document.getElementById('revPar');
+
+    function updateCalculator() {
+      const occ = parseInt(occSlider.value);
+      const adr = parseInt(adrSlider.value);
+      const days = parseInt(daysSlider.value);
+
+      const booked = Math.round(days * (occ / 100));
+      const revenue = booked * adr;
+      const rpa = Math.round(revenue / days);
+
+      occValue.textContent = occ;
+      adrValue.textContent = adr.toLocaleString();
+      daysValue.textContent = days;
+
+      totalRevenue.textContent = revenue.toLocaleString();
+      displayOcc.textContent = occ;
+      displayAdr.textContent = adr.toLocaleString();
+      displayDays.textContent = days;
+      availNights.textContent = days;
+      occNights.textContent = booked;
+      revPerNight.textContent = adr.toLocaleString();
+      revPar.textContent = rpa.toLocaleString();
+    }
+
+    [occSlider, adrSlider, daysSlider].forEach(s => s.addEventListener('input', updateCalculator));
+    updateCalculator();
+
+    // Chart
+    const ctx = document.getElementById('seasonalChart').getContext('2d');
+    new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+        datasets: [{
+          label: 'Occupancy %',
+          data: {{ seasonal_data | tojson }},
+          borderColor: '#1f3c34',
+          backgroundColor: 'rgba(31, 60, 52, 0.08)',
+          borderWidth: 3,
+          fill: true,
+          tension: 0.4,
+          pointRadius: 5,
+          pointBackgroundColor: '#1f3c34',
+          pointBorderColor: 'white',
+          pointBorderWidth: 2
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            max: 100,
+            grid: { color: 'rgba(0,0,0,0.05)' }
+          },
+          x: {
+            grid: { display: false }
+          }
+        }
+      }
+    });
+  </script>
+</body>
+</html>
