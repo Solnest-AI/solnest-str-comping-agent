@@ -4,7 +4,12 @@ This is an STR (short-term rental) income analysis report generator. It takes a 
 
 ## First-Time Setup
 
-**Check if setup is needed:** Look for a `.env` file in this directory. If it doesn't exist, walk the user through setup step by step. Do NOT skip steps. Do NOT move to the next step until the current one is confirmed.
+**Check if setup is needed:** Look for **both** a `.env` file and a `branding.json` file in this directory.
+
+- Neither exists → run the whole setup from Step 1.
+- `.env` exists but `branding.json` doesn't → the keys are configured but the reports are still unbranded. Jump straight to **Step 7: Branding Setup**, then Step 8.
+
+Walk the user through it step by step. Do NOT skip steps. Do NOT move to the next step until the current one is confirmed.
 
 ### Step 1: Install Python Dependencies
 
@@ -68,48 +73,80 @@ Used for Google Street View photos when a property has no listing images online.
 
 ### Step 7: Branding Setup
 
-Ask the user these questions one at a time:
+**Every report carries the company branding in `branding.json`. Until this step is done there is none, so do not skip it and do not let the user skip it.** If `branding.json` is missing, the report falls back to `branding.example.json`, which renders the literal placeholder "Your Company Name" on a client-facing document.
 
-1. **What's your company name?** (e.g., "Acme Vacation Rentals")
+**Lead with the website. It answers almost every other question on its own.**
 
-2. **Do you have a logo you'd like to use?**
-   - If YES and they have a **direct URL** to their logo image → use it
-   - If YES but they only have their **website URL** → scrape the website to find their logo:
-     - Fetch the website HTML
-     - Look for the logo in these locations (in order):
-       - `<link rel="icon">` or `<link rel="apple-touch-icon">` (favicon/app icon)
-       - `<meta property="og:image">` (Open Graph image)
-       - `<img>` tags in the header/nav with "logo" in the src, alt, or class name
-       - Any `<img>` with "logo" in the filename
-     - Show the user what you found and confirm it's their logo
-   - If NO → leave blank, the report will show their company name as text instead
+#### 7a. Ask for the website first
 
-3. **What's your website URL?** (can leave blank if they don't have one)
+> **"What's your company website?"**
 
-4. **What's your brand color?**
-   - If they provided a website, scrape it and extract the primary brand color from:
-     - CSS custom properties (--primary-color, --brand-color, etc.)
-     - The most prominent non-white, non-black color in the header/nav
-     - The color used on buttons or links
-   - Show the user what you found: "I found this color from your website: #2c5282 — want to use it?"
-   - If they don't have a website, ask them to describe their brand color (e.g., "dark blue", "forest green") or provide a hex code
-   - Default to `#1f3c34` if they don't have a preference
+One question. Wait for the answer before doing anything else.
 
-5. **What's your tagline?** (e.g., "Premium Vacation Home Management" — or leave as default)
+- If they **have** a site, go to 7b.
+- If they **don't** have one, skip to 7d and ask for each field directly.
 
-Save their answers to `branding.json`:
+#### 7b. Scrape the site once, derive everything you can
+
+Fetch the homepage HTML and pull out all four of these in a single pass:
+
+| Field | Where to look, in order |
+|---|---|
+| **Company name** | `<meta property="og:site_name">`, then `<title>` (strip taglines and separators like `\|`, `-`, `—`), then the logo's `alt` text |
+| **Logo** | `<meta property="og:image">`, then `<img>` in the header/nav with "logo" in the `src`/`alt`/`class`, then any `<img>` with "logo" in the filename, then `<link rel="apple-touch-icon">`, then `<link rel="icon">` |
+| **Primary color** | CSS custom properties (`--primary`, `--brand`, `--accent`, etc.), then the most prominent non-white, non-black, non-grey color in the header/nav, then the button or link color |
+| **Tagline** | `<meta name="description">` or the homepage hero heading, shortened to a phrase |
+
+Notes that matter:
+
+- **Resolve relative URLs to absolute** (`/img/logo.png` → `https://theirsite.com/img/logo.png`). A relative path renders as a broken image in the report.
+- **Prefer a real logo over a favicon.** Favicons are usually 32×32 and look terrible scaled up in the report header. Only fall back to one if nothing else exists.
+- **Skip social/CDN placeholder images** that aren't actually their mark.
+
+#### 7c. Show what you found and confirm it
+
+Present all of it at once and let them correct anything:
+
+```
+Here's what I pulled from theirsite.com:
+
+  Company:  Acme Vacation Rentals
+  Logo:     https://theirsite.com/img/logo.png
+  Color:    #2c5282
+  Tagline:  Premium Vacation Home Management
+
+Want me to use these, or change any of them?
+```
+
+Confirm the **logo** specifically. Show them the URL and say what it looks like. A wrong logo is the single most visible error on a client-facing report.
+
+If a field came back empty or wrong, ask for just that one field. Don't re-ask for things you already got right.
+
+#### 7d. Fallbacks when there's no website (or a field is missing)
+
+Ask only for what you're still missing:
+
+1. **Company name** (e.g. "Acme Vacation Rentals") — required, no default
+2. **Logo** — a direct image URL if they have one. If not, leave `logo_url` blank; the report renders the company name as text, which looks clean and is a fine outcome
+3. **Brand color** — a hex code, or a description like "dark blue" or "forest green" that you convert to hex. Default `#1f3c34` if they have no preference
+4. **Tagline** — default to "Short-Term Rental Management"
+
+#### 7e. Write `branding.json`
+
 ```json
 {
   "company_name": "Their Company Name",
-  "tagline": "Their Tagline or Short-Term Rental Management",
-  "logo_url": "https://their-logo-url.com/logo.png",
-  "website_url": "https://www.theirwebsite.com",
+  "tagline": "Their Tagline",
+  "logo_url": "https://theirsite.com/img/logo.png",
+  "website_url": "https://www.theirsite.com",
   "primary_color": "#2c5282",
   "accent_color": "#4299e1"
 }
 ```
 
-For the accent color, automatically derive it from the primary color — use a lighter/softer version of the same hue.
+Derive `accent_color` from `primary_color` automatically: same hue, lighter and softer. Never ask for it.
+
+Write the file, then read it back and confirm it parses as valid JSON before moving on.
 
 ### Step 8: Verify Setup
 
