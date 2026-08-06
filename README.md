@@ -1,5 +1,9 @@
 # STR Comping Agent — instant short-term-rental income reports
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Runs in Claude Code](https://img.shields.io/badge/runs%20in-Claude%20Code-d97757.svg)](https://claude.com/claude-code)
+
 Give it a property — an Airbnb link, a Zillow link, or just a street address — and it finds the real comparable Airbnb listings nearby, scores them, and generates a branded, self-contained HTML report with revenue projections. The kind of analysis that takes an analyst an afternoon, in about a minute.
 
 It runs inside **Claude Code**. You don't need to be technical: open Claude Code, drag this folder in, and say **"set this up."** Claude walks you through it one step at a time — installing dependencies, collecting your API keys, and branding the report with your company. Most people generate their first report in under 15 minutes.
