@@ -1,5 +1,6 @@
 # STR Comping Agent — instant short-term-rental income reports
 
+[![CI](https://github.com/ryanlefebvre1-maker/str-comping-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/ryanlefebvre1-maker/str-comping-agent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![Runs in Claude Code](https://img.shields.io/badge/runs%20in-Claude%20Code-d97757.svg)](https://claude.com/claude-code)
