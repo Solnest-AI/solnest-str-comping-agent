@@ -30,3 +30,4 @@ STR-Agent-Updates-*.md
 
 # ── Local backups ──
 _pre-sync-backup-*/
+dist/

@@ -1,95 +1,115 @@
 #!/usr/bin/env python3
 """Build a distribution zip of the comping agent.
 
-Usage: python scripts/package.py
-Output: dist/str-comping-agent.zip
+Usage:
+    python scripts/package.py                 # -> dist/str-comping-agent.zip
+    python scripts/package.py --out <path>    # also copy the zip to <path>
+
+The file manifest comes from `git ls-files`, so the zip contains exactly the
+tracked, published file set and nothing else. That matters: .gitignore is the
+single place secrets and owner-specific files are excluded (.env, branding.json,
+output/, docs/, AGENTS.md, STR-Agent-Updates-*.md), and sourcing the manifest
+from git means this script can never drift out of sync with it.
+
+An earlier version walked the filesystem with its own hand-maintained exclude
+list. It missed .venv, .ruff_cache, the local backup dir, branding.json and the
+client-data updates doc, producing a 44 MB zip that leaked real client revenue
+figures and shipped Solnest branding to end users. Don't reintroduce a manual
+walk.
 """
 
+import argparse
+import shutil
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
 DIST_DIR = PROJECT_ROOT / "dist"
 ZIP_NAME = "str-comping-agent.zip"
+TOP_LEVEL = "str-comping-agent"
 
-# Files/dirs to EXCLUDE from the distribution
-EXCLUDE = {
-    ".git",
-    ".gitnexus",
-    "__pycache__",
-    ".pytest_cache",
-    ".env",              # real keys — never distribute
-    "output",            # generated reports
-    "dist",              # the output of this script
-    "docs/superpowers",  # dev planning docs
-    "scripts",           # this script itself
-    ".claude",           # Claude Code local config (includes GitNexus skills)
-    ".remember",         # Claude Code local memory
-    "AGENTS.md",         # GitNexus agent config
-    "docs",              # dev planning docs, specs, plans
-    "node_modules",
-    "solneststays-full.png",  # dev asset
-}
-
-# File extensions to exclude
-EXCLUDE_EXT = {".pyc", ".pyo"}
+# Belt-and-braces. Nothing matching these ever enters the zip, even if it
+# somehow becomes tracked. Checked against each path part and the full
+# relative path.
+NEVER_SHIP = (
+    ".env",
+    "branding.json",
+    "AGENTS.md",
+    "solneststays-full.png",
+)
+NEVER_SHIP_GLOBS = (
+    "STR-Agent-Updates-*.md",
+    "*.pyc",
+    "*.pyo",
+    ".DS_Store",
+)
 
 
-def should_include(path: Path, root: Path) -> bool:
-    """Check if a file should be included in the zip."""
-    rel = path.relative_to(root)
-    parts = rel.parts
+def tracked_files() -> list[Path]:
+    """The exact set of files git publishes, as repo-relative paths."""
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        sys.exit(f"ERROR: could not read the git manifest ({exc}). Run this inside the repo.")
 
-    # Check directory exclusions
-    for part in parts:
-        if part in EXCLUDE:
-            return False
+    files = [PROJECT_ROOT / p for p in out.split("\0") if p]
+    if not files:
+        sys.exit("ERROR: git reported no tracked files — refusing to build an empty zip.")
+    return files
 
-    # Check extension exclusions
-    if path.suffix in EXCLUDE_EXT:
+
+def is_safe(rel: Path) -> bool:
+    if any(part in NEVER_SHIP for part in rel.parts):
         return False
+    return not any(rel.match(g) or rel.name == g for g in NEVER_SHIP_GLOBS)
 
-    return True
 
-
-def build_zip():
-    """Build the distribution zip."""
+def build_zip(extra_out: Path | None = None) -> Path:
     DIST_DIR.mkdir(exist_ok=True)
     zip_path = DIST_DIR / ZIP_NAME
+    zip_path.unlink(missing_ok=True)
 
-    # Remove old zip if exists
-    if zip_path.exists():
-        zip_path.unlink()
-
-    file_count = 0
+    blocked, count = [], 0
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for path in sorted(PROJECT_ROOT.rglob("*")):
+        for path in sorted(tracked_files()):
+            rel = path.relative_to(PROJECT_ROOT)
+            if not is_safe(rel):
+                blocked.append(rel)
+                continue
             if not path.is_file():
-                continue
-            if not should_include(path, PROJECT_ROOT):
-                continue
+                continue  # tracked but deleted locally
+            zf.write(path, f"{TOP_LEVEL}/{rel}")
+            count += 1
 
-            rel_path = path.relative_to(PROJECT_ROOT)
-            arcname = f"str-comping-agent/{rel_path}"
+    size_kb = zip_path.stat().st_size / 1024
+    print(f"\n{'=' * 56}")
+    print("  Distribution zip created")
+    print(f"  File:  {zip_path.resolve()}")
+    print(f"  Size:  {size_kb:.0f} KB")
+    print(f"  Files: {count}")
+    if blocked:
+        print(f"  Blocked by safety net: {', '.join(str(b) for b in blocked)}")
+    print(f"{'=' * 56}")
 
-            # Keep the original Solnest branding.json — users will customize
-            # during setup via CLAUDE.md's branding flow
-            if rel_path.name == "branding.example.json":
-                continue  # skip the blank example — not needed in distribution
+    if extra_out:
+        extra_out.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(zip_path, extra_out)
+        print(f"  Copied to: {extra_out}")
 
-            zf.write(path, arcname)
-            file_count += 1
-
-        # .env.example is already included by the rglob — no need to add again
-
-    size_mb = zip_path.stat().st_size / 1024 / 1024
-    print(f"\n{'=' * 50}")
-    print("  Distribution zip created!")
-    print(f"  File: {zip_path.resolve()}")
-    print(f"  Size: {size_mb:.1f} MB")
-    print(f"  Files: {file_count}")
-    print(f"{'=' * 50}")
+    return zip_path
 
 
 if __name__ == "__main__":
-    build_zip()
+    ap = argparse.ArgumentParser(description="Build the distribution zip.")
+    ap.add_argument("--out", type=Path, default=None,
+                    help="Additional destination to copy the finished zip to")
+    args = ap.parse_args()
+    build_zip(args.out)
