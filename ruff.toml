@@ -1,5 +1,4 @@
 # Ruff configuration — STR Comping Agent
-# Uses Ruff's default lint rule set (pyflakes F + essential pycodestyle E4/E7/E9).
 line-length = 100
 target-version = "py310"
 
@@ -9,6 +8,14 @@ extend-exclude = [
     "docs",
     "_pre-sync-backup-*",
 ]
+
+[lint]
+# Pyflakes (F) + the essential pycodestyle checks (E4 imports, E7 statements,
+# E9 syntax/IO errors). Declared explicitly rather than relying on Ruff's
+# implicit defaults: those defaults widen between releases (0.16 added isort
+# and pyupgrade), which turns a routine `pip install ruff` into a lint failure
+# on unchanged code. Add rules here deliberately, not by upgrade.
+select = ["E4", "E7", "E9", "F"]
 
 [lint.per-file-ignores]
 # Tests insert the project root onto sys.path before importing local modules,
