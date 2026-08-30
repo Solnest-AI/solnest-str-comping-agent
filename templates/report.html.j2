@@ -611,17 +611,11 @@
     <header class="mb-10 rounded-3xl glass-card shadow-luxury overflow-hidden fade-in-up">
       <div class="luxury-header px-8 py-8 flex flex-col md:flex-row md:items-start md:justify-between gap-6">
         <div class="flex items-start gap-6">
-          {% if branding.logo_url %}
           <img
             src="{{ branding.logo_url }}"
-            alt="{{ branding.company_name }}"
+            alt="{{ branding.company_name }} Logo"
             class="h-24 md:h-28 w-auto"
           />
-          {% else %}
-          <div style="font-size: 32px; font-weight: 900; color: var(--sol-forest); line-height: 1.1;">
-            {{ branding.company_name }}
-          </div>
-          {% endif %}
 
           <div class="pt-2">
             <div class="text-xs font-extrabold tracking-[.3em] uppercase" style="color:var(--sol-sage); letter-spacing: 0.25em;">
@@ -643,15 +637,13 @@
           >
             📄 Print / Save PDF
           </button>
-          {% if branding.website_url %}
           <a
             href="{{ branding.website_url }}"
             target="_blank"
             class="btn-secondary"
           >
-            🌐 {{ branding.website_url | replace('https://', '') | replace('http://', '') }}
+            🌐 {{ branding.website_url | replace("https://","") | replace("http://","") }}
           </a>
-          {% endif %}
         </div>
       </div>
       <div class="accent-line"></div>
@@ -689,21 +681,11 @@
       <div class="mt-6 grid lg:grid-cols-5 gap-8">
         <div class="lg:col-span-2 subject-card shadow-soft glass-card">
           <div class="subject-img-wrap">
-            {% if property.hero_image_url %}
             <img
               src="{{ property.hero_image_url }}"
               alt="{{ property.short_address }} hero image"
-              onerror="this.onerror=null; this.src='https://placehold.co/1200x800/f7f3ee/1f3c34?text=No+Photo+Available';"
+              onerror="this.onerror=null; this.src='https://placehold.co/1200x800/f7f3ee/1f3c34?text=Subject+Image';"
             />
-            {% else %}
-            <div style="width:100%; height:300px; background:#f7f3ee; display:flex; align-items:center; justify-content:center; border-radius:12px;">
-              <div style="text-align:center; color:#1f3c34;">
-                <div style="font-size:48px; margin-bottom:8px;">🏠</div>
-                <div style="font-size:14px; font-weight:600;">No Property Photo Available</div>
-                <div style="font-size:12px; color:#9ca3af; margin-top:4px;">Photo can be provided by the property owner</div>
-              </div>
-            </div>
-            {% endif %}
           </div>
 
           {% if property.airbnb_url %}
@@ -830,52 +812,7 @@
     <!-- 4) Revenue Calculator -->
     <section class="glass-card rounded-3xl shadow-luxury p-8 mb-10 fade-in-up delay-3">
       <span class="pill mb-4">💰 Revenue Projections</span>
-      <h2 class="section-title text-3xl mb-6" style="color:var(--sol-forest);">Comp-Based Revenue Projection</h2>
-
-      <!-- Three-Tier Projection -->
-      <div class="grid md:grid-cols-3 gap-6 mb-8">
-        <div class="glass-card-dark rounded-2xl p-6 text-center">
-          <div class="text-xs font-bold uppercase tracking-wider mb-2" style="color:var(--sol-muted);">Conservative</div>
-          <div class="stat-number text-3xl font-black" style="color:var(--sol-forest);">
-            {{ projection.conservative | format_currency(property.currency) }}
-          </div>
-          <div class="text-xs mt-2" style="color:var(--sol-muted);">
-            {{ projection.conservative_occ }}% occ · {{ projection.conservative_adr | format_currency(property.currency) }} ADR
-          </div>
-        </div>
-        <div class="rounded-2xl p-6 text-center" style="background: var(--sol-gradient-3);">
-          <div class="text-xs font-bold uppercase tracking-wider mb-2 text-white/80">Base Case</div>
-          <div class="stat-number text-4xl font-black text-white">
-            {{ projection.base_case | format_currency(property.currency) }}
-          </div>
-          <div class="text-xs mt-2 text-white/70">
-            {{ projection.base_case_occ }}% occ · {{ projection.base_case_adr | format_currency(property.currency) }} ADR
-          </div>
-        </div>
-        <div class="glass-card-dark rounded-2xl p-6 text-center">
-          <div class="text-xs font-bold uppercase tracking-wider mb-2" style="color:var(--sol-muted);">Optimistic</div>
-          <div class="stat-number text-3xl font-black" style="color:var(--sol-forest);">
-            {{ projection.optimistic | format_currency(property.currency) }}
-          </div>
-          <div class="text-xs mt-2" style="color:var(--sol-muted);">
-            {{ projection.optimistic_occ }}% occ · {{ projection.optimistic_adr | format_currency(property.currency) }} ADR
-          </div>
-        </div>
-      </div>
-      <div class="text-xs text-center mb-6" style="color:var(--sol-muted);">
-        {{ projection.source_description }}
-      </div>
-      {% if projection.airroi_divergence_flag %}
-      <div class="highlight-box mb-6" style="border-left: 4px solid #e67e22;">
-        <div class="text-sm" style="color:#57534e;">
-          <strong>Note:</strong> Third-party market model estimates {{ projection.airroi_estimate | format_currency(property.currency) }}
-          ({{ projection.airroi_divergence_pct }}% {{ 'above' if projection.airroi_estimate > projection.base_case else 'below' }} comp median).
-          This divergence may reflect differences in comparable property selection criteria.
-        </div>
-      </div>
-      {% endif %}
-
-      <h3 class="text-xl font-bold mb-4" style="color:var(--sol-forest);">Interactive Performance Model</h3>
+      <h2 class="section-title text-3xl mb-6" style="color:var(--sol-forest);">Interactive Performance Model</h2>
 
       <!-- Interactive Controls -->
       <div class="grid md:grid-cols-3 gap-8 mt-8">
@@ -927,10 +864,10 @@
           </div>
         </div>
 
-        <!-- Days Available Slider -->
+        <!-- Nights Listed Slider -->
         <div class="glass-card-dark rounded-2xl p-6">
           <label class="block text-sm font-bold uppercase tracking-wider mb-3" style="color:var(--sol-forest);">
-            Days Available (Out of 365)
+            Nights Listed (Out of 365)
           </label>
           <div class="flex items-center gap-4 mb-3">
             <input
@@ -961,7 +898,8 @@
           {{ property.currency }}<span id="totalRevenue">{{ '{:,}'.format(initial_revenue) }}</span>
         </div>
         <div class="text-sm text-white/70">
-          Based on <span id="displayOcc">{{ calculator.occ_default }}</span>% occupancy of <span id="displayDays">{{ calculator.days_default }}</span> available days at {{ property.currency }}<span id="displayAdr">{{ '{:,}'.format(calculator.adr_default) }}</span> ADR
+          <span style="display:block;font-size:.75em;opacity:.7;margin-bottom:.4em;">Gross revenue including cleaning and guest fees. Before platform fees, utilities, HOA/strata, taxes, supplies, and management.</span>
+          Based on <span id="displayOcc">{{ calculator.occ_default }}</span>% occupancy of <span id="displayDays">{{ calculator.days_default }}</span> listed nights at {{ property.currency }}<span id="displayAdr">{{ '{:,}'.format(calculator.adr_default) }}</span> per booked night (incl. fees)
         </div>
         <div class="mt-6 text-xs text-white/60 max-w-2xl mx-auto leading-relaxed">
           *Gross revenue before cleaning, platform fees, utilities, HOA/strata, taxes, supplies, and management.
@@ -972,7 +910,7 @@
       <!-- Key Metrics Grid -->
       <div class="metric-grid mt-8">
         <div class="metric">
-          <div class="k">📅 Available Nights</div>
+          <div class="k">📅 Nights Listed</div>
           <div class="v"><span id="availNights">{{ calculator.days_default }}</span></div>
         </div>
         <div class="metric">
@@ -1001,13 +939,13 @@
 
       <div class="mt-8 grid md:grid-cols-2 gap-6">
         <div class="highlight-box">
-          <div class="text-sm font-bold mb-2" style="color:var(--sol-forest);">🎿 Peak Season (Dec-Mar)</div>
+          <div class="text-sm font-bold mb-2" style="color:var(--sol-forest);">{{ narratives.peak_season_label or "Peak Season" }}</div>
           <div class="text-sm leading-relaxed" style="color:#57534e;">
             {{ narratives.peak_season_text }}
           </div>
         </div>
         <div class="highlight-box">
-          <div class="text-sm font-bold mb-2" style="color:var(--sol-forest);">🌸 Shoulder Season (Apr-Nov)</div>
+          <div class="text-sm font-bold mb-2" style="color:var(--sol-forest);">{{ narratives.shoulder_season_label or "Shoulder Season" }}</div>
           <div class="text-sm leading-relaxed" style="color:#57534e;">
             {{ narratives.shoulder_season_text }}
           </div>
@@ -1047,7 +985,7 @@
               <h4 class="text-base font-extrabold" style="color:#292524;">{{ comp.name }}</h4>
               <span class="airroi-pill">AirROI</span>
             </div>
-            <p class="text-xs mb-3" style="color:var(--sol-muted);">Sleeps {{ comp.sleeps }} · {{ comp.bedrooms }} BR / {{ comp.bathrooms | format_bath }} BA · ⭐ {{ comp.rating }} ({{ comp.review_count }})</p>
+            <p class="text-xs mb-3" style="color:var(--sol-muted);">Sleeps {{ comp.sleeps }} · {{ comp.bedrooms }} BR / {{ comp.bathrooms | format_bath }} BA · {% if comp.rating %}⭐ {{ "%.2f"|format(comp.rating) }}{% else %}New listing{% endif %} ({{ comp.review_count }})</p>
             <div class="flex flex-wrap gap-2 mb-4">
               {% for i in range(comp.feature_badges | length) %}
               <span class="feature-badge">{{ comp.badge_emojis[i] if i < comp.badge_emojis | length else '✨' }} {{ comp.feature_badges[i] }}</span>
@@ -1058,8 +996,7 @@
               <div class="metric"><div class="k">Annual Revenue</div><div class="v">{{ comp.annual_revenue | format_currency_k(property.currency) }}</div></div>
               <div class="metric"><div class="k">Occupancy</div><div class="v">{{ comp.occupancy_pct | int }}%</div></div>
               <div class="metric"><div class="k">ADR</div><div class="v">{{ comp.adr | format_currency(property.currency) }}</div></div>
-              <div class="metric"><div class="k">Days Available</div><div class="v">{{ comp.days_available }}</div></div>
-              <div class="metric"><div class="k">Nights Booked</div><div class="v">{{ comp.days_booked }}</div></div>
+              <div class="metric" style="grid-column: 1 / span 2;"><div class="k">Nights Booked (12 mo)</div><div class="v">{{ comp.nights_booked }}<span style="font-size:.7em;opacity:.6;"> / {{ comp.nights_listed }} listed</span></div></div>
             </div>
           </div>
           <a href="{{ comp.airbnb_url }}" target="_blank"
@@ -1131,11 +1068,9 @@
       <p class="text-xs text-gray-400 font-medium uppercase tracking-widest">
         {{ branding.company_name }} · {{ branding.tagline }}
       </p>
-      {% if branding.website_url %}
       <p class="text-xs text-gray-300 mt-2">
-        <a href="{{ branding.website_url }}" class="hover:text-sol-forest transition">{{ branding.website_url | replace('https://', '') | replace('http://', '') }}</a>
+        <a href="{{ branding.website_url }}" class="hover:text-sol-forest transition">{{ branding.website_url | replace("https://","") | replace("http://","") }}</a>
       </p>
-      {% endif %}
       <p class="text-xs text-gray-300 mt-1">
         Report generated {{ report_date }}
       </p>

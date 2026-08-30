@@ -14,7 +14,7 @@ from git means this script can never drift out of sync with it.
 An earlier version walked the filesystem with its own hand-maintained exclude
 list. It missed .venv, .ruff_cache, the local backup dir, branding.json and the
 client-data updates doc, producing a 44 MB zip that leaked real client revenue
-figures and shipped Solnest branding to end users. Don't reintroduce a manual
+figures and shipped owner-specific branding to end users. Don't reintroduce a manual
 walk.
 """
 
@@ -37,10 +37,15 @@ NEVER_SHIP = (
     ".env",
     "branding.json",
     "AGENTS.md",
-    "solneststays-full.png",
+    "branding-logo.png",
+    # Merge-time reference material. These are snapshots of the OLD public repo
+    # kept side-by-side during the merge so the two versions could be diffed.
+    # They are not part of the product and must never reach a user's copy.
+    "README.public-original.md",
 )
 NEVER_SHIP_GLOBS = (
     "STR-Agent-Updates-*.md",
+    "_pub_*_reference.py",
     "*.pyc",
     "*.pyo",
     ".DS_Store",

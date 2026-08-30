@@ -30,13 +30,14 @@ AIRBTICS_BASE_URL: str = _get(
     "https://crap0y5bx5.execute-api.us-east-2.amazonaws.com/prod",
 )
 
-# ── Apify (reliable Zillow scraping — primary for property search) ──
-APIFY_TOKEN: str = _get("APIFY_TOKEN")
-APIFY_ZILLOW_ACTOR_ID: str = _get("APIFY_ZILLOW_ACTOR_ID", "ENK9p4RZHg0iVso52")
-
-# ── Google Maps (Street View hero images for off-market properties) ──
-GOOGLE_MAPS_API_KEY: str = _get("GOOGLE_MAPS_API_KEY", _get("GOOGLE_MAPS_GEOCODING_API_KEY"))
-
+# ── Anthropic (narrative generation) ──
+ANTHROPIC_API_KEY: str = _get("ANTHROPIC_API_KEY")
+# Default is the current-generation Sonnet. Measured on a real report:
+#   claude-sonnet-4-6          35.7s   $0.025/report
+#   claude-sonnet-5            18.5s   $0.025/report   <- same cost, 1.9x faster
+#   claude-haiku-4-5-20251001  15.4s   $0.008/report   <- 3x cheaper, lighter prose
+# Set NARRATIVE_MODEL in .env to override (e.g. Haiku for high-volume runs).
+NARRATIVE_MODEL: str = _get("NARRATIVE_MODEL", "claude-sonnet-5")
 
 # ── Gmail SMTP (optional) ──
 GMAIL_ADDRESS: str = _get("GMAIL_ADDRESS")
@@ -48,28 +49,11 @@ OUTPUT_DIR: Path = Path(_get("OUTPUT_DIR", "./output"))
 # ── HTTP ──
 HTTP_TIMEOUT: int = 30
 
-# ── Branding ──
-_branding_path = Path(__file__).parent / "branding.json"
-_branding_example = Path(__file__).parent / "branding.example.json"
-
-
-def _load_branding() -> dict:
-    """Load branding config. Falls back to example if branding.json doesn't exist."""
-    path = _branding_path if _branding_path.exists() else _branding_example
-    if path.exists():
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {
-        "company_name": "STR Income Analysis",
-        "tagline": "Short-Term Rental Management",
-        "logo_url": "",
-        "website_url": "",
-        "primary_color": "#1f3c34",
-        "accent_color": "#4b7c6b",
-    }
-
-
-BRANDING: dict = _load_branding()
+# ── Ski resort seasonal template (Jan-Dec occupancy %) ──
+# Used when AirROI / Airbtics monthly data is unavailable
+SKI_RESORT_SEASONAL_TEMPLATE: list[float] = [
+    82, 85, 78, 45, 38, 42, 48, 52, 40, 35, 50, 75
+]
 
 
 def ensure_firecrawl_configured() -> None:
@@ -88,3 +72,41 @@ def ensure_airroi_configured() -> None:
             "AIRROI_API_KEY is not set. Copy .env.example to .env and fill in the key. "
             "Get one at https://www.airroi.com/api/developer/activate"
         )
+
+
+# ── Branding ──────────────────────────────────────────────────────────
+# The report is white-label. Copy branding.example.json to branding.json and
+# edit it; branding.json is gitignored so your identity never ships with the
+# code, and the example provides neutral defaults for anyone who skips it.
+_BRANDING_PATH = Path(__file__).parent / "branding.json"
+_BRANDING_EXAMPLE = Path(__file__).parent / "branding.example.json"
+
+_BRANDING_DEFAULTS = {
+    "company_name": "STR Income Analysis",
+    "tagline": "Short-Term Rental Analysis",
+    "logo_url": "",
+    "website_url": "",
+    "primary_color": "#1f3c34",
+    "accent_color": "#4b7c6b",
+}
+
+
+def _load_branding() -> dict:
+    """Load branding.json, falling back to the example, then to defaults.
+
+    Never raises: a malformed branding file degrades to defaults rather than
+    taking down a report run.
+    """
+    merged = dict(_BRANDING_DEFAULTS)
+    path = _BRANDING_PATH if _BRANDING_PATH.exists() else _BRANDING_EXAMPLE
+    try:
+        if path.exists():
+            data = json.loads(path.read_text())
+            if isinstance(data, dict):
+                merged.update({k: v for k, v in data.items() if v not in (None, "")})
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"[config] Could not read {path.name} ({e}); using default branding.")
+    return merged
+
+
+BRANDING: dict = _load_branding()

@@ -1,4 +1,11 @@
 # Development dependencies (tests + linting).
 # Install with:  pip install -r requirements-dev.txt
+
 pytest>=8.0.0
-ruff>=0.6.0
+
+# Upper bound is deliberate. Ruff widens its default rule set between minor
+# releases (0.16 pulled in isort and pyupgrade), and it also adds new checks
+# inside rule families this repo already selects. Without a cap, an unrelated
+# ruff release turns CI red on code nobody touched. Raise the ceiling on
+# purpose, with a run of `ruff check .` to prove the tree still passes.
+ruff>=0.6.0,<0.17

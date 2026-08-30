@@ -28,22 +28,17 @@ def send_report_email(
     msg = MIMEMultipart()
     msg["From"] = config.GMAIL_ADDRESS
     msg["To"] = to_address
-    brand = config.BRANDING
-    msg["Subject"] = f"{brand['company_name']} | STR Income Analysis \u2013 {property_address}"
+    msg["Subject"] = f"{config.BRANDING['company_name']} | STR Income Analysis \u2013 {property_address}"
 
     # Branded HTML email body
-    logo_html = (
-        f'<img src="{brand["logo_url"]}" alt="{brand["company_name"]}" style="height: 80px; width: auto;" />'
-        if brand.get("logo_url")
-        else f'<div style="font-size: 28px; font-weight: 800; color: {brand["primary_color"]};">{brand["company_name"]}</div>'
-    )
     body = f"""
     <div style="font-family: 'Inter', Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 40px 20px;">
         <div style="text-align: center; margin-bottom: 30px;">
-            {logo_html}
+            <img src="{config.BRANDING['logo_url']}"
+                 alt="{config.BRANDING['company_name']}" style="height: 80px; width: auto;" />
         </div>
 
-        <h2 style="color: {brand['primary_color']}; font-size: 24px; margin-bottom: 10px;">
+        <h2 style="color: #1f3c34; font-size: 24px; margin-bottom: 10px;">
             STR Income Analysis
         </h2>
         <p style="color: #57534e; font-size: 16px; line-height: 1.6;">
@@ -61,15 +56,15 @@ def send_report_email(
             </p>
             <p style="color: #57534e; font-size: 13px; margin-top: 8px;">
                 Reply to this email or visit
-                <a href="{brand.get('website_url', '')}" style="color: {brand['accent_color']}; text-decoration: none; font-weight: 600;">
-                    {brand.get('website_url', '').replace('https://', '').replace('http://', '')}
+                <a href="{config.BRANDING['website_url']}" style="color: #4b7c6b; text-decoration: none; font-weight: 600;">
+                    {config.BRANDING['website_url']}
                 </a>
             </p>
         </div>
 
         <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #e5e7eb; text-align: center;">
             <p style="color: #9ca3af; font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em;">
-                {brand['company_name']} &middot; {brand['tagline']}
+                {config.BRANDING['company_name']} &middot; {config.BRANDING['tagline']}
             </p>
         </div>
     </div>
@@ -90,7 +85,7 @@ def send_report_email(
 
     # Send via Gmail SMTP
     print(f"[Email] Sending report to {to_address}...")
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=config.HTTP_TIMEOUT) as server:
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(config.GMAIL_ADDRESS, config.GMAIL_APP_PASSWORD)
         server.send_message(msg)
 

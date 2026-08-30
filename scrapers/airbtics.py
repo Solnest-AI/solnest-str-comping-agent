@@ -22,7 +22,6 @@ from __future__ import annotations
 import asyncio
 import sys
 from typing import Any, Optional
-from urllib.parse import quote
 
 import httpx
 
@@ -106,7 +105,7 @@ async def search_markets(
     match — callers should check `if not markets` rather than `is None`.
     """
     result = await _request(
-        f"/markets/search?query={quote(query)}",
+        f"/markets/search?query={query}",
         method="GET",
         client=client,
     )
@@ -262,15 +261,33 @@ async def get_market_overlay(
             if latitude is not None and longitude is not None:
                 market = await lookup_market(latitude, longitude, client=client)
 
-            # Strategy 2: name search
+            # Strategy 2: name search.
+            # Matching is EXACT-then-prefix, never "query in name": the substring
+            # form matches "Destin" against "Sandestin", a different resort
+            # market, and then reports its numbers as the subject's market.
+            # And there is NO blind matches[0] fallback -- an arbitrary market
+            # silently outranks every other seasonal source downstream, so
+            # returning None (no coverage) is strictly safer than guessing.
             if not market:
-                matches = await search_markets(market_query, client=client)
-                if matches:
-                    # Prefer exact-name match; otherwise take the first result
-                    q_lower = (market_query or "").lower().strip()
+                matches = await search_markets(market_query, client=client) or []
+                q_lower = (market_query or "").lower().strip()
+                market = next(
+                    (m for m in matches if (m.get("name") or "").lower().strip() == q_lower),
+                    None,
+                )
+                if not market:
                     market = next(
-                        (m for m in matches if q_lower in (m.get("name", "") or "").lower()),
-                        matches[0],
+                        (m for m in matches
+                         if (m.get("name") or "").lower().strip().startswith(q_lower)
+                         and len(q_lower) >= 4),
+                        None,
+                    )
+                if not market and matches:
+                    print(
+                        f"[Airbtics] No confident market match for {market_query!r} "
+                        f"(candidates: {[m.get('name') for m in matches[:5]]}) — skipping overlay "
+                        f"rather than guessing.",
+                        file=sys.stderr,
                     )
 
             if not market or not market.get("id"):

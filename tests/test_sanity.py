@@ -8,6 +8,13 @@ Phase B (post-render) parses the rendered HTML and catches presentation issues:
   - <4 or >6 comp cards, dead images in HTML, residual {{ }} or "AirDNA",
     missing required sections.
 
+FIXTURE DISCIPLINE (rewritten 2026-08-29):
+`_make_good_comp()` used to hardcode `days_available=365` with `occupancy_pct=65`
+— a listing simultaneously empty all year and 65% booked. Everything is now
+derived from `booked_nights`, and `test_good_comp_fixture_is_internally_consistent`
+enforces that. The revenue gate it exercises used to divide revenue by UNSOLD
+nights, which made it an occupancy filter and blocked reports in 5 of 6 markets.
+
 Run: pytest tests/test_sanity.py -v
 """
 
@@ -25,29 +32,83 @@ sys.path.insert(0, str(_ROOT))
 from validators.sanity import (
     run_phase_a, run_phase_b,
     _check_comp_fields, _check_revenue_sanity,
+    _REVENUE_RATIO_MIN, _REVENUE_RATIO_MAX,
     _TRUSTED_HERO_HOSTS,
 )
 from schema import (
-    PropertyBasics, RevenueEstimate, CompProperty,
+    PropertyBasics, RentalizerData, CompProperty,
     CalculatorDefaults, ReportData,
 )
 
 
 # ── Fixture builders ────────────────────────────────────────────────────
 
-def _make_good_comp(name: str = "Solid 3BR Comp", airbnb_id: str = "12345") -> CompProperty:
-    """A comp that passes all field-completeness checks."""
+# Corpus fee multiplier: ttm_revenue / (ttm_avg_rate x nights_booked).
+# Median 1.192 over 200 live records. Used to keep the fixture on the same
+# fee-inclusive basis AirROI actually reports.
+_FEE_FACTOR = 1.19
+# Achievable-occupancy ceiling used to derive a plausible revenue potential.
+_OCC_CEILING = 0.65
+
+
+def _make_good_comp(
+    name: str = "Solid 3BR Comp",
+    airbnb_id: str = "12345",
+    *,
+    booked_nights: int = 215,
+    blocked_nights: int = 15,
+    adr: float = 400.0,
+) -> CompProperty:
+    """A comp that passes all field-completeness checks.
+
+    Everything is DERIVED from `booked_nights` so the comp is a listing that
+    could actually exist:
+        nights_listed  = 365 - blocked          (open inventory)
+        occupancy_pct  = booked / nights_listed (ADJUSTED occupancy)
+        annual_revenue = adr x booked x fee multiplier   (fee-INCLUSIVE)
+        revpar         = adr x booked / 365
+        potential      = adr x listed x ceiling x fee multiplier
+    """
+    nights_listed = 365 - blocked_nights
+    assert 0 < booked_nights <= nights_listed, "fixture must be physically possible"
+    occupancy_pct = round(booked_nights / nights_listed * 100, 2)
+    room_revenue = adr * booked_nights
+    annual_revenue = round(room_revenue * _FEE_FACTOR, 2)
+    revenue_potential = round(adr * nights_listed * _OCC_CEILING * _FEE_FACTOR, 2)
+    revpar = round(room_revenue / 365, 2)
+
     return CompProperty(
         name=name,
         image_url=f"https://a0.muscache.com/im/pictures/{airbnb_id}.jpg",
         sleeps=6, bedrooms=3, bathrooms=2.0,
         rating=4.85, review_count=42,
         feature_badges=["Ski-in/Out", "Hot Tub"],
-        badge_emojis=["🎿", "🛁"],
-        revenue_potential=100000, annual_revenue=85000,
-        occupancy_pct=65, adr=400, days_available=365,
+        badge_emojis=["\U0001F3BF", "\U0001F6C1"],
+        revenue_potential=revenue_potential,
+        annual_revenue=annual_revenue,
+        occupancy_pct=occupancy_pct,
+        adr=adr,
+        nights_booked=booked_nights,
+        nights_listed=nights_listed,
+        revpar=revpar,
+        l90d_nights_booked=58,
+        l90d_occupancy_pct=round(58 / 87 * 100, 2),
         airbnb_url=f"https://www.airbnb.com/rooms/{airbnb_id}",
     )
+
+
+def test_good_comp_fixture_is_internally_consistent():
+    """Regression guard on the fixture itself.
+
+    The old builder claimed 365 available nights AND 65% occupancy, which is
+    exactly the contradiction the tool shipped to clients.
+    """
+    c = _make_good_comp()
+    assert 0 < c.nights_booked <= c.nights_listed <= 365
+    assert c.occupancy_pct == pytest.approx(c.nights_booked / c.nights_listed * 100, abs=0.01)
+    assert c.annual_revenue == pytest.approx(c.adr * c.nights_booked * _FEE_FACTOR, rel=1e-6)
+    assert c.revenue_potential >= c.annual_revenue, "potential is a ceiling, not a floor"
+    assert c.revpar == pytest.approx(c.adr * c.nights_booked / 365, abs=0.01)
 
 
 def _make_good_report() -> ReportData:
@@ -60,15 +121,15 @@ def _make_good_report() -> ReportData:
         property_type="Ski Condo",
         hero_image_url="https://cdn.realtor.ca/listings/abc/highres/1/hero.jpg",
     )
-    revenue_estimate = RevenueEstimate(revenue_potential=80000, adr=350, occupancy_pct=55)
+    rentalizer = RentalizerData(revenue_potential=80000, adr=350, occupancy_pct=55)
     comps = [_make_good_comp(f"Comp {i+1}", airbnb_id=f"100{i+1}") for i in range(6)]
     calc = CalculatorDefaults(
         adr_default=350, adr_min=200, adr_max=550,
         occ_default=55, occ_min=30, occ_max=80,
-        days_default=365,
+        days_default=350,
     )
     return ReportData(
-        property=prop, revenue_estimate=revenue_estimate, comps=comps, calculator=calc,
+        property=prop, rentalizer=rentalizer, comps=comps, calculator=calc,
         report_date="April 24, 2026",
     )
 
@@ -88,15 +149,25 @@ def test_check_comp_fields_catches_missing_image():
     assert any("image_url" in e for e in errors)
 
 
-def test_check_comp_fields_warns_on_zero_rating():
-    """Zero rating (no reviews yet) is a warning, not a blocking error.
-    In thin markets, new listings may be the only comps available."""
+def test_check_comp_fields_catches_out_of_range_rating():
+    """A rating of 0 is out of range for a RATED comp."""
     comp = _make_good_comp()
     comp.rating = 0
     errors = _check_comp_fields(comp)
-    # Should NOT be in errors (it's a warning printed to stderr)
+    assert any("rating" in e for e in errors)
+
+
+def test_check_comp_fields_allows_unrated_comp():
+    """rating=None means 'too few reviews to rate' — a valid AirROI state.
+
+    It is NOT a missing field, and it must not block a report. AirROI signals
+    it with rating_overall == 0.0; the adapter maps that sentinel to None.
+    """
+    comp = _make_good_comp()
+    comp.rating = None
+    errors = _check_comp_fields(comp)
     assert not any("rating" in e for e in errors), (
-        f"Zero rating should be a warning, not a block: {errors}"
+        f"Unrated comp should not fail the field check; errors: {errors}"
     )
 
 
@@ -105,6 +176,26 @@ def test_check_comp_fields_catches_invalid_occupancy():
     comp.occupancy_pct = 150  # invalid > 100
     errors = _check_comp_fields(comp)
     assert any("occupancy" in e for e in errors)
+
+
+def test_check_comp_fields_catches_zero_booked_nights():
+    """A listing that booked nothing all year is not a comparable operator.
+
+    The old check was `1 <= days_available <= 365`, which fired on 0 of 150
+    live comps and 0 of 1 on the constructed case it existed to catch.
+    """
+    comp = _make_good_comp()
+    comp.nights_booked = 0
+    errors = _check_comp_fields(comp)
+    assert any("booked" in e.lower() for e in errors), errors
+
+
+def test_check_comp_fields_catches_impossible_night_accounting():
+    """More booked nights than exist in a year must be caught."""
+    comp = _make_good_comp()
+    comp.nights_booked = 500
+    errors = _check_comp_fields(comp)
+    assert any("nights_booked" in e for e in errors), errors
 
 
 def test_check_comp_fields_allows_studio():
@@ -128,27 +219,43 @@ def test_check_comp_fields_catches_negative_bedrooms():
 # ── Revenue sanity ───────────────────────────────────────────────────────
 
 def test_revenue_sanity_passes_normal_comp():
-    """A comp with reasonable revenue ratios should pass."""
+    """revenue / (ADR x booked nights) is a FEE MULTIPLIER, ~1.19 on live data."""
     comp = _make_good_comp()
-    # ADR 400 × 365 = 146000; revenue 85000 / 146000 = 0.58 → within [0.15, 1.6]
-    msg = _check_revenue_sanity(comp)
-    assert msg is None, f"Expected pass, got: {msg}"
+    ratio = comp.annual_revenue / (comp.adr * comp.nights_booked)
+    assert _REVENUE_RATIO_MIN < ratio < _REVENUE_RATIO_MAX
+    assert _check_revenue_sanity(comp) is None
 
 
-def test_revenue_sanity_catches_unreasonably_low_revenue():
-    """Revenue < 15% of (ADR × days) indicates inactive listing."""
+def test_revenue_sanity_passes_high_occupancy_comp():
+    """The gate must NOT reject a well-booked listing.
+
+    Regression guard: the old gate divided revenue by UNSOLD nights, so the
+    better a comp performed the more likely it was rejected. It blocked report
+    generation entirely in 5 of 6 real markets.
+    """
+    comp = _make_good_comp(booked_nights=320, blocked_nights=5)
+    assert comp.occupancy_pct > 88
+    assert _check_revenue_sanity(comp) is None, (
+        "a 320-night comp is the best kind of comp, not a data error"
+    )
+
+
+def test_revenue_sanity_catches_revenue_below_room_revenue():
+    """Revenue far below ADR x booked nights means the mapping is broken."""
     comp = _make_good_comp()
-    comp.annual_revenue = 5000   # 5000 / 146000 = 3.4% → too low
+    comp.annual_revenue = 5000   # 5000 / 86000 = 5.8% of room revenue
     msg = _check_revenue_sanity(comp)
-    assert msg is not None and "<15%" in msg
+    assert msg is not None
+    assert "below" in msg and f"{_REVENUE_RATIO_MIN:.0%}" in msg
 
 
-def test_revenue_sanity_catches_unreasonably_high_revenue():
-    """Revenue > 300% of (ADR × days) indicates a data error."""
+def test_revenue_sanity_catches_impossible_fee_multiplier():
+    """Revenue far above ADR x booked nights is not a fee multiplier."""
     comp = _make_good_comp()
-    comp.annual_revenue = 500000   # 500000 / 146000 = 342% → too high
+    comp.annual_revenue = 400000   # 400000 / 86000 = 465% of room revenue
     msg = _check_revenue_sanity(comp)
-    assert msg is not None and "exceeds 300%" in msg
+    assert msg is not None
+    assert "exceeds" in msg and f"{_REVENUE_RATIO_MAX:.0%}" in msg
 
 
 # ── Phase A end-to-end ───────────────────────────────────────────────────
@@ -188,15 +295,12 @@ def test_phase_a_blocks_on_5_comps():
 
 
 def test_phase_a_blocks_on_untrusted_hero():
-    """Subject hero from a random domain is now a warning, not a block.
-    The report should still generate — users can provide their own photo."""
+    """Subject hero from a random domain (not realtor.ca / muscache.com) → block."""
     report = _make_good_report()
     report.property.hero_image_url = "https://random-stock-photos.example.com/xyz.jpg"
     failures = asyncio.run(run_phase_a(report))
-    # Hero source is no longer a blocking failure — just a stderr warning
-    hero_failures = [f for f in failures if "untrusted source" in f]
-    assert len(hero_failures) == 0, (
-        f"Untrusted hero should be a warning, not a block: {failures}"
+    assert any("untrusted source" in f for f in failures), (
+        f"Expected untrusted-source failure, got: {failures}"
     )
 
 

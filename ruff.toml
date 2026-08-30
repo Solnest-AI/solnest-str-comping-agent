@@ -15,9 +15,27 @@ extend-exclude = [
 # implicit defaults: those defaults widen between releases (0.16 added isort
 # and pyupgrade), which turns a routine `pip install ruff` into a lint failure
 # on unchanged code. Add rules here deliberately, not by upgrade.
+#
+# F is the rule family that earns its keep — F401 (dead import) and F841 (dead
+# local) are how a half-finished refactor gets caught. Do not blanket-ignore
+# either one to make CI green; fix the source instead.
 select = ["E4", "E7", "E9", "F"]
+
+# E701 (`if cond: stmt` on one line) is a statement-layout preference, not a
+# defect, and it fights the deliberate aligned override blocks in agent.py:
+#     if args.beds:   prop.bedrooms  = args.beds
+#     if args.baths:  prop.bathrooms = args.baths
+# Four parallel one-liners read better as a block than as twelve lines. This is
+# a formatter's job, and this repo does not run `ruff format`, so the check is
+# pure noise here.
+ignore = ["E701"]
 
 [lint.per-file-ignores]
 # Tests insert the project root onto sys.path before importing local modules,
 # so their imports intentionally follow a non-import statement (E402).
-"tests/*" = ["E402"]
+#
+# E741 ("ambiguous variable name `l`") fires on the assertion comprehensions
+# that make failures readable — `any("Sauna match" in l for l in lines)`. The
+# ambiguity E741 guards against (l vs 1) needs a name that outlives one line;
+# these do not. Renaming them would make the assertions worse, not safer.
+"tests/*" = ["E402", "E741"]

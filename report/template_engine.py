@@ -3,11 +3,10 @@
 from pathlib import Path
 from datetime import date
 
-import config
-
 import jinja2
 
 from schema import ReportData
+import config
 
 
 TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
@@ -46,21 +45,22 @@ def render_report(data: ReportData) -> str:
 
     # Pre-compute initial calculator display values
     calc = data.calculator
-    initial_occ_nights = calc.days_default * calc.occ_default // 100
+    # Must match report.html.j2's updateCalculator() exactly (Math.round), or
+    # the pre-JS HTML that email_sender.py attaches disagrees with the live page.
+    initial_occ_nights = round(calc.days_default * calc.occ_default / 100)
     initial_revenue = initial_occ_nights * calc.adr_default
-    initial_revpar = initial_revenue // calc.days_default if calc.days_default else 0
+    initial_revpar = round(initial_revenue / calc.days_default) if calc.days_default else 0
 
     return template.render(
+        branding=config.BRANDING,
         property=data.property,
-        revenue_estimate=data.revenue_estimate,
-        projection=data.projection,
+        rentalizer=data.rentalizer,
         comps=data.comps,
         calculator=data.calculator,
         narratives=data.narratives,
         methodology=data.methodology,
         seasonal_data=data.seasonal_data,
         report_date=data.report_date,
-        branding=config.BRANDING,
         initial_revenue=initial_revenue,
         initial_occ_nights=initial_occ_nights,
         initial_revpar=initial_revpar,
@@ -94,7 +94,7 @@ def save_report(data: ReportData, output_dir: Path) -> Path:
     )
     slug = _slugify(identity)
     today = date.today().isoformat()
-    brand_slug = _slugify(config.BRANDING.get("company_name", "STR"), max_len=20)
+    brand_slug = _slugify(config.BRANDING.get("company_name", "STR"), max_len=20) or "STR"
     filename = f"{brand_slug}-Report-{slug}-{today}.html"
     output_path = output_dir / filename
 

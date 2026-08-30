@@ -66,77 +66,243 @@ def _extract_meta(html: str) -> dict:
     return meta
 
 
-def _guess_market_from_text(text: str) -> str:
-    """Try to extract a market/city name from listing text."""
-    known_markets = [
-        # Canada — Ski resorts (BC + AB + ON + QC)
-        "Sun Peaks", "Whistler", "Big White", "Silver Star", "Revelstoke",
-        "Fernie", "Panorama", "Kicking Horse", "Red Mountain",
-        "Canmore", "Banff", "Lake Louise", "Jasper",
-        "Blue Mountain", "Mont-Tremblant", "Mont Tremblant", "Mont Sainte-Anne",
-        # Canada — Okanagan + Interior BC (lake/wine markets)
-        "Kelowna", "West Kelowna", "Lake Country", "Vernon", "Penticton",
-        "Peachland", "Summerland", "Naramata", "Osoyoos", "Oliver",
-        "Kamloops", "Salmon Arm",
-        # Canada — Coastal BC
-        "Vancouver", "Squamish", "Victoria", "Tofino", "Ucluelet", "Sidney",
-        "Nanaimo", "Parksville", "Sooke",
-        # Canada — Other major markets
-        "Calgary", "Edmonton", "Toronto", "Niagara-on-the-Lake", "Collingwood",
-        "Mont-Sutton",
-        # US — Gulf Coast / Florida Panhandle
-        "Panama City Beach", "Destin", "Fort Walton Beach", "Pensacola",
-        "Gulf Shores", "Orange Beach",
-        # US — Florida
-        "Kissimmee", "Orlando", "Miami", "Fort Lauderdale", "Key West",
-        "Naples", "Sarasota", "Clearwater", "Tampa", "St. Petersburg",
-        "Anna Maria Island", "Siesta Key", "Marco Island",
-        # US — Southeast Coast
-        "Myrtle Beach", "Hilton Head", "Charleston", "Savannah",
-        "Virginia Beach", "Tybee Island", "Folly Beach",
-        # US — Smoky Mountains / Tennessee
-        "Pigeon Forge", "Gatlinburg", "Sevierville", "Nashville", "Memphis",
-        # US — Outer Banks / NC Coast
-        "Outer Banks", "Duck", "Corolla", "Nags Head", "Kill Devil Hills",
-        # US — California
-        "San Diego", "Los Angeles", "Palm Springs", "Big Bear",
-        "Joshua Tree", "Paso Robles", "Sonoma", "Napa",
-        "Mammoth Lakes", "Lake Arrowhead",
-        # US — Mountain / Ski
-        "Lake Tahoe", "South Lake Tahoe", "Breckenridge", "Vail", "Aspen",
-        "Steamboat Springs", "Park City", "Big Sky", "Jackson Hole",
-        "Telluride",
-        # US — Southwest / Desert
-        "Scottsdale", "Sedona", "Flagstaff", "Tucson", "Moab",
-        "St. George", "Zion",
-        # US — Texas
-        "Austin", "San Antonio", "Fredericksburg", "South Padre Island",
-        "Galveston",
-        # US — Louisiana
-        "New Orleans",
-        # US — Hawaii
-        "Maui", "Kauai", "Honolulu", "Big Island", "Kona", "Waikiki",
-        # US — Northeast / New England
-        "Martha's Vineyard", "Cape Cod", "Nantucket", "Lake George",
-        "Poconos", "Bar Harbor", "Kennebunkport",
-        # US — Midwest / Other
-        "Branson", "Wisconsin Dells", "Traverse City", "Lake of the Ozarks",
-        "Put-in-Bay",
-    ]
-    for market in known_markets:
-        if market.lower() in text.lower():
+# Region tokens that trail a city name in free text. Deliberately duplicated
+# from agent.py rather than imported: agent.py imports this module at the top
+# of the file, so `from agent import _US_STATES` is a circular import.
+_US_STATES = {
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID",
+    "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS",
+    "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK",
+    "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV",
+    "WI", "WY", "DC",
+}
+_CA_PROVINCES = {
+    "AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE", "QC", "SK", "YT",
+}
+_REGION_ABBR = _US_STATES | _CA_PROVINCES
+
+_REGION_NAMES = {
+    "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
+    "connecticut", "delaware", "florida", "georgia", "hawaii", "idaho",
+    "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana", "maine",
+    "maryland", "massachusetts", "michigan", "minnesota", "mississippi",
+    "missouri", "montana", "nebraska", "nevada", "new hampshire", "new jersey",
+    "new mexico", "new york", "north carolina", "north dakota", "ohio",
+    "oklahoma", "oregon", "pennsylvania", "rhode island", "south carolina",
+    "south dakota", "tennessee", "texas", "utah", "vermont", "virginia",
+    "washington", "west virginia", "wisconsin", "wyoming",
+    "district of columbia",
+    "alberta", "british columbia", "manitoba", "new brunswick",
+    "newfoundland and labrador", "nova scotia", "northwest territories",
+    "nunavut", "ontario", "prince edward island", "quebec", "saskatchewan",
+    "yukon",
+}
+
+# Curated Canadian resort/leisure markets. These exist to NORMALIZE a messy
+# capture ("Sun Peaks Mountain Resort" -> "Sun Peaks"), not to define the
+# universe of supported markets — the generic "City, ST" parse below runs
+# first precisely so US markets are not all reported as "Unknown Market".
+_KNOWN_MARKETS = [
+    # Ski resorts (BC + AB + ON + QC)
+    "Sun Peaks", "Whistler", "Big White", "Silver Star", "Revelstoke",
+    "Fernie", "Panorama", "Kicking Horse", "Red Mountain",
+    "Canmore", "Banff", "Lake Louise", "Jasper",
+    "Blue Mountain", "Mont-Tremblant", "Mont Tremblant", "Mont Sainte-Anne",
+    # Okanagan + Interior BC (lake/wine markets)
+    "West Kelowna", "Kelowna", "Lake Country", "Vernon", "Penticton",
+    "Peachland", "Summerland", "Naramata", "Osoyoos", "Oliver",
+    "Kamloops", "Salmon Arm",
+    # Coastal BC
+    "North Vancouver", "West Vancouver", "Vancouver", "Squamish", "Victoria",
+    "Tofino", "Ucluelet", "Sidney", "Nanaimo", "Parksville", "Sooke",
+    # Other major markets
+    "Calgary", "Edmonton", "Toronto", "Niagara-on-the-Lake", "Collingwood",
+    "Mont-Sutton",
+]
+
+# Words that, sitting immediately before a known market name, mean the real
+# place is a DIFFERENT one: "Mount Vernon" is not Vernon BC, "North Bay" is
+# not Bay. Substring/word-boundary matching cannot see this on its own.
+_PLACE_PREFIXES = {
+    "mount", "mt", "north", "south", "east", "west", "new", "old", "upper",
+    "lower", "little", "big", "grand", "port", "fort", "ft", "lake", "saint",
+    "st", "ste", "sainte", "la", "le", "los", "las", "san", "santa",
+}
+# Same idea trailing the name: "Vernon Hills" (IL) is not Vernon (BC).
+_PLACE_SUFFIXES = {
+    "hills", "heights", "park", "beach", "city", "township", "falls",
+    "springs", "junction", "harbor", "harbour", "island", "ridge", "creek",
+    "county", "borough",
+}
+
+
+def _is_region_token(token: str) -> bool:
+    t = (token or "").strip().strip(".,")
+    if not t:
+        return False
+    if len(t) == 2 and t.upper() in _REGION_ABBR:
+        return True
+    return t.lower() in _REGION_NAMES
+
+
+def _match_known_market(text: str) -> str:
+    """Word-boundary match against the curated market list, rejecting hits
+    that are only part of a longer place name."""
+    if not text:
+        return ""
+    for market in _KNOWN_MARKETS:
+        for m in re.finditer(rf"\b{re.escape(market)}\b", text, re.I):
+            before = re.findall(r"[A-Za-z\-']+", text[:m.start()])
+            after = re.findall(r"[A-Za-z\-']+", text[m.end():])
+            if before and before[-1].lower() in _PLACE_PREFIXES:
+                continue    # "Mount Vernon" / "North Vancouver"
+            if after and after[0].lower() in _PLACE_SUFFIXES:
+                continue    # "Vernon Hills" / "Panorama City"
             return market
-    # Fallback: try to find "City, State/Province" pattern
-    match = re.search(
-        r"([A-Z][a-z]+(?:\s[A-Z][a-z]+)*),\s*"
-        r"(?:BC|AB|ON|QC|MB|NB|NL|NS|NT|NU|PE|SK|YT|"
-        r"AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|"
-        r"MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|"
-        r"SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC)\b",
-        text,
-    )
-    if match:
-        return match.group(1)
+    return ""
+
+
+_GENERIC_LISTING_WORDS = {
+    "entire", "private", "shared", "home", "house", "cabin", "condo",
+    "chalet", "villa", "apartment", "apt", "cottage", "suite", "room",
+    "place", "stay", "rental", "loft", "guesthouse", "bungalow", "tiny",
+    "the", "a", "an", "in", "at", "near", "by", "hosted",
+}
+
+# Trailing city-name run immediately before a region token.
+_CITY_RUN = re.compile(
+    r"([A-Z][A-Za-z'\u2019\-\.]*(?:[ \-][A-Z][A-Za-z'\u2019\-\.]*){0,3})\s*,?\s*$"
+)
+# Region tokens. Abbreviations are matched case-SENSITIVELY: lowercase "in",
+# "or", "me", "hi" are ordinary English words, uppercase they are states.
+_REGION_RE = re.compile(
+    r"\b(?:" + "|".join(sorted(_REGION_ABBR)) + r")\b"
+    r"|\b(?:" + "|".join(sorted(_REGION_NAMES, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_generic_words(city: str) -> str:
+    tokens = city.split()
+    while tokens and tokens[0].lower().strip(".,") in _GENERIC_LISTING_WORDS:
+        tokens.pop(0)
+    return " ".join(tokens).strip(" ,.-")
+
+
+_STREET_SUFFIXES = {
+    "drive", "dr", "street", "st", "road", "rd", "avenue", "ave", "lane", "ln",
+    "boulevard", "blvd", "court", "ct", "place", "pl", "way", "trail", "trl",
+    "circle", "cir", "highway", "hwy", "parkway", "pkwy", "terrace", "loop",
+    "station", "house", "lodge", "cabin", "chalet", "villa", "retreat", "resort",
+    "inn", "hotel", "suite", "suites", "condo", "apartment", "apt", "unit",
+}
+
+
+def _looks_like_a_place(name: str) -> bool:
+    """Reject street addresses and venue names masquerading as markets.
+
+    A fabricated market is worse than "Unknown Market": it flows into
+    PropertyBasics.market, into the report copy, AND into the AirROI address
+    query, so the whole report gets built for the wrong place.
+    """
+    if not name:
+        return False
+    tokens = name.split()
+    if tokens and tokens[-1].lower().strip(".") in _STREET_SUFFIXES:
+        return False
+    # A leading house number means this is a street address, not a city.
+    if tokens and tokens[0].rstrip(".").isdigit():
+        return False
+    return True
+
+
+def _parse_city_region(text: str) -> str:
+    """Generic '<City>, <ST>' / '<City> <Province>' / '<City>, <State name>'
+    parse. Runs before the curated list so US markets resolve at all.
+
+    Works backwards from each region token rather than forwards from a city
+    candidate, so a street name in front of the city ("812 Ski Mountain Rd,
+    Gatlinburg, TN") does not swallow the match.
+    """
+    if not text:
+        return ""
+    for m in _REGION_RE.finditer(text):
+        token = m.group(0)
+        # Two-letter forms must be uppercase to count as a state/province.
+        if len(token) == 2 and token != token.upper():
+            continue
+        head = text[:m.start()]
+        run = _CITY_RUN.search(head)
+        if not run:
+            continue
+        city = _strip_generic_words(run.group(1).strip(" ,.-"))
+        if city and not _is_region_token(city) and _looks_like_a_place(city):
+            return city
+    return ""
+
+
+def _clean_place(text: str) -> str:
+    """Reduce a captured place string to a bare city name."""
+    if not text:
+        return ""
+    head = text.split(",")[0].strip(" ,.-\u00b7")
+    tokens = head.split()
+    while tokens and _is_region_token(tokens[-1]):
+        tokens.pop()
+    cleaned = " ".join(tokens).strip(" ,.-")
+    # Reject obvious non-places (numbers, single letters, over-long captures)
+    if not cleaned or len(cleaned) < 2 or len(cleaned.split()) > 5:
+        return ""
+    if not re.search(r"[A-Za-z]", cleaned):
+        return ""
+    return cleaned
+
+
+def _guess_market_from_text(text: str, hint: str = "",
+                            allow_prose_parse: bool = True) -> str:
+    """Extract a market/city name from listing text.
+
+    Resolution order:
+      1. `hint` — the og:title "<Type> in <City>" capture, Airbnb's own city
+         label and by far the most reliable signal on the page.
+      2. Generic "<City>, <ST>" parse — works for every US state and Canadian
+         province, so Gatlinburg/Destin/Scottsdale resolve instead of falling
+         through to "Unknown Market".
+      3. Curated Canadian resort list, word-boundary matched with prefix and
+         suffix guards so "Mount Vernon" no longer resolves to "Vernon".
+    """
+    if hint:
+        known = _match_known_market(hint)
+        if known:
+            return known          # normalise "Sun Peaks Mountain" -> "Sun Peaks"
+        city = _parse_city_region(hint) or _clean_place(hint)
+        if city:
+            return city
+
+    # Only run the generic "<City>, <ST>" parse over STRUCTURED location text.
+    # Over free description prose it produced markets like "Maple Drive",
+    # "Union Station" and "Cedar House" -- worse than "Unknown Market", because
+    # a fabricated market silently redirects the entire report to another town.
+    if allow_prose_parse:
+        city = _parse_city_region(text)
+        if city:
+            known = _match_known_market(city)
+            return known or city
+
+    known = _match_known_market(text)
+    if known:
+        return known
+
+    # Last resort: "<Type> in <City>" at the very start of the string (the
+    # og:title / listing-title shape). Anchored so prose cannot trigger it.
+    type_city = re.match(r"[A-Za-z\- ]{2,30}?\s+in\s+([^\u00b7,\n]{2,40})", text or "")
+    if type_city:
+        city = _strip_generic_words(_clean_place(type_city.group(1)))
+        # Must read as a proper noun, or prose like "home in the mountains"
+        # becomes a market name.
+        if city and city[:1].isupper() and _looks_like_a_place(city):
+            return _match_known_market(city) or city
+
     return "Unknown Market"
 
 
@@ -160,6 +326,7 @@ async def scrape_airbnb_listing(url: str) -> PropertyBasics:
     rating = None
     review_count = None
     location_text = ""
+    og_city = ""
 
     # Strategy 1: __NEXT_DATA__
     next_data = _extract_from_next_data(html)
@@ -210,8 +377,12 @@ async def scrape_airbnb_listing(url: str) -> PropertyBasics:
     if og_title:
         # Property type + city: "Cabin in Peachland" / "Condo in Sun Peaks Mountain"
         type_city = re.match(r"([A-Za-z\- ]+?)\s+in\s+([^·]+?)\s*·", og_title)
-        if type_city and not location_text:
-            location_text = type_city.group(2).strip()
+        _ = type_city.group(1).strip() if type_city else ""
+        if type_city:
+            # Airbnb's own city label — the most reliable locality on the page.
+            og_city = type_city.group(2).strip()
+            if not location_text:
+                location_text = og_city
 
         # Rating: "★4.96"
         if rating is None:
@@ -287,8 +458,18 @@ async def scrape_airbnb_listing(url: str) -> PropertyBasics:
         except (TypeError, ValueError):
             pass
 
-    # Determine market
-    market = _guess_market_from_text(location_text or title or description)
+    # Determine market. The og:title city is passed as the preferred hint —
+    # it is Airbnb's own label for the listing's town.
+    # location_text and title are STRUCTURED (Airbnb's own location label and
+    # listing title). description is free prose, where the generic "<City>, <ST>"
+    # parse fabricates markets out of street names and landmarks -- so the
+    # generic parse is disabled when we are down to the description.
+    _structured = location_text or title
+    market = _guess_market_from_text(
+        _structured or description,
+        hint=og_city,
+        allow_prose_parse=bool(_structured),
+    )
 
     # Build address from available info
     address = location_text or market

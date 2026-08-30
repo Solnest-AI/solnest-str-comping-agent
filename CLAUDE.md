@@ -1,223 +1,279 @@
-# STR Comping Agent — Setup & Usage Guide
+# STR Comping Agent: operating manual for Claude Code
 
-This is an STR (short-term rental) income analysis report generator. It takes a property (Airbnb URL, Zillow URL, or street address), finds comparable Airbnb listings, scores them, and generates a branded HTML report with revenue projections.
+A Python CLI that turns a property (Airbnb URL, Zillow/Realtor URL, or a street
+address) into a branded, self-contained HTML income report built from real
+comparable Airbnb listings.
 
-## First-Time Setup
+You are the narrative engine for this tool. It ships with **no Anthropic API
+key** on purpose: the user already has you. Read the narrative handoff section
+below before you run anything, because it changes what a "finished" report means.
 
-**Check if setup is needed:** Look for **both** a `.env` file and a `branding.json` file in this directory.
+---
 
-- Neither exists → run the whole setup from Step 1.
-- `.env` exists but `branding.json` doesn't → the keys are configured but the reports are still unbranded. Jump straight to **Step 7: Branding Setup**, then Step 8.
+## When the user says "set this up"
 
-Walk the user through it step by step. Do NOT skip steps. Do NOT move to the next step until the current one is confirmed.
+Walk them through this in order. Confirm each step before moving on.
 
-### Step 1: Install Python Dependencies
+### Step 1: Check Python
+
+Run `python --version`. If it fails or shows below 3.10:
+
+> "You need Python 3.10 or newer. Download it from https://www.python.org/downloads/
+> and check 'Add Python to PATH' during install. Tell me when it's done."
+
+On macOS/Linux `python` may not exist; try `python3`.
+
+### Step 2: Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### Step 2: Create the .env File
+If `pip` is missing, use `python -m pip install -r requirements.txt`.
 
-Copy `.env.example` to `.env`:
+### Step 3: Collect API keys
+
+**Only one key is required.** Do not ask for the others unless the user wants
+what they unlock.
+
+| Key | Required? | What breaks without it | Where to get it |
+|---|---|---|---|
+| `AIRROI_API_KEY` | **YES** | Everything. This is the comp data. | https://www.airroi.com/api/developer/activate |
+| `FIRECRAWL_API_KEY` | No | Address and Zillow/Realtor input. Airbnb URLs still work. | https://www.firecrawl.dev |
+| `AIRBTICS_API_KEY` | No | Nothing. Seasonality falls back to AirROI monthly data. | https://airbtics.com |
+| `GMAIL_ADDRESS` + `GMAIL_APP_PASSWORD` | No | `--email` delivery. Reports still save to `output/`. | https://myaccount.google.com/apppasswords |
+
+**There is no `ANTHROPIC_API_KEY` step.** If the user offers one, tell them it
+is not needed and that you write the narratives yourself.
+
+Run the interactive builder, or write `.env` yourself from `.env.example`:
+
 ```bash
-cp .env.example .env
+python setup.py
 ```
 
-Then open the `.env` file in the user's editor so they can see it. Walk through each API key below, one at a time. For each key:
-1. Tell the user where to get it
-2. Tell them which line in the `.env` file to paste it on
-3. Wait for them to confirm they've saved the file before moving on
+Ask for one key at a time. Wait for each. Never echo a key back into the
+transcript, and never write one anywhere except `.env`.
 
-**IMPORTANT: Do NOT ask the user to paste API keys into the chat. Always direct them to paste into the `.env` file directly. Open the file for them so they can see exactly where each key goes.**
+### Step 4: Set the branding
 
-### Step 3: AirROI API Key (REQUIRED)
+The report is white-label. It reads `branding.json`; if that file is absent it
+falls back to `branding.example.json`, so a fresh clone renders with neutral
+placeholder branding rather than someone else's company.
 
-This is the primary data source — property estimates, comparable listings, and performance metrics. **Every user needs their own account.**
-
-1. Open the `.env` file for the user
-2. Tell them: "Go to https://www.airroi.com/api/developer/activate, create an account, and copy your API key"
-3. Tell them: "Paste your key on the `AIRROI_API_KEY=` line in the .env file and save"
-4. Wait for confirmation
-
-**This key is required. The agent cannot run without it.**
-
-### Step 4: Firecrawl API Key (REQUIRED)
-
-Used to search the web for property listings when given a street address. The free tier gives you ~500 pages.
-
-1. Tell them: "Go to https://www.firecrawl.dev, sign up, and copy your API key"
-2. Tell them: "Paste your key on the `FIRECRAWL_API_KEY=` line in the .env file and save"
-3. Wait for confirmation
-
-### Step 5: Apify Token (RECOMMENDED)
-
-Used for reliable Zillow scraping — prevents hallucinated property data. Free tier available.
-
-1. Tell them: "Go to https://console.apify.com/account#/integrations and copy your API token"
-2. Tell them: "Paste your token on the `APIFY_TOKEN=` line in the .env file and save"
-3. Wait for confirmation
-
-**They can skip this, but Zillow lookups will be less reliable.**
-
-### Step 6: Google Maps API Key (OPTIONAL)
-
-Used for Google Street View photos when a property has no listing images online.
-
-1. Tell them: "Go to https://console.cloud.google.com/apis/library/street-view-image-backend.googleapis.com and enable the Street View Static API"
-2. Tell them: "Go to https://console.cloud.google.com/apis/credentials and create or copy an API key"
-3. Tell them: "Paste your key on the `GOOGLE_MAPS_API_KEY=` line in the .env file and save"
-4. Wait for confirmation
-
-**They can skip this. Properties without photos will show a placeholder.**
-
-### Step 7: Branding Setup
-
-**Every report carries the company branding in `branding.json`. Until this step is done there is none, so do not skip it and do not let the user skip it.** If `branding.json` is missing, the report falls back to `branding.example.json`, which renders the literal placeholder "Your Company Name" on a client-facing document.
-
-**Lead with the website. It answers almost every other question on its own.**
-
-#### 7a. Ask for the website first
-
-> **"What's your company website?"**
-
-One question. Wait for the answer before doing anything else.
-
-- If they **have** a site, go to 7b.
-- If they **don't** have one, skip to 7d and ask for each field directly.
-
-#### 7b. Scrape the site once, derive everything you can
-
-Fetch the homepage HTML and pull out all four of these in a single pass:
-
-| Field | Where to look, in order |
-|---|---|
-| **Company name** | `<meta property="og:site_name">`, then `<title>` (strip taglines and separators like `\|`, `-`, `—`), then the logo's `alt` text |
-| **Logo** | `<meta property="og:image">`, then `<img>` in the header/nav with "logo" in the `src`/`alt`/`class`, then any `<img>` with "logo" in the filename, then `<link rel="apple-touch-icon">`, then `<link rel="icon">` |
-| **Primary color** | CSS custom properties (`--primary`, `--brand`, `--accent`, etc.), then the most prominent non-white, non-black, non-grey color in the header/nav, then the button or link color |
-| **Tagline** | `<meta name="description">` or the homepage hero heading, shortened to a phrase |
-
-Notes that matter:
-
-- **Resolve relative URLs to absolute** (`/img/logo.png` → `https://theirsite.com/img/logo.png`). A relative path renders as a broken image in the report.
-- **Prefer a real logo over a favicon.** Favicons are usually 32×32 and look terrible scaled up in the report header. Only fall back to one if nothing else exists.
-- **Skip social/CDN placeholder images** that aren't actually their mark.
-
-#### 7c. Show what you found and confirm it
-
-Present all of it at once and let them correct anything:
-
-```
-Here's what I pulled from theirsite.com:
-
-  Company:  Acme Vacation Rentals
-  Logo:     https://theirsite.com/img/logo.png
-  Color:    #2c5282
-  Tagline:  Premium Vacation Home Management
-
-Want me to use these, or change any of them?
-```
-
-Confirm the **logo** specifically. Show them the URL and say what it looks like. A wrong logo is the single most visible error on a client-facing report.
-
-If a field came back empty or wrong, ask for just that one field. Don't re-ask for things you already got right.
-
-#### 7d. Fallbacks when there's no website (or a field is missing)
-
-Ask only for what you're still missing:
-
-1. **Company name** (e.g. "Acme Vacation Rentals") — required, no default
-2. **Logo** — a direct image URL if they have one. If not, leave `logo_url` blank; the report renders the company name as text, which looks clean and is a fine outcome
-3. **Brand color** — a hex code, or a description like "dark blue" or "forest green" that you convert to hex. Default `#1f3c34` if they have no preference
-4. **Tagline** — default to "Short-Term Rental Management"
-
-#### 7e. Write `branding.json`
-
-```json
-{
-  "company_name": "Their Company Name",
-  "tagline": "Their Tagline",
-  "logo_url": "https://theirsite.com/img/logo.png",
-  "website_url": "https://www.theirsite.com",
-  "primary_color": "#2c5282",
-  "accent_color": "#4299e1"
-}
-```
-
-Derive `accent_color` from `primary_color` automatically: same hue, lighter and softer. Never ask for it.
-
-Write the file, then read it back and confirm it parses as valid JSON before moving on.
-
-### Step 8: Verify Setup
-
-Run a test comp to make sure everything works:
 ```bash
-python agent.py --input "1883 Pointe Drive, Panama City Beach, FL 32407" --beds 3 --baths 2 --guests 8 --market "Panama City Beach"
+cp branding.example.json branding.json
 ```
 
-If it generates a report in the `output/` folder, setup is complete.
+Then edit `company_name`, `tagline`, `logo_url`, `website_url`,
+`primary_color`, `accent_color`. Do **not** edit the template to rebrand.
+
+### Step 5: First report
+
+```bash
+python agent.py --input "https://www.airbnb.com/rooms/39508095"
+```
+
+The HTML lands in `output/`. Then do the narrative handoff below. The first
+report is not finished until you have.
 
 ---
 
-## How to Comp a Property
+## The narrative handoff loop: READ THIS
 
-The user can provide any of these:
+Without an Anthropic key the agent still produces a complete, valid report, but
+its narrative sections are data-driven **template copy**. Your job is to replace
+them. The loop is three steps.
 
-### Airbnb URL
-```bash
-python agent.py --input "https://www.airbnb.com/rooms/12345678"
-```
-Best results — pulls all property data directly from AirROI.
-
-### Zillow URL
-```bash
-python agent.py --input "https://www.zillow.com/homedetails/123-Main-St/12345_zpid/"
-```
-Uses Apify for reliable data extraction.
-
-### Street Address
-```bash
-python agent.py --input "123 Main St, Nashville, TN 37203" --beds 3 --baths 2 --guests 8 --market "Nashville"
-```
-For addresses, provide `--beds`, `--baths`, and `--guests` if the property isn't listed online. The `--market` flag helps with comp accuracy.
-
-### Optional Flags
-- `--email user@example.com` — Email the report after generating
-- `--hero-url "https://..."` — Provide a custom property photo
-- `--listing-url "https://..."` — Link to the property listing (shown as "View Listing" button)
-- `--market "City Name"` — Override market detection
-- `--currency "$"` or `"CA$"` — Override currency (auto-detected from address)
-- `--exclude "keyword"` (alias `--exclude-comps`) — Drop comps whose listing name contains any of the comma-separated keywords. Also takes a full comp name to remove one specific listing.
-
-## Comp Set Review (do this on every report)
-
-**Standing rule: comps must not out-size the subject.** AirROI returns bedrooms and guest capacity but *not* a bed (sleeping-surface) count, so an oversized unit can come through looking identical to the subject and inflate the projection.
-
-Typical case: a comp reported as "2BR / sleeps 6" is actually a 4-bed unit sleeping more people, and it carries the highest ADR in the set. Left in, it pulls the Base Case up by a few percent.
-
-Before sending a report, eyeball the comp set. Any comp whose ADR is a clear outlier above the rest is the one to check. Drop it by name:
+### 1. Run the agent
 
 ```bash
-python agent.py --input "..." --exclude-comps "Exact Listing Name To Drop"
+python agent.py --input "<property>"
 ```
 
-Note: the value is split on commas, so a comp name containing a comma becomes two keywords. It still matches the intended listing, but it can over-match others. Use a distinctive comma-free fragment of the name when that happens.
+Alongside the HTML it writes a brief:
 
-**Not automated yet.** Options under consideration: (a) drop ADR/revenue outliers heuristically before the projection, or (b) add a data source that exposes bed counts. Undecided.
+```
+output/<slug>.narrative-brief.json
+```
 
-## Report Output
+and prints a `NARRATIVE HANDOFF` block naming that file. `<slug>` is derived
+from the property's short address, so the brief sits next to its report.
 
-Reports are saved as self-contained HTML files in the `output/` folder. Open them in any web browser. They include:
-- Three-tier revenue projection (Conservative / Base Case / Optimistic)
-- 6 comparable properties with actual TTM performance data
-- Interactive revenue calculator with sliders
-- Seasonal occupancy chart
-- Methodology section
+### 2. Read the brief and write the copy
+
+Read the brief. It contains everything you are allowed to write from:
+
+- `subject`: the property, its amenities, its description
+- `revenue_estimate`: revenue potential, ADR, occupancy
+- `market_seasonality`: this market's **real** peak/shoulder months and the
+  peak share of annual revenue, derived from AirROI's monthly revenue
+  distribution
+- `comps`: the selected comp set, flattened to the fields the copy may cite
+- `rules`: the constraints
+- `output_schema` and `output_example`: the exact JSON shape to produce
+
+Write the JSON to the path the brief names, normally:
+
+```
+output/<slug>.narratives.json
+```
+
+The object has seven required string fields:
+
+```json
+{
+  "positioning_summary": "...",
+  "guest_profile": "...",
+  "amenity_upside": "...",
+  "config_description": "...",
+  "guests_description": "...",
+  "peak_season_text": "...",
+  "shoulder_season_text": "...",
+  "amenity_badges":    [{"emoji": "🎮", "text": "..."}],
+  "positioning_cards": [{"emoji": "📍", "title": "...", "text": "..."}]
+}
+```
+
+`amenity_badges` and `positioning_cards` are optional but the template renders
+holes without them, so write both.
+
+**Hard rules when writing narrative copy:**
+
+- **Never invent a number.** Every figure must come from the brief. If the
+  brief does not carry it, do not write it.
+- **Never name a season, month, or climate the brief did not give you.** The
+  peak months come from `market_seasonality`, not from what you know about the
+  region. A Destin beach report once shipped "Peak Season (Dec–Mar) … ski-in
+  proximity" next to a chart peaking in July. That is the bug this rule exists
+  to prevent.
+- **Never state an occupancy range the comp set does not support.** Cite what
+  the comps actually did.
+- Write the JSON object alone, with no markdown fences and no commentary.
+  The loader rejects anything else.
+
+### 3. Re-run with the copy
+
+```bash
+python agent.py --input "<same input>" --narratives "output/<slug>.narratives.json"
+```
+
+The brief carries a ready-made `rerun_command` field. Use it verbatim.
+
+`--narratives` is strict on purpose: if the file is missing, malformed, or a
+field is absent, the run **fails loudly with every problem listed**. It does not
+silently fall back to template copy, because the user asked for that file
+specifically. Fix the JSON and re-run.
+
+---
+
+## CLI reference
+
+`--input` is the only required flag.
+
+| Flag | What it does |
+|---|---|
+| `--input` | **Required.** Airbnb URL, Zillow/Realtor URL, or a street address |
+| `--narratives PATH` | Load narrative copy you wrote (see handoff above) |
+| `--email you@example.com` | Email the report after generating (needs Gmail configured) |
+| `--beds N` / `--baths N` / `--guests N` | Property details, needed for addresses with no live listing |
+| `--market "City"` | Override market detection |
+| `--radius N` | AirROI comp search radius in miles |
+| `--require "pool,hot_tub"` | Require comps to have these features |
+| `--exclude "oceanfront,beachfront"` | Drop comps whose names contain these keywords (alias `--exclude-comps`; also takes a full listing name to drop one specific comp) |
+| `--no-feature-filter` | Disable the automatic must-have feature filter |
+| `--subject-on-water` | Declare the subject is on water (skips the auto water-proximity filter) |
+| `--allow-oceanfront-comps` | Keep waterfront comps even when the subject is inland |
+| `--currency "$"` / `"CA$"` | Override currency (auto-detected from the address) |
+| `--hero-url URL` | Supply the hero photo when the listing scrape is blocked |
+| `--listing-url URL` | Link the report's "View Listing" button |
+| `--skip-financials` | Dev only. Skips AirROI, produces an empty estimate |
+
+Run `python agent.py --help` if a flag here disagrees with the code; the code wins.
+
+---
+
+## How the agent works
+
+| File | Job |
+|---|---|
+| `setup.py` | Interactive `.env` builder, run once |
+| `agent.py` | CLI entry. Orchestrates the pipeline |
+| `config.py` | Loads `.env` + `branding.json`, exposes typed settings |
+| `schema.py` | Pydantic models for the report data |
+| `scrapers/airroi.py` | Listings, comps, revenue estimates from AirROI |
+| `scrapers/property_search.py` | Firecrawl property scraper (address / listing URL) |
+| `scrapers/airbnb.py` | Airbnb listing scraper |
+| `scrapers/airbtics.py` | Optional market-level overlay |
+| `adapters/airroi_to_comp.py` | Maps AirROI payloads into the internal Comp model |
+| `comp_scorer.py` | Hard gates, scoring, ranking; picks the final comp set |
+| `generators/calculator.py` | Calculator defaults, seasonal data, season labels |
+| `generators/narrative_brief.py` | **The narrative contract + the brief written for you** |
+| `generators/narratives.py` | Template copy, and `--narratives` file loading/validation |
+| `generators/methodology.py` | Methodology footnote |
+| `validators/sanity.py` | Phase A/B gates that block a bad report |
+| `report/template_engine.py` | Renders Jinja2 → HTML |
+| `report/email_sender.py` | Optional Gmail SMTP delivery |
+| `templates/report.html.j2` | The report template |
+| `scripts/package.py` | Builds the distribution zip from the git manifest |
+
+### Data semantics you must not get wrong
+
+These came from auditing 200 live AirROI records. Getting them backwards
+produces a confidently wrong report:
+
+- `ttm_available_days` is **unsold nights**, not "days listed". A high value
+  means the listing barely booked. The code uses `nights_booked` /
+  `nights_listed` instead, and there is deliberately no field named
+  `days_available`.
+- `occupancy_pct` is **adjusted** occupancy: booked ÷ open nights.
+- `annual_revenue` is **fee-inclusive**; `adr` is **fee-exclusive**. Never
+  divide one by the other to reconstruct nights. You will be off by ~19%.
+- `CompProperty.rating` is `Optional`. `None` means too few reviews to rate;
+  AirROI sends `0.0` for that case and the adapter converts it.
+- Amenities are Title Case display strings matched by **exact set membership**,
+  never substring. "Pool" is a substring of "Pool table" and "Pool view";
+  "fire" is a substring of "Fire extinguisher".
+
+---
 
 ## Troubleshooting
 
-- **"AIRROI_API_KEY is not set"** — Run setup again, Step 3
-- **Firecrawl returns wrong property data** — The address validation will catch this. Try passing the Zillow URL directly instead of the address.
-- **"Only N comps"** — Thin market. The agent will widen the search automatically.
-- **"No hero image found"** — Provide one with `--hero-url` or set up Google Maps API key.
-- **AirROI divergence flag** — The model estimate differs significantly from comp data. The comp-based projection is more defensible.
+| Symptom | Cause | Fix |
+|---|---|---|
+| `AIRROI_API_KEY is not set` | No `.env`, or the key is blank | `cp .env.example .env`, paste the key, or run `python setup.py` |
+| `FIRECRAWL_API_KEY is not set` | Address or listing-URL input without Firecrawl | Add the key, or pass an Airbnb URL instead |
+| `Phase A sanity failed: <6 comps` | Too few comparable listings in this market | Widen with `--radius`, relax with `--no-feature-filter`, or try a denser market |
+| Report renders but the prose is generic | You have not done the narrative handoff | Read `output/<slug>.narrative-brief.json` and re-run with `--narratives` |
+| `--narratives file not found` | Ran with `--narratives` before writing the file | Run once without it to generate the brief |
+| `NarrativeFileError: ... not valid JSON` | Markdown fences or commentary around the object | Write the bare JSON object only |
+| Comps look wrong (oversized, waterfront, dormant) | Filters too loose or too tight | `--require`, `--exclude`, `--radius`, `--allow-oceanfront-comps` |
+| Module import error | Dependencies not installed | `pip install -r requirements.txt` |
+| Report shows someone else's company | No `branding.json` | `cp branding.example.json branding.json` and edit it |
+
+---
+
+## Don't do these things
+
+- Don't commit `.env` or `branding.json`. Keys and identity stay local.
+- Don't hardcode API keys in source. Ever.
+- Don't rebrand by editing `templates/report.html.j2`. Edit `branding.json`.
+- Don't change the template's six-section structure; colors and copy only.
+- Don't invent numbers, months, or seasons in narrative copy. See the hard
+  rules above.
+- Don't weaken `--narratives` validation into a silent fallback. A wrong
+  report that looks finished is worse than an error.
+
+---
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q        # hermetic: no network, no API keys
+ruff check .     # lint
+```
+
+The suite must never need network access or an API key. It runs against real
+API responses captured in `tests/fixtures/`. If you add a test that reaches the
+network, you have broken CI for everyone.

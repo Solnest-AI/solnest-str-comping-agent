@@ -59,7 +59,6 @@ _TRUSTED_HERO_HOSTS = (
     "static.wixstatic.com",   # Wix-hosted sites
     "a.travel-assets.com",    # VRBO
     "images.trvl-media.com",  # VRBO alt
-    "api.mapbox.com",         # Mapbox static maps (rew.ca, some MLS sites)
 )
 
 
@@ -106,12 +105,12 @@ def _check_comp_fields(comp: CompProperty) -> list[str]:
         errors.append(f"[{name}] bathrooms = {comp.bathrooms}")
     if comp.sleeps <= 0:
         errors.append(f"[{name}] sleeps = {comp.sleeps}")
-    if comp.rating <= 0:
-        # Rating 0 = no reviews yet — warn but don't block. In thin markets
-        # these may be the only comps available.
-        print(f"[Sanity] WARNING: [{name}] has no rating data (new listing)", file=sys.stderr)
+    # rating is Optional — None means "too few reviews to rate", which is a
+    # valid state, not a missing field.
+    if comp.rating is not None and not (0 < comp.rating <= 5):
+        errors.append(f"[{name}] rating out of range: {comp.rating}")
     if comp.review_count <= 0:
-        print(f"[Sanity] WARNING: [{name}] has no reviews (new listing)", file=sys.stderr)
+        errors.append(f"[{name}] review_count = {comp.review_count}")
     if comp.adr <= 0:
         errors.append(f"[{name}] adr = {comp.adr}")
     if comp.annual_revenue <= 0:
@@ -120,36 +119,53 @@ def _check_comp_fields(comp: CompProperty) -> list[str]:
         errors.append(f"[{name}] revenue_potential = {comp.revenue_potential}")
     if not (0 < comp.occupancy_pct <= 100):
         errors.append(f"[{name}] occupancy_pct out of range: {comp.occupancy_pct}")
-    if not (1 <= comp.days_available <= 365):
-        errors.append(f"[{name}] days_available out of range: {comp.days_available}")
-    if comp.rating > 5:
-        errors.append(f"[{name}] rating out of range: {comp.rating}")
+    if not (0 <= comp.nights_booked <= 366):
+        errors.append(f"[{name}] nights_booked out of range: {comp.nights_booked}")
+    if not (0 < comp.nights_listed <= 366):
+        errors.append(f"[{name}] nights_listed out of range: {comp.nights_listed}")
+    if comp.nights_booked == 0:
+        errors.append(f"[{name}] zero booked nights — not a comparable operator")
 
     return errors
 
 
-def _check_revenue_sanity(comp: CompProperty) -> Optional[str]:
-    """Sanity-check annual_revenue against (ADR × days) without overfitting.
+# Revenue-plausibility band, calibrated on 200 live AirROI records.
+#
+# The identity that actually holds is:
+#     ttm_revenue ≈ (ttm_avg_rate × nights_booked) + cleaning/guest fees
+# so revenue / room_revenue is a FEE MULTIPLIER and is >= 1 by construction.
+# Observed on live data: min 0.784, median 1.192, p99 1.587, max 1.592.
+#
+# The previous version divided by `days_available` (UNSOLD nights) and rejected
+# 25% of real, valid listings — it was an occupancy filter wearing a data-
+# integrity label, and it blocked report generation in 5 of 6 markets.
+#
+# This gate exists to catch OUR OWN mapping bugs, not AirROI's data (0/200 live
+# records violate any physical constraint). Bounds are deliberately loose.
+_REVENUE_RATIO_MIN = 0.60
+_REVENUE_RATIO_MAX = 2.50
 
-    Real STR data has seasonal ADR/occupancy variance, so strict equality
-    (adr × occ × days == annual_revenue within 10%) rejects most real listings.
-    Instead we flag comps where annual_revenue is outside [0.15×, 3.0×] of
-    (adr × days_available). Seasonal properties legitimately earn 2-3x their
-    average ADR during peak — a cabin available 114 days that earns $203K on
-    a $665 average ADR is a seasonal winner, not a data error.
+
+def _check_revenue_sanity(comp: CompProperty) -> Optional[str]:
+    """Check annual_revenue against room revenue (ADR × nights booked).
+
+    Returns a failure string only when the relationship is impossible on the
+    AirROI contract, which means we have corrupted the mapping somewhere.
     """
-    if comp.adr <= 0 or comp.days_available <= 0 or comp.annual_revenue <= 0:
-        return None  # handled by field check
-    theoretical_max = comp.adr * comp.days_available
-    if theoretical_max <= 0:
+    if comp.adr <= 0 or comp.nights_booked <= 0 or comp.annual_revenue <= 0:
+        return None  # handled by the field check
+    room_revenue = comp.adr * comp.nights_booked
+    if room_revenue <= 0:
         return None
-    ratio = comp.annual_revenue / theoretical_max
-    if ratio < 0.15:
-        return (f"[{comp.name}] annual_revenue (${comp.annual_revenue:,.0f}) is <15% of "
-                f"ADR×days (${theoretical_max:,.0f}) — likely inactive or stale")
-    if ratio > 3.0:
-        return (f"[{comp.name}] annual_revenue (${comp.annual_revenue:,.0f}) exceeds 300% of "
-                f"ADR×days (${theoretical_max:,.0f}) — data error suspected")
+    ratio = comp.annual_revenue / room_revenue
+    if ratio < _REVENUE_RATIO_MIN:
+        return (f"[{comp.name}] annual_revenue (${comp.annual_revenue:,.0f}) is below "
+                f"{_REVENUE_RATIO_MIN:.0%} of ADR×booked nights (${room_revenue:,.0f}) — "
+                f"mapping error or stale data")
+    if ratio > _REVENUE_RATIO_MAX:
+        return (f"[{comp.name}] annual_revenue (${comp.annual_revenue:,.0f}) exceeds "
+                f"{_REVENUE_RATIO_MAX:.0%} of ADR×booked nights (${room_revenue:,.0f}) — "
+                f"mapping error suspected")
     return None
 
 
@@ -174,27 +190,23 @@ async def run_phase_a(data: ReportData) -> list[str]:
     for comp in data.comps:
         failures.extend(_check_comp_fields(comp))
 
-    # 3. Revenue-math sanity per comp — warn but don't block.
-    #    The agent's pre-filter already handles revenue issues during comp
-    #    selection. In thin markets, comps with unusual revenue ratios may
-    #    be the only ones available — blocking the whole report isn't helpful.
+    # 3. Revenue-math sanity per comp
     for comp in data.comps:
         msg = _check_revenue_sanity(comp)
         if msg:
-            print(f"[Sanity] WARNING: {msg}", file=sys.stderr)
+            failures.append(msg)
 
-    # 4. Subject hero — warn if missing or untrusted, but don't block.
-    #    Users can provide their own photo with --hero-url. Not having a
-    #    photo shouldn't prevent the report from being generated.
+    # 4. Subject hero — required, must be from a trusted host
     prop = data.property
     if not prop.hero_image_url:
-        print("[Sanity] WARNING: No hero image — report will use placeholder. "
-              "Provide one with --hero-url to improve the report.", file=sys.stderr)
-    elif prop.hero_image_url:
+        failures.append("Subject hero_image_url is empty")
+    else:
         host = prop.hero_image_url.split("://", 1)[-1].split("/", 1)[0].lower()
         if not any(t in host for t in _TRUSTED_HERO_HOSTS):
-            print(f"[Sanity] WARNING: Subject hero from untrusted source: {host}",
-                  file=sys.stderr)
+            failures.append(
+                f"Subject hero from untrusted source: {host} "
+                f"(expected {', '.join(_TRUSTED_HERO_HOSTS)})"
+            )
 
     # 5. Currency consistency (light — the template locks it in via property.currency)
     if not prop.currency:
@@ -231,20 +243,11 @@ async def run_phase_a(data: ReportData) -> list[str]:
 
     for (kind, u), r in zip(url_meta, results):
         if isinstance(r, Exception):
-            # Subject hero failures are warnings, not blockers — the image
-            # is cosmetic. Off-market properties often have map/streetview
-            # URLs that return 403 without an API key.
-            if kind == "subject hero":
-                print(f"[Sanity] WARNING: {kind} HTTP check raised: {r}", file=sys.stderr)
-            else:
-                failures.append(f"{kind} HTTP check raised: {r} — {u}")
+            failures.append(f"{kind} HTTP check raised: {r} — {u}")
             continue
         _url, ok, status = r
         if not ok:
-            if kind == "subject hero":
-                print(f"[Sanity] WARNING: {kind} returned HTTP {status} (non-blocking)", file=sys.stderr)
-            else:
-                failures.append(f"{kind} returned HTTP {status}: {u}")
+            failures.append(f"{kind} returned HTTP {status}: {u}")
 
     return failures
 
@@ -314,23 +317,13 @@ async def run_phase_b(html_path: Path) -> list[str]:
                 *[_head_ok(client, u, accept_302=True) for u in img_urls],
                 return_exceptions=True,
             )
-        # Map/streetview URLs may return 403 without API keys — treat as
-        # warnings for those sources, failures for actual property images.
-        _MAP_HOSTS = ("maps.googleapis.com", "api.mapbox.com")
         for u, r in zip(img_urls, results):
-            is_map = any(h in u for h in _MAP_HOSTS)
             if isinstance(r, Exception):
-                if is_map:
-                    print(f"[Sanity] WARNING: map image check raised: {r}", file=sys.stderr)
-                else:
-                    failures.append(f"Rendered <img> HEAD raised: {r} — {u}")
+                failures.append(f"Rendered <img> HEAD raised: {r} — {u}")
                 continue
             _url, ok, status = r
             if not ok:
-                if is_map:
-                    print(f"[Sanity] WARNING: map image returned HTTP {status} (non-blocking)", file=sys.stderr)
-                else:
-                    failures.append(f"Rendered <img> returned HTTP {status}: {u}")
+                failures.append(f"Rendered <img> returned HTTP {status}: {u}")
 
     return failures
 

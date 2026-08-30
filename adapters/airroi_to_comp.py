@@ -15,6 +15,7 @@ so to_comp_property() can still read listing_info, location_info, etc. after sco
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from schema import CompProperty, PropertyBasics
@@ -24,70 +25,97 @@ from schema import CompProperty, PropertyBasics
 
 # AirROI returns amenities as a LIST of strings.
 # We map them to: scorer keyword, display label, emoji.
+# AirROI returns amenities as Title Case DISPLAY STRINGS ("Hot tub", "BBQ grill"),
+# never snake_case. Verified: 136 distinct strings across 200 live records, ZERO
+# containing an underscore. The previous snake_case maps matched nothing at all,
+# so badge Pass 2 never fired and the skip-list never fired -- which is why comp
+# cards advertised "Hair Dryer" and "Hot Water" as headline features.
+#
+# Keys here MUST be exact members of amenity_vocab.json (tests/test_amenities.py
+# enforces this). Never substring-match them: "Pool" is a substring of
+# "Pool table" and "Pool view"; "Fire" is a substring of the near-universal
+# "Fire extinguisher".
 _AMENITY_MAP: dict[str, tuple[str, str, str]] = {
-    "hot_tub":                    ("hot tub",       "Hot Tub",        "🛁"),
-    "pool":                       ("pool",          "Pool",           "🏊"),
-    "ski_in_ski_out":             ("ski-in/out",    "Ski-in/Out",     "🎿"),
-    "sauna":                      ("sauna",         "Sauna",          "🧖"),
-    "indoor_fireplace":           ("fireplace",     "Fireplace",      "🔥"),
-    "fire_pit":                   ("fire pit",      "Fire Pit",       "🔥"),
-    "pets_allowed":               ("pet friendly",  "Pet-Friendly",   "🐕"),
-    "free_parking_on_premises":   ("parking",       "Parking",        "🚗"),
-    "ev_charger":                 ("ev charger",    "EV Charger",     "⚡"),
-    "gym":                        ("gym",           "Gym",            "💪"),
-    "exercise_equipment":         ("gym",           "Gym",            "💪"),
-    "game_console":               ("game room",     "Games Room",     "🎮"),
-    "bbq_grill":                  ("bbq",           "BBQ",            "🍖"),
-    "waterfront":                 ("waterfront",    "Waterfront",     "🌊"),
-    "lake_access":                ("lake access",   "Lake Access",    "🌊"),
-    "beach_access":               ("beach access",  "Beach Access",   "🏖️"),
-    "patio_or_balcony":           ("patio",         "Patio/Balcony",  "🌿"),
-    "resort_access":              ("resort",        "Resort Access",  "🏨"),
+    "Hot tub":                  ("hot tub",         "Hot Tub",         "\U0001F6C1"),
+    "Pool":                     ("pool",            "Pool",            "\U0001F3CA"),
+    "Ski-in/Ski-out":           ("ski-in/out",      "Ski-in/Out",      "\U0001F3BF"),
+    "Indoor fireplace":         ("fireplace",       "Fireplace",       "\U0001F525"),
+    "Fire pit":                 ("fire pit",        "Fire Pit",        "\U0001F525"),
+    "Pets allowed":             ("pet friendly",    "Pet-Friendly",    "\U0001F415"),
+    "Free parking on premises": ("parking",         "Parking",         "\U0001F697"),
+    "EV charger":               ("ev charger",      "EV Charger",      "\U000026A1"),
+    "Gym":                      ("gym",             "Gym",             "\U0001F4AA"),
+    "Exercise equipment":       ("gym",             "Gym",             "\U0001F4AA"),
+    "Pool table":               ("games room",      "Games Room",      "\U0001F3B1"),
+    "Game console":             ("games room",      "Games Room",      "\U0001F3AE"),
+    "Arcade games":             ("games room",      "Games Room",      "\U0001F579"),
+    "Life size games":          ("games room",      "Games Room",      "\U0001F3AF"),
+    "BBQ grill":                ("bbq",             "BBQ",             "\U0001F356"),
+    "Waterfront":               ("waterfront",      "Waterfront",      "\U0001F30A"),
+    "Lake access":              ("lake access",     "Lake Access",     "\U0001F30A"),
+    "Beach access":             ("beach access",    "Beach Access",    "\U0001F3D6"),
+    "Ocean view":               ("views",           "Ocean View",      "\U0001F30A"),
+    "River view":               ("views",           "River View",      "\U0001F3DE"),
+    "Pool view":                ("views",           "Pool View",       "\U0001F3CA"),
+    "Garden view":              ("views",           "Garden View",     "\U0001F33F"),
+    "Patio or balcony":         ("patio",           "Patio/Balcony",   "\U0001F33F"),
+    "Outdoor kitchen":          ("outdoor kitchen", "Outdoor Kitchen", "\U0001F373"),
+    "Outdoor shower":           ("outdoor shower",  "Outdoor Shower",  "\U0001F6BF"),
+    "Outdoor playground":       ("playground",      "Playground",      "\U0001F6DD"),
+    "Resort access":            ("resort",          "Resort Access",   "\U0001F3E8"),
+    "Elevator":                 ("elevator",        "Elevator",        "\U0001F6D7"),
+    "Kayak":                    ("kayak",           "Kayak",           "\U0001F6F6"),
+    "Bikes":                    ("bikes",           "Bikes",           "\U0001F6B2"),
+    "Backyard":                 ("backyard",        "Backyard",        "\U0001F333"),
 }
 
-# Priority order for badge slots — show the most revenue-relevant amenities first.
-# Universal amenities (wifi, kitchen, washer, dryer) are excluded.
+# Only these earn a badge slot. Anything not listed is not a selling point --
+# a badge reading "Shampoo" costs a slot a hot tub deserved.
 _BADGE_PRIORITY = [
-    "ski_in_ski_out",
-    "hot_tub", "pool", "sauna",
-    "indoor_fireplace", "beach_access", "lake_access", "waterfront",
-    "fire_pit", "gym", "exercise_equipment",
-    "game_console",
-    "pets_allowed", "ev_charger",
-    "bbq_grill",
+    "Ski-in/Ski-out",
+    "Hot tub", "Pool", "Waterfront",
+    "Beach access", "Lake access",
+    "Ocean view", "River view", "Pool view", "Garden view",
+    "Indoor fireplace", "Fire pit",
+    "Pool table", "Game console", "Arcade games", "Life size games",
+    "Gym", "Exercise equipment",
+    "Outdoor kitchen", "Outdoor shower", "Outdoor playground",
+    "Resort access", "Kayak", "Bikes", "Backyard",
+    "Pets allowed", "EV charger", "BBQ grill",
+    "Patio or balcony", "Elevator", "Free parking on premises",
 ]
 
-# Text-signal badges: AirROI's amenity list covers many keys, but some
-# high-value signals (views, village proximity, luxury tier) only appear
-# in listing names/descriptions.
+# Kept for backward compatibility with importers. Badge building is now an
+# ALLOWLIST (_BADGE_PRIORITY), not a denylist, so a comp with no premium
+# amenity shows fewer badges instead of junk ones.
+_SKIP_AMENITIES: set[str] = set()
+
 _TEXT_SIGNAL_PATTERNS: list[tuple[tuple[str, ...], str, str]] = [
+    # Free-text signals ONLY for things with no amenity-vocabulary key.
+    # "sauna" is here because it appears in 0 of the 136 real amenity strings.
+    # Matched on word boundaries: the old bare "spa" token matched
+    # "space"/"spacious"/"workspace" and stamped Wellness on 151/200 cards.
+    # The "luxury/premium/executive" signal is deliberately gone — it fired on
+    # 61/125 comps purely from host-written marketing adjectives. Objective
+    # host_info.professional_management and guest_favorite replace it.
     (("ski-in", "ski in", "ski out", "ski/out", "ski access"),
-     "Ski-in/Out", "🎿"),
-    (("sauna", "cold plunge"),
-     "Sauna", "🧖"),
-    (("fireplace", "fire place", "wood stove", "gas fireplace"),
-     "Fireplace", "🔥"),
-    (("mountain view", "valley view", "panoramic view", "scenic view", "lake view", "ocean view"),
-     "Views", "🏔️"),
+     "Ski-in/Out", "\U0001F3BF"),
+    (("sauna", "cold plunge", "steam room"),
+     "Sauna", "\U0001F9D6"),
+    (("mountain view", "valley view", "panoramic view", "scenic view"),
+     "Views", "\U0001F3D4"),
     (("village", "village core", "walk to village", "steps from village", "downtown"),
-     "Village", "📍"),
-    (("cold plunge", "wellness", "spa", "steam room"),
-     "Wellness", "🧘"),
-    (("luxury", "luxurious", "premium", "executive", "boutique"),
-     "Luxury", "✨"),
+     "Village", "\U0001F4CD"),
 ]
 
-# Amenities to skip when building badges — universal / low-value
-_SKIP_AMENITIES = {
-    "wifi", "kitchen", "washer", "dryer", "heating", "air_conditioning",
-    "dedicated_workspace", "essentials", "hot_water", "carbon_monoxide_alarm",
-    "smoke_alarm", "fire_extinguisher", "first_aid_kit", "hangers",
-    "iron", "hair_dryer", "shampoo", "conditioner", "body_soap",
-    "bed_linens", "extra_pillows_and_blankets", "clothing_storage",
-    "dishes_and_silverware", "cooking_basics", "coffee_maker", "coffee",
-    "refrigerator", "microwave", "stove", "oven", "dishwasher", "freezer",
-    "cleaning_products", "long_term_stays_allowed",
-}
+
+def _strip_html(text: str) -> str:
+    """Drop HTML tags before text-signal matching.
+
+    AirROI descriptions contain markup and `space</b><br` was matching the
+    old bare "spa" token.
+    """
+    return re.sub(r"<[^>]+>", " ", text or "")
 
 
 def _flatten_amenities(raw: Optional[list]) -> list[str]:
@@ -136,10 +164,10 @@ def _amenities_to_badges(
             labels.append(label)
             emojis.append(emoji)
 
-    # Pass 1: text signals from name/description
-    text_lower = (text_context or "").lower()
+    # Pass 1: text signals from name/description, word-boundary matched.
+    text_lower = _strip_html(text_context or "").lower()
     for keywords, label, emoji in _TEXT_SIGNAL_PATTERNS:
-        if any(k in text_lower for k in keywords):
+        if any(re.search(r"\b" + re.escape(k) + r"\b", text_lower) for k in keywords):
             _add(label, emoji)
 
     amenities_set = set(amenity_list) if isinstance(amenity_list, list) else set()
@@ -154,16 +182,10 @@ def _amenities_to_badges(
         _, label, emoji = entry
         _add(label, emoji)
 
-    # Pass 3: any remaining amenities, unmapped keys surface as Title Case
-    for key in (amenity_list or []):
-        if len(labels) >= limit:
-            break
-        if not isinstance(key, str):
-            continue
-        if key in _SKIP_AMENITIES or key in _AMENITY_MAP or key in _BADGE_PRIORITY:
-            continue
-        label = key.replace("_", " ").title()
-        _add(label, "✨")
+    # Deliberately NO catch-all pass. If a comp has no premium amenity it
+    # shows fewer than `limit` badges. The old fallback title-cased whatever
+    # came first in the raw list, which is why cards advertised "Bathtub",
+    # "Hair Dryer" and "Shampoo" as headline features.
 
     return labels, emojis
 
@@ -181,34 +203,64 @@ def _coerce_occ_pct(val) -> Optional[float]:
     return round(v, 2)
 
 
+# Corpus-wide fee uplift: ttm_revenue / (ttm_avg_rate x nights_booked).
+# Median 1.192 over 200 live records (p10 1.069, p90 1.334). Used only when a
+# listing has no cleaning_fee/length-of-stay data to compute its own uplift.
+DEFAULT_FEE_FACTOR = 1.19
+
+
+# Fallback achievable-occupancy ceiling when there is no pool to measure.
+# Deliberately NOT 90%: no market in the 200-record corpus reaches a p90 of
+# 90% adjusted occupancy (observed range 57%-84%). A "potential" the market
+# has never achieved is not a projection, it is a sales pitch.
+DEFAULT_OCC_CEILING = 0.65
+OCC_CEILING_FLOOR = 0.45
+OCC_CEILING_CAP = 0.85
+
+
 def _derive_revenue_potential(
     annual_revenue: Optional[float],
     adr: Optional[float],
-    days_available: int,
-    occupancy: Optional[float] = None,
+    nights_listed: int,
+    *,
+    cleaning_fee: Optional[float] = None,
+    avg_los: Optional[float] = None,
+    occ_ceiling: float = DEFAULT_OCC_CEILING,
 ) -> Optional[float]:
-    """Revenue potential: what this property would earn at 70% occupancy.
+    """Revenue ceiling on the SAME fee-inclusive basis as ttm_revenue.
 
-    Formula: (annual_revenue / actual_occupancy) × 0.70
+    Ceiling = (adr x open nights x achievable occupancy) + cleaning fees.
 
-    This uses real revenue (which captures seasonal pricing) divided by
-    actual occupancy to get the "fully booked" rate, then applies a
-    realistic 70% occupancy target. Always higher than actual revenue.
+    `occ_ceiling` is the occupancy a strong operator in THIS market actually
+    reaches (p75 of the comp pool, see market_occupancy_ceiling). It is not a
+    universal constant.
+
+    `nights_listed` must be OPEN INVENTORY (total - blocked), never
+    ttm_available_days (which is unsold nights and inverts the result).
     """
-    if annual_revenue and annual_revenue > 0 and occupancy and occupancy > 0:
-        # occupancy may be 0-1 or 0-100 — normalize to 0-1
-        occ = occupancy if occupancy <= 1.0 else occupancy / 100
-        if occ > 0:
-            return round((annual_revenue / occ) * 0.70, 2)
+    if not (adr and adr > 0 and nights_listed and nights_listed > 0):
+        return None
+    booked_ceiling = nights_listed * float(occ_ceiling)
+    room = float(adr) * booked_ceiling
+    if cleaning_fee and avg_los and avg_los > 0:
+        fees = float(cleaning_fee) * (booked_ceiling / float(avg_los))
+    else:
+        fees = room * (DEFAULT_FEE_FACTOR - 1.0)
+    return round(room + fees, 2)
 
-    # Fallback: ADR × 365 × 0.70
-    if adr and adr > 0:
-        return round(float(adr) * 365 * 0.70, 2)
 
-    if annual_revenue and annual_revenue > 0:
-        return round(float(annual_revenue) * 1.3, 2)
+def market_occupancy_ceiling(mapped: list[dict]) -> float:
+    """Achievable occupancy for this market = p75 of the pool's adjusted occupancy.
 
-    return None
+    Bounded to [45%, 85%] so a pathologically dead or pathologically hot sample
+    cannot produce an absurd ceiling.
+    """
+    occ = sorted(r["occupancy_pct"] for r in mapped
+                 if r.get("occupancy_pct") is not None)
+    if not occ:
+        return DEFAULT_OCC_CEILING
+    p75 = occ[min(len(occ) - 1, (3 * len(occ)) // 4)] / 100.0
+    return max(OCC_CEILING_FLOOR, min(OCC_CEILING_CAP, p75))
 
 
 # ── Public: Stage 1 — AirROI listing → scorer input dict ────────────
@@ -229,6 +281,7 @@ def map_for_scorer(airroi_listing: dict) -> dict:
     pd = airroi_listing.get("property_details") or {}
     pm = airroi_listing.get("performance_metrics") or {}
     ratings = airroi_listing.get("ratings") or {}
+    host = airroi_listing.get("host_info") or {}
 
     # ── Identity / physical ──
     m["name"] = li.get("listing_name") or "Unnamed listing"
@@ -238,6 +291,10 @@ def map_for_scorer(airroi_listing: dict) -> dict:
     m["max_guests"] = pd.get("guests")
 
     # ── Financial ──
+    # NOTE ON BASIS (verified against 200 live AirROI records):
+    #   ttm_revenue  INCLUDES cleaning + guest fees (median 1.192x room revenue)
+    #   ttm_avg_rate EXCLUDES them (it is the nightly room rate)
+    # Never divide one by the other without accounting for the fee gap.
     adr = pm.get("ttm_avg_rate")
     if adr is not None:
         adr = float(adr)
@@ -248,25 +305,76 @@ def map_for_scorer(airroi_listing: dict) -> dict:
     if annual_rev is not None:
         annual_rev = float(annual_rev)
     m["annual_revenue_raw"] = annual_rev
-    m["annual_revenue"] = annual_rev
+    m["annual_revenue"] = annual_rev          # fee-INCLUSIVE
 
-    m["occupancy_pct"] = _coerce_occ_pct(pm.get("ttm_occupancy"))
+    # ── Night accounting ──
+    # ttm_available_days is UNSOLD nights (365 - days_reserved), NOT open
+    # inventory. Verified invariant, holds 200/200. Never use it as a
+    # denominator and never call it "available".
+    total   = pm.get("ttm_total_days")
+    blocked = pm.get("ttm_blocked_days")
+    booked  = pm.get("ttm_days_reserved")
+    total   = int(total) if total is not None else 365
+    blocked = int(blocked) if blocked is not None else 0
+    m["nights_booked"] = int(booked) if booked is not None else 0
+    m["nights_listed"] = max(0, total - blocked)          # open inventory
+    m["nights_unsold"] = pm.get("ttm_available_days")     # reference only
+    m["total_days"]    = total
+    m["blocked_days"]  = blocked
 
-    # Days available = industry standard "days on market" = 365 - blocked_days.
-    # NOT AirROI's ttm_available_days which means "vacant/unbooked nights."
-    blocked = int(pm.get("ttm_blocked_days") or 0)
-    m["days_available"] = 365 - blocked  # days the property was listed and active
+    # Room revenue (fee-EXCLUSIVE) — the basis that pairs with adr
+    m["room_revenue"] = (adr or 0.0) * m["nights_booked"]
 
-    days_reserved = pm.get("ttm_days_reserved")
-    m["days_reserved"] = int(days_reserved) if days_reserved else 0
+    # Occupancy: prefer ADJUSTED (booked / open inventory). Raw ttm_occupancy
+    # divides by 365 and so understates any listing that was blocked off.
+    # 73/125 live comps have blocked days; max understatement observed 56.6pts.
+    m["occupancy_pct"] = _coerce_occ_pct(pm.get("ttm_adjusted_occupancy"))
+    if m["occupancy_pct"] is None:
+        m["occupancy_pct"] = _coerce_occ_pct(pm.get("ttm_occupancy"))
+    m["occupancy_raw_pct"] = _coerce_occ_pct(pm.get("ttm_occupancy"))
 
-    rev_potential = _derive_revenue_potential(annual_rev, adr, m["days_available"], pm.get("ttm_occupancy"))
+    # AirROI computes RevPAR itself — use it instead of hand-rolling a ratio.
+    m["revpar"] = pm.get("ttm_revpar")
+    m["adjusted_revpar"] = pm.get("ttm_adjusted_revpar")
+
+    # ── Freshness (trailing 90 days) — is this comp alive RIGHT NOW? ──
+    m["l90d_nights_booked"] = pm.get("l90d_days_reserved")
+    m["l90d_occupancy_pct"] = _coerce_occ_pct(pm.get("l90d_adjusted_occupancy"))
+    m["l90d_revenue"] = pm.get("l90d_revenue")
+
+    # ── Fees / stay pattern ──
+    pricing = airroi_listing.get("pricing_info") or {}
+    m["cleaning_fee"] = pricing.get("cleaning_fee")
+    m["avg_length_of_stay"] = pm.get("ttm_avg_length_of_stay")
+    m["min_nights"] = (airroi_listing.get("booking_settings") or {}).get("min_nights")
+
+    rev_potential = _derive_revenue_potential(
+        annual_rev, adr, m["nights_listed"],
+        cleaning_fee=m["cleaning_fee"], avg_los=m["avg_length_of_stay"],
+    )
     m["revenue_potential_raw"] = rev_potential
     m["revenue_potential"] = rev_potential
 
     # ── Quality ──
+    # AirROI reports rating_overall == 0.0 as a "too few reviews" SENTINEL,
+    # not as a real zero rating. Keep it distinguishable from a genuine score.
     rating = ratings.get("rating_overall")
-    m["rating"] = float(rating) if rating is not None else 0.0
+    m["rating_is_unrated"] = rating in (None, 0, 0.0)
+    m["rating"] = None if m["rating_is_unrated"] else float(rating)
+    m["rating_cleanliness"] = ratings.get("rating_cleanliness")
+    m["rating_location"] = ratings.get("rating_location")
+    m["rating_value"] = ratings.get("rating_value")
+
+    # ── Host / listing quality signals (objective, replace luxury-adjective guessing) ──
+    m["superhost"] = bool(host.get("superhost"))
+    m["professional_management"] = bool(host.get("professional_management"))
+    m["guest_favorite"] = bool(li.get("guest_favorite"))
+
+    # ── Geo (for distance scoring) ──
+    loc = airroi_listing.get("location_info") or {}
+    m["latitude"] = loc.get("latitude")
+    m["longitude"] = loc.get("longitude")
+    m["country_code"] = loc.get("country_code")
 
     reviews = ratings.get("num_reviews") or 0
     try:
@@ -292,8 +400,34 @@ def map_for_scorer(airroi_listing: dict) -> dict:
 
 
 def map_batch_for_scorer(airroi_listings: list[dict]) -> list[dict]:
-    """Bulk convenience wrapper around map_for_scorer."""
-    return [map_for_scorer(c) for c in airroi_listings if isinstance(c, dict)]
+    """Map a comp pool, then re-derive revenue_potential against the pool itself.
+
+    Two passes: the achievable-occupancy ceiling is a property of the MARKET,
+    so it can only be computed once the whole pool is mapped.
+    """
+    mapped = [map_for_scorer(c) for c in airroi_listings if isinstance(c, dict)]
+    if not mapped:
+        return mapped
+    ceiling = market_occupancy_ceiling(mapped)
+    for m in mapped:
+        m["market_occ_ceiling"] = ceiling
+        # A property already outperforming the market p75 has its OWN result as
+        # the floor for its ceiling. Otherwise the card would print a "Revenue
+        # Potential" below the "Annual Revenue" directly above it, which is
+        # nonsense to a client and discredits the whole report.
+        own = (m.get("occupancy_pct") or 0) / 100.0
+        occ_for_potential = min(OCC_CEILING_CAP, max(ceiling, own))
+        pot = _derive_revenue_potential(
+            m.get("annual_revenue"), m.get("adr"), m.get("nights_listed") or 0,
+            cleaning_fee=m.get("cleaning_fee"), avg_los=m.get("avg_length_of_stay"),
+            occ_ceiling=occ_for_potential,
+        )
+        # Final guard: potential is a CEILING. It can never sit below actual.
+        if pot is not None and m.get("annual_revenue"):
+            pot = max(pot, round(float(m["annual_revenue"]) * 1.02, 2))
+        m["revenue_potential_raw"] = pot
+        m["revenue_potential"] = pot
+    return mapped
 
 
 # ── Public: Stage 2 — scored dict → CompProperty ────────────────────
@@ -340,7 +474,8 @@ def to_comp_property(scored_comp: dict) -> CompProperty:
         sleeps=_safe_int(scored_comp.get("sleeps") or scored_comp.get("max_guests")),
         bedrooms=_safe_int(scored_comp.get("bedrooms")),
         bathrooms=_safe_float(scored_comp.get("bathrooms")),
-        rating=_safe_float(scored_comp.get("rating")),
+        rating=(None if scored_comp.get("rating_is_unrated")
+                else _safe_float(scored_comp.get("rating")) or None),
         review_count=_safe_int(scored_comp.get("reviews") or scored_comp.get("review_count")),
         feature_badges=feature_badges,
         badge_emojis=badge_emojis,
@@ -348,8 +483,25 @@ def to_comp_property(scored_comp: dict) -> CompProperty:
         annual_revenue=_safe_float(scored_comp.get("annual_revenue_raw") or scored_comp.get("annual_revenue")),
         occupancy_pct=_safe_float(scored_comp.get("occupancy_pct")),
         adr=_safe_float(scored_comp.get("adr_raw") or scored_comp.get("adr")),
-        days_available=_safe_int(scored_comp.get("days_available"), 365),
-        days_booked=_safe_int(scored_comp.get("days_reserved"), 0),
+        nights_booked=_safe_int(scored_comp.get("nights_booked"), 0),
+        nights_listed=_safe_int(scored_comp.get("nights_listed"), 365),
+        revpar=_safe_float(scored_comp.get("revpar")),
+        l90d_occupancy_pct=(_safe_float(scored_comp["l90d_occupancy_pct"])
+                            if scored_comp.get("l90d_occupancy_pct") is not None else None),
+        l90d_nights_booked=(_safe_int(scored_comp["l90d_nights_booked"])
+                            if scored_comp.get("l90d_nights_booked") is not None else None),
+        superhost=bool(scored_comp.get("superhost")),
+        professional_management=bool(scored_comp.get("professional_management")),
+        guest_favorite=bool(scored_comp.get("guest_favorite")),
+        cleaning_fee=(_safe_float(scored_comp["cleaning_fee"])
+                      if scored_comp.get("cleaning_fee") is not None else None),
+        min_nights=(_safe_int(scored_comp["min_nights"])
+                    if scored_comp.get("min_nights") is not None else None),
+        distance_km=(_safe_float(scored_comp["distance_km"])
+                     if scored_comp.get("distance_km") is not None else None),
+        latitude=scored_comp.get("latitude"),
+        longitude=scored_comp.get("longitude"),
+        rescued=bool(scored_comp.get("rescued")),
         airbnb_url=airbnb_url,
     )
 
@@ -386,6 +538,9 @@ def subject_for_scorer(
         "max_guests":    prop.max_guests,
         "guests":        prop.max_guests,
         "adr":           adr,
+        "airdna_adr":    adr,  # scorer accepts either key
+        "latitude":      prop.latitude,
+        "longitude":     prop.longitude,
         "host": {
             "is_superhost": prop.is_superhost,
         },

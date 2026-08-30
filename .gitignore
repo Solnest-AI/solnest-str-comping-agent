@@ -1,33 +1,12 @@
-node_modules/
-__pycache__/
-*.pyc
-.venv/
-venv/
 .env
 .env.*
 !.env.example
-*.log
-output/
-report/*.html
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# ── Tooling / caches ──
-.gitnexus
-.gitnexus/
+__pycache__/
+*.pyc
 .pytest_cache/
 .ruff_cache/
-.claude/
-
-# ── Internal / owner-specific (NOT for public distribution) ──
-references/
-docs/
-AGENTS.md
-branding.json
-solneststays-full.png
-STR-Agent-Updates-*.md
-
-# ── Local backups ──
-_pre-sync-backup-*/
+output/
+.venv/
+venv/
+.DS_Store
 dist/

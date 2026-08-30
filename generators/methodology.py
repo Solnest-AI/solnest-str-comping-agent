@@ -3,46 +3,89 @@
 from schema import PropertyBasics, CompProperty, MethodologyData
 
 
+def _bed_tolerance(bedrooms: int) -> int:
+    """Mirror comp_scorer's bedroom gate so the stated criteria match reality."""
+    if bedrooms <= 4:
+        return 1
+    if bedrooms <= 7:
+        return 2
+    return 3
+
+
 def build_methodology(
     prop: PropertyBasics,
     comps: list[CompProperty],
+    peak_label: str = "",
+    shoulder_label: str = "",
 ) -> MethodologyData:
-    bed_low = prop.bedrooms - 1
-    bed_high = prop.bedrooms + 1
+    tol = _bed_tolerance(prop.bedrooms)
+    bed_low = max(0, prop.bedrooms - tol)
+    bed_high = prop.bedrooms + tol
+    bed_range = "studio" if bed_high == 0 else (
+        f"{bed_low}-{bed_high} bedroom" if bed_low != bed_high else f"{bed_low} bedroom"
+    )
+
+    criteria = [f"{bed_range.capitalize()} properties in {prop.market}"]
 
     if comps:
         guest_low = min(c.sleeps for c in comps)
         guest_high = max(c.sleeps for c in comps)
-        guest_range = f"{guest_low}-{guest_high}"
+        criteria.append(f"Sleeps {guest_low}-{guest_high} guests (aligned with subject capacity)")
+
+        # State the rating floor we ACTUALLY delivered, not an aspiration.
+        rated = [c.rating for c in comps if c.rating]
+        if rated:
+            criteria.append(f"Review ratings {min(rated):.2f}+ stars")
+
+        booked = [c.nights_booked for c in comps if c.nights_booked]
+        if booked:
+            criteria.append(
+                f"Active operators only ({min(booked)}+ nights booked in the trailing 12 months)"
+            )
+
+        dists = [c.distance_km for c in comps if c.distance_km is not None]
+        if dists:
+            criteria.append(f"Within {max(dists):.1f} km of the subject property")
+
+        n_pm = sum(1 for c in comps if c.professional_management)
+        if n_pm:
+            criteria.append(f"{n_pm} of {len(comps)} professionally managed")
+
+        n_rescued = sum(1 for c in comps if c.rescued)
+        if n_rescued:
+            criteria.append(
+                f"Note: {n_rescued} comp(s) admitted on relaxed criteria due to a thin local pool"
+            )
     else:
-        guest_range = str(prop.max_guests)
+        criteria.append(f"Sleeps {prop.max_guests} guests")
+
+    criteria.append("Active AirROI performance data (12-month trailing)")
+
+    drivers = []
+    if peak_label:
+        drivers.append(f"<strong>Peak Season:</strong> {peak_label}")
+    if shoulder_label:
+        drivers.append(f"<strong>Shoulder Season:</strong> {shoulder_label}")
+    drivers += [
+        "<strong>Amenity Premium:</strong> Differentiating features vs the comp set",
+        "<strong>Location Premium:</strong> Proximity and setting",
+    ]
 
     return MethodologyData(
-        comp_criteria=[
-            f"Premium {bed_low}-{bed_high} bedroom properties in {prop.market}",
-            f"Sleeps {guest_range} guests (aligned with subject capacity)",
-            "Active AirROI performance data (12-month trailing)",
-            "Luxury tier finishes and amenities",
-            "Strong review ratings (4.9+ stars)",
-        ],
+        comp_criteria=criteria,
         data_sources=[
             "<strong>AirROI:</strong> Property-level STR revenue, ADR, and occupancy",
             "<strong>Airbtics:</strong> Market-level overlay where coverage exists",
             "<strong>Airbnb:</strong> Live listing data and guest reviews",
             f"<strong>Market Research:</strong> {prop.market} tourism trends",
-            "<strong>Comp Analysis:</strong> 6-category scoring engine (physical, financial, quality, amenity, reliability, must-match)",
+            "<strong>Comp Analysis:</strong> 6-category weighted comparable scoring",
         ],
         assumptions=[
-            "Adjustable available nights per year (100-365)",
+            "Adjustable listed nights per year (100-365)",
+            "Revenue shown gross of platform fees, utilities, taxes, and management",
             "Professional property management",
             "Premium photography and listing optimization",
             "Competitive dynamic pricing strategy",
-            "Consistent 5-star guest experience delivery",
         ],
-        performance_drivers=[
-            f"<strong>Peak Season:</strong> Highest demand period for {prop.market}",
-            "<strong>Shoulder Season:</strong> Lower-demand months with optimization potential",
-            "<strong>Amenity Premium:</strong> Standout features that drive higher ADR",
-            "<strong>Location Premium:</strong> Proximity to attractions and points of interest",
-        ],
+        performance_drivers=drivers,
     )

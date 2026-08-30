@@ -12,7 +12,7 @@ class PropertyBasics(BaseModel):
     bedrooms: int
     bathrooms: float                                # supports 3.5
     max_guests: int
-    property_type: str = "Property"
+    property_type: str = "Luxury Chalet"
     hero_image_url: str = ""
     listing_url: Optional[str] = None               # external listing link (MLS, etc.)
     airbnb_url: Optional[str] = None
@@ -26,9 +26,10 @@ class PropertyBasics(BaseModel):
     description: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    country_code: Optional[str] = None    # ISO-2 from AirROI location_info
 
 
-class RevenueEstimate(BaseModel):
+class RentalizerData(BaseModel):
     revenue_potential: float                        # e.g. 142300.0
     adr: float                                      # average daily rate
     occupancy_pct: float                            # 0-100
@@ -42,16 +43,32 @@ class CompProperty(BaseModel):
     sleeps: int
     bedrooms: int
     bathrooms: float
-    rating: float = 0.0
+    rating: Optional[float] = None                                # None = too few reviews to rate
     review_count: int = 0
     feature_badges: list[str] = Field(default_factory=list)       # ["Ski-in/Out", "Views"]
     badge_emojis: list[str] = Field(default_factory=list)         # ["🏔️", "👁️"]
-    revenue_potential: float = 0
-    annual_revenue: float = 0
-    occupancy_pct: float = 0
-    adr: float = 0
-    days_available: int = 365                        # vacant nights (calendar open, not booked)
-    days_booked: int = 0                             # nights actually booked (reserved)
+    revenue_potential: float = 0                                  # fee-inclusive ceiling
+    annual_revenue: float = 0                                     # fee-inclusive (ttm_revenue)
+    occupancy_pct: float = 0                                      # ADJUSTED: booked / open nights
+    adr: float = 0                                                # room rate, fees EXCLUDED
+    # Night accounting. nights_booked + unsold == nights_listed (approx).
+    # There is deliberately no field called "days_available": AirROI's
+    # ttm_available_days means UNSOLD nights and reading it as availability
+    # inverted this entire tool. See adapters/airroi_to_comp.py.
+    nights_booked: int = 0                                        # ttm_days_reserved
+    nights_listed: int = 365                                      # total - blocked (open inventory)
+    revpar: float = 0
+    l90d_occupancy_pct: Optional[float] = None                    # freshness
+    l90d_nights_booked: Optional[int] = None
+    superhost: bool = False
+    professional_management: bool = False
+    guest_favorite: bool = False
+    cleaning_fee: Optional[float] = None
+    min_nights: Optional[int] = None
+    distance_km: Optional[float] = None                           # from subject
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    rescued: bool = False                                         # admitted via rescue pass
     airbnb_url: str = ""
 
 
@@ -63,30 +80,13 @@ class CalculatorDefaults(BaseModel):
     adr_min: int = 600
     adr_max: int = 1800
     adr_default: int = 1100
-    adr_step: int = 5
+    adr_step: int = 50
     days_min: int = 100
     days_max: int = 365
     days_default: int = 365
     days_step: int = 5
     occ_range_text: str = ""
     adr_range_text: str = ""
-
-
-class RevenueProjection(BaseModel):
-    """Comp-derived revenue projection with three tiers."""
-    conservative: float = 0                          # 25th percentile of comp revenues
-    base_case: float = 0                             # median of comp revenues
-    optimistic: float = 0                            # 75th percentile of comp revenues
-    conservative_adr: float = 0
-    base_case_adr: float = 0
-    optimistic_adr: float = 0
-    conservative_occ: float = 0
-    base_case_occ: float = 0
-    optimistic_occ: float = 0
-    airroi_estimate: float = 0                       # AirROI's model estimate (footnote)
-    airroi_divergence_pct: float = 0                 # % divergence from comp median
-    airroi_divergence_flag: bool = False              # True if >30% divergence
-    source_description: str = "Based on trailing 12-month performance of 6 comparable properties"
 
 
 class PositioningCard(BaseModel):
@@ -105,6 +105,8 @@ class Narratives(BaseModel):
     guests_description: str = ""
     peak_season_text: str = ""
     shoulder_season_text: str = ""
+    peak_season_label: str = ""        # derived from monthly revenue distribution
+    shoulder_season_label: str = ""
 
 
 class MethodologyData(BaseModel):
@@ -116,8 +118,7 @@ class MethodologyData(BaseModel):
 
 class ReportData(BaseModel):
     property: PropertyBasics
-    revenue_estimate: RevenueEstimate
-    projection: RevenueProjection = Field(default_factory=RevenueProjection)
+    rentalizer: RentalizerData
     comps: list[CompProperty] = Field(default_factory=list)
     calculator: CalculatorDefaults = Field(default_factory=CalculatorDefaults)
     narratives: Narratives = Field(default_factory=Narratives)

@@ -7,6 +7,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: lint + test (py${{ matrix.python-version }})
@@ -37,5 +40,46 @@ jobs:
 
       # No API keys are configured here on purpose: the suite must stay
       # hermetic. Any test that reaches the network will fail this job.
+      #
+      # The suite runs against real AirROI responses captured in
+      # tests/fixtures/ (~1.6 MB across six markets). Those are committed
+      # deliberately — regression tests for the scorer are only worth
+      # anything against payloads the API actually returns. They are static
+      # JSON, so they cost nothing at runtime and need no credentials.
       - name: Test (pytest)
         run: pytest -q
+
+  secrets-guard:
+    name: no secrets committed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # This repo is public and the whole design is "bring your own keys".
+      # A committed .env or branding.json is the one mistake that cannot be
+      # undone by a later commit, so fail the build rather than merge it.
+      - name: Assert no local config is tracked
+        run: |
+          tracked=$(git ls-files -- '.env' '.env.*' 'branding.json' \
+                    | grep -v '^\.env\.example$' || true)
+          if [ -n "$tracked" ]; then
+            echo "::error::These files must never be committed:"
+            echo "$tracked"
+            exit 1
+          fi
+          echo "OK - no .env or branding.json tracked."
+
+  package:
+    name: distribution zip builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # scripts/package.py sources its manifest from `git ls-files`, so this
+      # also proves the published file set is what we think it is.
+      - name: Build the zip
+        run: python scripts/package.py

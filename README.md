@@ -1,24 +1,193 @@
-# STR Comping Agent — instant short-term-rental income reports
+# STR Comping Agent: short-term-rental income reports
 
 [![CI](https://github.com/Solnest-AI/solnest-str-comping-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/Solnest-AI/solnest-str-comping-agent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![Runs in Claude Code](https://img.shields.io/badge/runs%20in-Claude%20Code-d97757.svg)](https://claude.com/claude-code)
 
-Give it a property — an Airbnb link, a Zillow link, or just a street address — and it finds the real comparable Airbnb listings nearby, scores them, and generates a branded, self-contained HTML report with revenue projections. The kind of analysis that takes an analyst an afternoon, in about a minute.
+Give it a property (an Airbnb link, a Zillow link, or a street address) and it
+pulls comparable Airbnb listings nearby, scores them, and generates a branded,
+self-contained HTML report with revenue projections.
 
-It runs inside **Claude Code**. You don't need to be technical: open Claude Code, drag this folder in, and say **"set this up."** Claude walks you through it one step at a time — installing dependencies, collecting your API keys, and branding the report with your company. Most people generate their first report in under 15 minutes.
+It runs inside **Claude Code**. Open Claude Code in this folder and say
+**"set this up"**; `CLAUDE.md` walks you through it one step at a time.
 
-**Bring your own keys. Zero secrets in the repo.** Every API key lives in a local `.env` that is gitignored and never leaves your machine.
+**One API key required.** AirROI. Everything else is optional. There is **no
+Anthropic key**. The report's written analysis comes from Claude Code itself.
+
+**Bring your own keys. Zero secrets in the repo.** Keys live in a local `.env`
+that is gitignored and never leaves your machine.
+
+---
+
+## Read this before you trust a number
+
+The revenue figures in these reports are **estimates derived from comparable
+listings**, not forecasts and not a valuation. The agent takes the trailing
+twelve months of real performance from AirROI for a set of nearby listings it
+judges comparable, and projects from that set.
+
+That means:
+
+- The output is only as good as the comp set. In thin or unusual markets there
+  may not be six genuinely comparable listings, and the report will say so
+  rather than quietly widening until it finds some.
+- Trailing performance is not a prediction. Regulation changes, new supply,
+  interest rates, and a market turning over will all break the extrapolation.
+- Every comp is somebody else's listing, with their pricing strategy, their
+  photos, and their reviews. A comp earning $90k does not mean this property
+  will.
+- **We publish no accuracy figure, because we have not measured one.** Do not
+  read the three-tier projection as a confidence interval; it is a spread of
+  assumptions, not a statistical bound.
+
+Use it the way you would use an analyst's first pass: a defensible starting
+point that shows its work. Not an appraisal, not investment advice.
 
 ---
 
 ## What it does
 
-- **Any input** — Airbnb URL (best results), Zillow URL, or a plain street address
-- **Real comps** — pulls comparable listings and trailing-twelve-month performance from the [AirROI](https://www.airroi.com) API, then scores each one against the subject property (physical match, financials, quality, amenities, data reliability, must-match features like waterfront/pool/hot-tub)
-- **Defensible projections** — Conservative / Base / Optimistic revenue tiers, an interactive calculator, and a seasonal occupancy chart
-- **Branded output** — a single self-contained HTML file with your logo, colors, and tagline
+- **Any input.** Airbnb URL (best results), Zillow/Realtor URL, or a plain
+  street address
+- **Real comps.** Pulls listings and trailing-twelve-month performance from the
+  [AirROI](https://www.airroi.com) API, then scores each against the subject on
+  physical match, financials, quality, amenities, distance, and data
+  reliability. Dormant and part-time listings are gated out rather than averaged
+  in.
+- **Sanity gates.** A report that cannot find a defensible comp set fails
+  instead of shipping
+- **Three-tier projection.** Conservative / Base / Optimistic, an interactive
+  calculator, and a seasonality chart driven by the market's real monthly
+  revenue distribution
+- **Written analysis from Claude Code.** The agent emits a brief, Claude writes
+  the copy, you re-run. No API key, no per-report cost.
+- **Branded output.** One self-contained HTML file with your logo and colors
+
+## What it does not do
+
+- It does not value the property or estimate what you should pay for it.
+- It does not model your expenses, financing, taxes, or local STR regulation.
+- It does not check whether short-term rental is legal at the address.
+- It does not work well where AirROI has thin coverage. Rural and newly-opened
+  markets are the weak spot.
+- It is not a pricing tool. Use PriceLabs or Wheelhouse for that.
+
+---
+
+## Setup
+
+Fastest path: open this folder in Claude Code and say **"set this up."**
+
+By hand:
+
+```bash
+pip install -r requirements.txt
+cp .env.example .env                      # then add your AirROI key
+cp branding.example.json branding.json    # then add your company
+```
+
+### API keys
+
+| Key | Required? | What it buys you | Get it |
+|---|---|---|---|
+| `AIRROI_API_KEY` | **Required** | The comp data: listings, comparables, TTM performance, revenue estimates | https://www.airroi.com/api/developer/activate |
+| `FIRECRAWL_API_KEY` | Optional | Street-address and Zillow/Realtor input. Airbnb URLs work without it. | https://www.firecrawl.dev |
+| `AIRBTICS_API_KEY` | Optional | Market seasonality overlay. Without it, seasonality comes from AirROI's monthly distribution. | https://airbtics.com |
+| `GMAIL_ADDRESS` + `GMAIL_APP_PASSWORD` | Optional | `--email` delivery. Reports always save locally regardless. | https://myaccount.google.com/apppasswords |
+
+No Anthropic key. See the narrative handoff below.
+
+---
+
+## Usage
+
+```bash
+# Airbnb URL: best results, resolves entirely through AirROI
+python agent.py --input "https://www.airbnb.com/rooms/12345678"
+
+# Zillow / Realtor URL: needs FIRECRAWL_API_KEY
+python agent.py --input "https://www.zillow.com/homedetails/123-Main-St/12345_zpid/"
+
+# Street address: pass the details if there is no live listing
+python agent.py --input "123 Main St, Nashville, TN 37203" --beds 3 --baths 2 --guests 8
+```
+
+Reports are written to `output/` as self-contained `.html` files.
+
+### Flags
+
+`--input` is the only required one.
+
+| Flag | What it does |
+|---|---|
+| `--input` | **Required.** Airbnb URL, Zillow/Realtor URL, or street address |
+| `--narratives PATH` | Load narrative copy written by Claude Code (see below) |
+| `--email you@example.com` | Email the report (needs Gmail configured) |
+| `--beds` / `--baths` / `--guests` | Property details, for addresses with no live listing |
+| `--market "City Name"` | Override market detection |
+| `--radius N` | AirROI comp search radius, in miles |
+| `--require "pool,hot_tub"` | Require comps to have these features |
+| `--exclude "oceanfront,beachfront"` | Drop comps whose names contain these keywords (alias `--exclude-comps`; also accepts a full listing name to drop one specific comp) |
+| `--no-feature-filter` | Disable the automatic must-have feature filter |
+| `--subject-on-water` | Declare the subject is on water, skipping the auto water-proximity filter |
+| `--allow-oceanfront-comps` | Keep waterfront comps even when the subject is inland |
+| `--currency "$"` / `"CA$"` | Override currency (auto-detected from the address) |
+| `--hero-url "https://..."` | Supply the hero photo when the listing scrape is blocked |
+| `--listing-url "https://..."` | Link the report's "View Listing" button |
+| `--skip-financials` | Dev only. Skips AirROI, produces an empty estimate |
+
+`python agent.py --help` is authoritative.
+
+---
+
+## The narrative handoff
+
+The report's written sections (positioning, guest profile, amenity upside,
+season commentary) are generated by **Claude Code**, not by an API key you pay
+for. The loop:
+
+```bash
+# 1. Run it. You get a complete report with template copy,
+#    plus output/<slug>.narrative-brief.json
+python agent.py --input "https://www.airbnb.com/rooms/12345678"
+
+# 2. In Claude Code: read that brief, write output/<slug>.narratives.json
+#    The brief carries the comp table, the market's real peak and shoulder
+#    months, the calculator defaults, and the exact JSON shape to write.
+
+# 3. Re-run with the copy
+python agent.py --input "https://www.airbnb.com/rooms/12345678" \
+                --narratives "output/<slug>.narratives.json"
+```
+
+The agent prints the exact three lines to paste into Claude Code when it writes
+the brief. The report from step 1 is complete and valid on its own; step 3 just
+replaces boilerplate with real analysis.
+
+`--narratives` validates strictly and fails loudly rather than falling back to
+template copy, so a report never silently claims to be something it is not.
+
+---
+
+## Branding
+
+The report is white-label. Copy `branding.example.json` to `branding.json` and
+edit it:
+
+```json
+{
+  "company_name": "Your Company",
+  "tagline": "Short-Term Rental Management",
+  "logo_url": "",
+  "website_url": "",
+  "primary_color": "#1f3c34",
+  "accent_color": "#4b7c6b"
+}
+```
+
+`branding.json` is gitignored, so your identity never ships with the code. Do
+not edit the template to rebrand.
 
 ---
 
@@ -26,98 +195,28 @@ It runs inside **Claude Code**. You don't need to be technical: open Claude Code
 
 ```
 str-comping-agent/
-├── CLAUDE.md            ← the guided setup. The file Claude reads to walk you through everything. START HERE.
-├── README.md            ← this page
-├── agent.py             ← CLI entrypoint + orchestration
-├── comp_scorer.py       ← the comp scoring engine
-├── config.py            ← reads your .env + branding.json
-├── schema.py            ← typed data models
+├── CLAUDE.md              ← the guided setup + narrative handoff. START HERE.
+├── README.md              ← this page
+├── SETUP.md               ← the non-technical walkthrough
+├── agent.py               ← CLI entrypoint + orchestration
+├── comp_scorer.py         ← scoring, hard gates, ranking
+├── config.py              ← reads .env + branding.json
+├── schema.py              ← typed data models
 │
-├── scrapers/            ← data sources (AirROI, Airbnb, Airbtics, property search)
-├── adapters/            ← maps API responses into the scorer's shape
-├── validators/          ← sanity gates (catches bad/hallucinated data before it reaches the report)
-├── generators/          ← revenue projection, narratives, methodology
-├── report/              ← HTML template engine + optional email delivery
-├── templates/           ← the report HTML template
-├── tests/               ← 53 tests (pytest)
+├── scrapers/              ← AirROI, Airbnb, Airbtics, property search
+├── adapters/              ← maps API payloads into the scorer's shape
+├── validators/            ← sanity gates that block a bad report
+├── generators/            ← calculator, narrative brief, narratives, methodology
+├── report/                ← HTML rendering + optional email
+├── templates/             ← the report template
+├── scripts/package.py     ← builds the distribution zip from the git manifest
+├── tests/                 ← hermetic tests, run against captured API responses
 │
-├── .env.example         ← copy to .env and fill in your keys
-├── branding.example.json← copy to branding.json and add your company
-├── requirements.txt     ← runtime dependencies
-└── requirements-dev.txt ← test + lint dependencies
+├── .env.example           ← copy to .env
+├── branding.example.json  ← copy to branding.json
+├── requirements.txt
+└── requirements-dev.txt
 ```
-
----
-
-## Setup
-
-The fastest path is to let Claude Code drive it — open this folder in Claude Code and say **"set this up."** `CLAUDE.md` is the conductor; it walks you through each step and waits for you at each one.
-
-If you'd rather do it by hand:
-
-```bash
-# 1. Install dependencies
-pip install -r requirements.txt
-
-# 2. Configure your API keys
-cp .env.example .env        # then edit .env
-
-# 3. Set your branding
-cp branding.example.json branding.json   # then edit it
-```
-
-### API keys
-
-| Key | Required? | What it's for | Get it |
-|-----|-----------|---------------|--------|
-| `AIRROI_API_KEY` | **Required** | Property estimates, comps, performance metrics | https://www.airroi.com/api/developer/activate |
-| `FIRECRAWL_API_KEY` | **Required** | Web search when given a street address | https://www.firecrawl.dev |
-| `APIFY_TOKEN` | Recommended | Reliable Zillow scraping (prevents hallucinated data) | https://console.apify.com/account#/integrations |
-| `AIRBTICS_API_KEY` | Optional | Market-level overlay (occupancy / ADR / listing count) | Airbtics |
-| `GOOGLE_MAPS_API_KEY` | Optional | Street View hero photo for off-market properties | https://console.cloud.google.com |
-
----
-
-## Usage
-
-```bash
-# Airbnb URL — best results, pulls everything from AirROI
-python agent.py --input "https://www.airbnb.com/rooms/12345678"
-
-# Zillow URL — uses Apify for reliable extraction
-python agent.py --input "https://www.zillow.com/homedetails/123-Main-St/12345_zpid/"
-
-# Street address — pass beds/baths/guests if the property isn't listed online
-python agent.py --input "123 Main St, Nashville, TN 37203" --beds 3 --baths 2 --guests 8 --market "Nashville"
-```
-
-### Useful flags
-
-| Flag | What it does |
-|------|--------------|
-| `--beds` / `--baths` / `--guests` | Property details (for addresses with no live listing) |
-| `--market "City Name"` | Override market detection for comp accuracy |
-| `--radius N` | AirROI comp search radius in miles |
-| `--exclude "oceanfront,beachfront"` | Drop comps whose names contain these keywords (alias: `--exclude-comps`, also takes a full listing name) |
-| `--require "pool,hot_tub"` | Require comps to have these features |
-| `--subject-on-water` / `--allow-oceanfront-comps` | Water-proximity controls |
-| `--no-feature-filter` | Disable the automatic must-have feature filter |
-| `--currency "$"` / `"CA$"` | Override currency (auto-detected from address) |
-| `--hero-url "https://..."` | Provide a custom property photo |
-| `--listing-url "https://..."` | Link the report's "View Listing" button |
-| `--email you@example.com` | Email the report after generating (needs Gmail SMTP configured) |
-
-Reports are written to `output/` as self-contained `.html` files — open in any browser.
-
----
-
-## The report
-
-- Three-tier revenue projection (Conservative / Base Case / Optimistic)
-- Six comparable properties with actual TTM performance data
-- Interactive revenue calculator with sliders
-- Seasonal occupancy chart
-- A methodology section explaining how the numbers were derived
 
 ---
 
@@ -125,19 +224,26 @@ Reports are written to `output/` as self-contained `.html` files — open in any
 
 ```bash
 pip install -r requirements-dev.txt
-pytest          # run the test suite (53 tests)
-ruff check .    # lint
+pytest -q        # hermetic: no network, no keys
+ruff check .     # lint
 ```
+
+The test suite is **hermetic**: no network, no API keys. It runs against real
+AirROI responses captured in `tests/fixtures/` covering six markets, so a change
+to the scorer is checked against data that actually exists rather than against
+mocks that agree with the code. CI runs lint and tests on Python 3.10, 3.11, and
+3.12 with no secrets configured. Any test that reaches the network fails the
+build by design.
 
 ---
 
 ## Requirements
 
 - Python 3.10+
-- An AirROI API key (required) and Firecrawl API key (required); others optional — see the table above.
+- An AirROI API key. Everything else is optional.
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Built by [Solnest AI](https://www.solnestai.com).
+MIT. See [LICENSE](LICENSE).

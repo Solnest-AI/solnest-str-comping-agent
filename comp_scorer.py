@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-STR Comping Agent — Comp Scorer v2
+STR Comp Scorer
 Scores and ranks comp candidates against the subject property's
 quality signals. Outputs the top N comps sorted by score descending.
 
@@ -23,8 +23,24 @@ Usage:
 
 import argparse
 import json
+import math
+import re
 import sys
 from typing import Optional
+
+
+# ── Comp admission floors ──────────────────────────────────────────────────
+# A comparable must be a real, currently-operating rental. These are HARD
+# gates, not score penalties: a dormant listing is not a cheap comp, it is
+# evidence about a failed listing and does not belong in a client report.
+MIN_ADJUSTED_OCCUPANCY = 20.0   # % of OPEN nights that must actually book
+MIN_REVIEWS = 3                 # below this AND unrated = no usable history
+MIN_NIGHTS_LISTED = 180         # a property blocked over half the year is a
+                                # part-time rental, not a comparable operator.
+                                # Adjusted occupancy flatters these badly: one
+                                # live comp books 233 of 236 open nights (98.7%
+                                # adjusted) while sitting blocked 129 days.
+                                # Costs 2% of the live corpus.
 
 
 # ── Amenity keyword maps ───────────────────────────────────────────────────
@@ -48,67 +64,37 @@ AMENITY_SIGNALS = {
     "fireplace":  ["fireplace", "fire place", "wood stove", "gas fireplace"],
 }
 
-# ── Must-match features ──────────────────────────────────────────────────
-# These are high-impact property attributes where subject and comp MUST
-# match. Mismatches in either direction get a heavy penalty; matches get
-# a strong bonus. This prevents e.g. oceanfront comps inflating projections
-# for an inland property, or a non-pool property being comped against pools.
-
-MUST_MATCH_FEATURES = {
-    "waterfront": [
-        # Truly ON the water — not just nearby
-        "waterfront", "oceanfront", "beachfront", "ocean front", "beach front",
-        "gulf front", "on the beach", "direct beach", "direct ocean",
-        "on the ocean", "on the water", "on the gulf",
-        "ocean view", "sea view", "gulf view",
-        "canal front", "canal-front", "canalfront", "on the canal",
-        "boat dock", "private dock", "deep water", "deep-water",
-        "bayfront", "bay front", "on the bay", "harbourfront", "harborfront",
-        "riverfront", "river front", "on the river",
-    ],
-    "lakefront": [
-        "lakefront", "lake front", "on the lake", "lakeshore",
-        "lake view", "lakeside", "lake house", "lakehouse",
-    ],
-    "pool": [
-        "pool", "swimming pool", "indoor pool", "outdoor pool",
-        "private pool", "heated pool", "plunge pool", "splash pool",
-    ],
-    "hot_tub": [
-        "hot tub", "hottub", "hot-tub", "jacuzzi", "jetted tub",
-    ],
-    "ski_access": [
-        "ski-in", "ski in", "ski out", "ski-out", "ski access", "ski-access",
-        "slope side", "slopeside", "ski trail",
-    ],
+# Signal -> exact amenity-vocabulary members. Matching is EXACT SET MEMBERSHIP
+# against property_details.amenities, never a substring scan of name+description.
+# The old scan awarded "+2 Pool match" to a listing whose description read
+# "we do not have a gym, pool nor roof deck", and matched "Pool table"/"Pool view"
+# as a pool and the near-universal "Fire extinguisher" as a fireplace.
+AMENITY_VOCAB_SIGNALS: dict[str, tuple[str, ...]] = {
+    "hot_tub":    ("Hot tub",),
+    "pool":       ("Pool",),
+    "ski_in_out": ("Ski-in/Ski-out",),
+    "games_room": ("Pool table", "Game console", "Arcade games", "Life size games", "Board games"),
+    "gym":        ("Gym", "Exercise equipment"),
+    "fireplace":  ("Indoor fireplace", "Fire pit"),
+    "views":      ("Ocean view", "River view", "Pool view", "Garden view", "Waterfront"),
+    "water":      ("Beach access", "Lake access", "Waterfront"),
+    "ev_charger": ("EV charger",),
+    "pets":       ("Pets allowed",),
+    "resort":     ("Resort access",),
 }
 
-# Points awarded/penalized for must-match features
-MUST_MATCH_BONUS = 8    # both have the feature
-MUST_MATCH_PENALTY = -10  # one has it, the other doesn't
+# Signals with NO amenity-vocabulary key -- these must come from free text.
+# "sauna" is here because it appears in 0 of the 136 real amenity strings.
+TEXT_ONLY_SIGNALS: dict[str, tuple[str, ...]] = {
+    "sauna":    ("sauna", "cold plunge", "steam room"),
+    "village":  ("village", "downtown", "walk to village", "steps from village"),
+}
 
 
 LUXURY_KEYWORDS = [
     "luxurious", "luxury", "premium", "high-end", "upscale",
     "designer", "executive", "boutique", "elite", "grand",
 ]
-
-# ── Property type detection ──────────────────────────────────────────────
-# Standalone homes and attached units compete in different segments.
-# A 5BR chalet shouldn't be comped against a 4BR townhome.
-
-STANDALONE_KEYWORDS = [
-    "house", "home", "chalet", "cabin", "cottage", "villa", "bungalow",
-    "estate", "lodge", "retreat", "single family", "single-family",
-    "detached", "stand-alone", "standalone",
-]
-
-ATTACHED_KEYWORDS = [
-    "condo", "condominium", "townhouse", "townhome", "town house",
-    "apartment", "apt", "suite", "unit", "penthouse", "loft",
-    "duplex", "triplex",
-]
-
 
 PROFESSIONAL_MGMT_KEYWORDS = [
     "managed by", "hosted by", "property management", "vacation rental company",
@@ -151,22 +137,17 @@ def detect_subject_signals(subject: dict) -> dict:
     # Luxury flag
     signals["luxury"] = any(kw in searchable for kw in LUXURY_KEYWORDS)
 
-    # Property type: standalone vs attached
-    is_standalone = any(kw in searchable for kw in STANDALONE_KEYWORDS)
-    is_attached = any(kw in searchable for kw in ATTACHED_KEYWORDS)
-    # If both match (e.g., "townhouse" + "home"), attached wins (more specific)
-    if is_attached:
-        signals["property_type_standalone"] = False
-    elif is_standalone:
-        signals["property_type_standalone"] = True
-    else:
-        signals["property_type_standalone"] = None  # unknown — no penalty
-
     # Professional management flag
     signals["professional_mgmt"] = any(kw in searchable for kw in PROFESSIONAL_MGMT_KEYWORDS)
 
-    # Amenity signals
-    for signal, keywords in AMENITY_SIGNALS.items():
+    # Amenity signals. The subject's own amenity list uses the same AirROI
+    # vocabulary when it came from a listing lookup; fall back to text otherwise.
+    subject_amenities = set(subject.get("amenities") or [])
+    for signal, vocab in AMENITY_VOCAB_SIGNALS.items():
+        signals[signal] = bool(subject_amenities & set(vocab)) or any(
+            kw in searchable for kw in AMENITY_SIGNALS.get(signal, [])
+        )
+    for signal, keywords in TEXT_ONLY_SIGNALS.items():
         signals[signal] = any(kw in searchable for kw in keywords)
 
     # Review sentiment analysis (from Apify subject reviews)
@@ -196,17 +177,6 @@ def detect_subject_signals(subject: dict) -> dict:
         signals["review_sentiment_positive"] = 0
         signals["review_sentiment_negative"] = 0
         signals["quality_tier"] = "unknown"
-
-    # Must-match feature detection
-    for feature, keywords in MUST_MATCH_FEATURES.items():
-        hits = sum(1 for kw in keywords if kw in searchable)
-        if feature in ("waterfront", "lakefront"):
-            # Location features need 2+ keyword hits to activate — a single
-            # match like "Beachfront Village" (community name) or "lake access"
-            # isn't enough to classify the property as truly on the water.
-            signals[f"must_match_{feature}"] = hits >= 2
-        else:
-            signals[f"must_match_{feature}"] = hits >= 1
 
     # Superhost signal
     host = subject.get("host", {})
@@ -268,7 +238,7 @@ def _score_physical_match(
 def _score_financial_match(
     comp_adr: float,
     comp_occ: Optional[float],
-    comp_days: Optional[int],
+    comp_revpar: Optional[float],
     comp_revenue_potential: Optional[float],
     comp_annual_revenue: Optional[float],
     subject_adr: Optional[float],
@@ -282,56 +252,61 @@ def _score_financial_match(
         adr_diff_pct = abs(comp_adr - subject_adr) / subject_adr
         if adr_diff_pct <= 0.10:
             score += 3
-            breakdown.append(f"+3 ADR within 10% of subject (${comp_adr:.0f})")
+            breakdown.append(f"+3 ADR within 10% of subject (CA${comp_adr:.0f})")
         elif adr_diff_pct <= 0.20:
             score += 2
-            breakdown.append(f"+2 ADR within 20% of subject (${comp_adr:.0f})")
+            breakdown.append(f"+2 ADR within 20% of subject (CA${comp_adr:.0f})")
         elif adr_diff_pct <= 0.35:
             score += 1
-            breakdown.append(f"+1 ADR within 35% of subject (${comp_adr:.0f})")
+            breakdown.append(f"+1 ADR within 35% of subject (CA${comp_adr:.0f})")
 
-    # RevPAN — Revenue Per Available Night
-    if comp_annual_revenue and comp_days and comp_days > 0:
-        revpan = comp_annual_revenue / comp_days
-        if subject_adr:
-            revpan_ratio = revpan / subject_adr
-            if revpan_ratio >= 0.55:
-                score += 3
-                breakdown.append(f"+3 Strong RevPAN (${revpan:.0f}/night — high yield)")
-            elif revpan_ratio >= 0.40:
-                score += 2
-                breakdown.append(f"+2 Solid RevPAN (${revpan:.0f}/night)")
-            elif revpan_ratio >= 0.25:
-                score += 1
-                breakdown.append(f"+1 Moderate RevPAN (${revpan:.0f}/night)")
-            elif revpan_ratio < 0.15:
-                score -= 1
-                breakdown.append(f"-1 Weak RevPAN (${revpan:.0f}/night — low yield)")
+    # RevPAR — use AirROI's own ttm_revpar. The previous hand-rolled
+    # "annual_revenue / days_available" divided revenue by UNSOLD nights and
+    # overstated by up to 5x.
+    if comp_revpar is not None and subject_adr:
+        revpar_ratio = comp_revpar / subject_adr
+        if revpar_ratio >= 0.55:
+            score += 3
+            breakdown.append(f"+3 Strong RevPAR ({comp_revpar:.0f}/night — high yield)")
+        elif revpar_ratio >= 0.40:
+            score += 2
+            breakdown.append(f"+2 Solid RevPAR ({comp_revpar:.0f}/night)")
+        elif revpar_ratio >= 0.25:
+            score += 1
+            breakdown.append(f"+1 Moderate RevPAR ({comp_revpar:.0f}/night)")
+        elif revpar_ratio < 0.15:
+            score -= 1
+            breakdown.append(f"-1 Weak RevPAR ({comp_revpar:.0f}/night — low yield)")
 
     # Revenue efficiency — actual vs potential
     if comp_revenue_potential and comp_annual_revenue and comp_revenue_potential > 0:
-        efficiency = comp_annual_revenue / comp_revenue_potential
-        if efficiency >= 0.85:
+        efficiency = min(1.0, comp_annual_revenue / comp_revenue_potential)
+        # Bands recalibrated against the corrected, market-relative potential.
+        # "Potential" is now revenue at this market's p75 occupancy, so an
+        # efficiency of 1.0 means "performs like a top-quartile operator here".
+        # The old bands were tuned against an inverted denominator.
+        if efficiency >= 0.90:
             score += 3
-            breakdown.append(f"+3 High revenue efficiency ({efficiency:.0%} of potential — well managed)")
+            breakdown.append(f"+3 Top-quartile revenue efficiency ({efficiency:.0%} of market potential)")
         elif efficiency >= 0.70:
             score += 2
-            breakdown.append(f"+2 Good revenue efficiency ({efficiency:.0%} of potential)")
+            breakdown.append(f"+2 Strong revenue efficiency ({efficiency:.0%} of market potential)")
         elif efficiency >= 0.50:
             score += 1
-            breakdown.append(f"+1 Moderate efficiency ({efficiency:.0%} of potential)")
-        elif efficiency < 0.35:
+            breakdown.append(f"+1 Moderate efficiency ({efficiency:.0%} of market potential)")
+        elif efficiency < 0.25:
             score -= 1
-            breakdown.append(f"-1 Low efficiency ({efficiency:.0%} of potential — underperforming)")
+            breakdown.append(f"-1 Low efficiency ({efficiency:.0%} of market potential — underperforming)")
 
     return score, breakdown
 
 
 def _score_quality_match(
-    comp_rating: float,
+    comp_rating: Optional[float],
     comp_reviews: int,
     comp_occ: Optional[float],
     subject_signals: dict,
+    comp: Optional[dict] = None,
 ) -> tuple:
     """Score quality/performance signals. Returns (points, breakdown_lines)."""
     score = 0
@@ -354,8 +329,14 @@ def _score_quality_match(
         score -= 2
         breakdown.append(f"-2 Very few reviews ({comp_reviews}) — unreliable data point")
 
-    # Rating quality
-    if comp_rating >= 4.9 and comp_reviews >= 10:
+    # Rating quality.
+    # comp_rating is None when AirROI reports rating_overall == 0.0, which is a
+    # "too few reviews" SENTINEL, not a real zero. An unrated comp must not
+    # collect rating points, and must not collect the low-rating penalty either.
+    if comp_rating is None:
+        score -= 1
+        breakdown.append("-1 Unrated (too few reviews for a rating) — low confidence")
+    elif comp_rating >= 4.9 and comp_reviews >= 10:
         score += 3
         breakdown.append(f"+3 Elite rating ({comp_rating} with {comp_reviews} reviews)")
     elif comp_rating >= 4.8 and comp_reviews >= 10:
@@ -364,30 +345,41 @@ def _score_quality_match(
     elif comp_rating >= 4.7:
         score += 1
         breakdown.append(f"+1 Good rating ({comp_rating})")
-    elif comp_rating > 0 and comp_rating < 4.3:
+    elif comp_rating < 4.3:
         score -= 2
         breakdown.append(f"-2 Low rating ({comp_rating}) — likely underperformer")
 
-    # Subject quality tier matching
+    # Subject quality tier matching (skipped entirely when the comp is unrated)
     quality_tier = subject_signals.get("quality_tier", "unknown")
-    if quality_tier == "elite" and comp_rating >= 4.9 and comp_reviews >= 20:
-        score += 2
-        breakdown.append("+2 Quality tier match (elite subject, elite comp)")
-    elif quality_tier == "premium" and comp_rating >= 4.8:
-        score += 1
-        breakdown.append("+1 Quality tier match (premium subject, high-rated comp)")
-    elif quality_tier == "underperformer" and comp_rating < 4.5:
-        score += 1
-        breakdown.append("+1 Quality tier match (both lower-performing)")
-
-    # Superhost preference
-    if subject_signals.get("superhost"):
-        if comp_rating >= 4.8 and comp_reviews >= 20:
+    if comp_rating is not None:
+        if quality_tier == "elite" and comp_rating >= 4.9 and comp_reviews >= 20:
+            score += 2
+            breakdown.append("+2 Quality tier match (elite subject, elite comp)")
+        elif quality_tier == "premium" and comp_rating >= 4.8:
             score += 1
-            breakdown.append("+1 Superhost-caliber comp (subject is Superhost)")
+            breakdown.append("+1 Quality tier match (premium subject, high-rated comp)")
+        elif quality_tier == "underperformer" and comp_rating < 4.5:
+            score += 1
+            breakdown.append("+1 Quality tier match (both lower-performing)")
 
-    # Occupancy performance
-    if comp_occ:
+    # Superhost preference — use the comp's OWN superhost flag (AirROI gives it
+    # to us, 0% null) rather than inferring it from rating + review count.
+    if comp is not None and subject_signals.get("superhost") and comp.get("superhost"):
+        score += 1
+        breakdown.append("+1 Superhost comp (subject is Superhost)")
+
+    # Objective operator-quality signals. These replace guessing "luxury" and
+    # "professionally managed" from host-written marketing adjectives.
+    if comp is not None:
+        if comp.get("professional_management"):
+            score += 2
+            breakdown.append("+2 Professionally managed (AirROI host flag)")
+        if comp.get("guest_favorite"):
+            score += 2
+            breakdown.append("+2 Airbnb Guest Favorite")
+
+    # Occupancy performance (adjusted: booked / open nights)
+    if comp_occ is not None:
         if comp_occ >= 65:
             score += 3
             breakdown.append(f"+3 Strong occupancy ({comp_occ:.0f}%) — proven performer")
@@ -401,56 +393,72 @@ def _score_quality_match(
             score -= 2
             breakdown.append(f"-2 Very low occupancy ({comp_occ:.0f}%) — may be inactive or new")
 
-    # Professional management signal matching
-    if subject_signals.get("professional_mgmt"):
-        if comp_occ and comp_occ >= 55 and comp_rating >= 4.7 and comp_reviews >= 20:
-            score += 1
-            breakdown.append("+1 Likely professionally managed (high metrics)")
-
     return score, breakdown
 
 
-def _score_amenity_match(text: str, subject_signals: dict) -> tuple:
-    """Score amenity/feature alignment. Returns (points, breakdown_lines)."""
+_AMENITY_POINTS = {
+    "hot_tub": ("Hot Tub match", 2),
+    "pool": ("Pool match", 2),
+    "ski_in_out": ("Ski-in/out match", 3),
+    "games_room": ("Games room match", 1),
+    "views": ("Views match", 1),
+    "gym": ("Gym match", 1),
+    "fireplace": ("Fireplace match", 1),
+    "water": ("Waterfront/beach match", 2),
+    "ev_charger": ("EV charger match", 1),
+    "pets": ("Pet-friendly match", 1),
+    "resort": ("Resort access match", 1),
+}
+
+_TEXT_POINTS = {
+    "sauna": ("Sauna match", 2),
+    "village": ("Village/central match", 1),
+}
+
+
+def _score_amenity_match(text: str, subject_signals: dict,
+                         comp_amenities: Optional[list] = None) -> tuple:
+    """Score amenity alignment against the subject.
+
+    Structured amenities are matched by EXACT set membership against AirROI's
+    vocabulary. Only signals with no vocabulary key fall back to free text, and
+    those are word-boundary matched with a negation guard.
+    """
     score = 0
     breakdown = []
+    have = set(comp_amenities or [])
 
-    amenity_score_map = {
-        "hot_tub":    ("Hot Tub match", 2),
-        "pool":       ("Pool match", 2),
-        "ski_in_out": ("Ski-in/out match", 3),
-        "sauna":      ("Sauna match", 2),
-        "games_room": ("Games room match", 1),
-        "views":      ("Views match", 1),
-        "village":    ("Village/central match", 1),
-        "wellness":   ("Wellness match", 1),
-        "gym":        ("Gym match", 1),
-        "fireplace":  ("Fireplace match", 1),
-    }
+    for signal, (label, points) in _AMENITY_POINTS.items():
+        if not subject_signals.get(signal):
+            continue
+        if have & set(AMENITY_VOCAB_SIGNALS.get(signal, ())):
+            score += points
+            breakdown.append(f"+{points} {label}")
 
-    for signal, (label, points) in amenity_score_map.items():
-        if subject_signals.get(signal):
-            keywords = AMENITY_SIGNALS.get(signal, [])
-            if any(kw in text for kw in keywords):
-                score += points
-                breakdown.append(f"+{points} {label}")
-
-    # Luxury match bonus
-    if subject_signals.get("luxury"):
-        if any(kw in text for kw in LUXURY_KEYWORDS):
-            score += 3
-            breakdown.append("+3 Luxury descriptor match")
+    for signal, (label, points) in _TEXT_POINTS.items():
+        if not subject_signals.get(signal):
+            continue
+        for kw in TEXT_ONLY_SIGNALS.get(signal, ()):
+            if not re.search(r"\b" + re.escape(kw) + r"\b", text):
+                continue
+            # Negation guard: "no sauna", "we do not have a sauna"
+            window = text[max(0, text.find(kw) - 40):text.find(kw)]
+            if re.search(r"\b(no|not|without|dont|don't|lacks?)\b", window):
+                continue
+            score += points
+            breakdown.append(f"+{points} {label}")
+            break
 
     return score, breakdown
 
 
-def _score_data_reliability(comp: dict, comp_days: Optional[int]) -> tuple:
+def _score_data_reliability(comp: dict, comp_booked: Optional[int]) -> tuple:
     """Score data completeness and listing availability. Returns (points, breakdown_lines)."""
     score = 0
     breakdown = []
 
     # Data completeness
-    financial_fields = ["revenue_potential", "annual_revenue", "occupancy_pct", "adr", "days_available"]
+    financial_fields = ["revenue_potential", "annual_revenue", "occupancy_pct", "adr", "nights_booked"]
     present_fields = sum(1 for f in financial_fields if comp.get(f))
     if present_fields == len(financial_fields):
         score += 2
@@ -462,80 +470,64 @@ def _score_data_reliability(comp: dict, comp_days: Optional[int]) -> tuple:
         score -= 3
         breakdown.append(f"-3 Missing most financial data ({present_fields}/{len(financial_fields)} fields)")
 
-    # Days available — full-time vs part-time rental
-    if comp_days:
-        if comp_days >= 300:
+    # Booked nights — a real operating history, not a listing that sat empty.
+    # Bands are on NIGHTS BOOKED (ttm_days_reserved). The old code banded on
+    # ttm_available_days (UNSOLD nights) and so paid +2 to dormant listings.
+    if comp_booked is not None:
+        if comp_booked >= 200:
             score += 2
-            breakdown.append(f"+2 Full-time rental ({comp_days} days available)")
-        elif comp_days >= 200:
+            breakdown.append(f"+2 Full-time rental ({comp_booked} nights booked)")
+        elif comp_booked >= 120:
             score += 1
-            breakdown.append(f"+1 Near full-time rental ({comp_days} days)")
-        elif comp_days < 120:
+            breakdown.append(f"+1 Near full-time rental ({comp_booked} nights booked)")
+        elif comp_booked < 45:
             score -= 2
-            breakdown.append(f"-2 Part-time rental ({comp_days} days) — not comparable to full-time")
+            breakdown.append(f"-2 Barely booked ({comp_booked} nights) — not a comparable operator")
+
+    # Freshness — is this comp alive NOW, or is TTM averaging in dead months?
+    if comp.get("l90d_nights_booked") is not None:
+        l90 = comp["l90d_nights_booked"]
+        if l90 == 0:
+            score -= 3
+            breakdown.append("-3 Dead in the last 90 days (0 nights booked) — stale comp")
+        elif l90 < 5:
+            score -= 1
+            breakdown.append(f"-1 Nearly dormant recently ({l90} nights booked in 90d)")
 
     return score, breakdown
 
 
-def _score_must_match(text: str, subject_signals: dict) -> tuple:
-    """Score must-match feature alignment. Returns (points, breakdown_lines).
+def _haversine_km(lat1, lon1, lat2, lon2) -> Optional[float]:
+    """Great-circle distance in km, or None if any coordinate is missing."""
+    if None in (lat1, lon1, lat2, lon2):
+        return None
+    R = 6371.0
+    p1, p2 = math.radians(float(lat1)), math.radians(float(lat2))
+    dp = math.radians(float(lat2) - float(lat1))
+    dl = math.radians(float(lon2) - float(lon1))
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
-    Both subject and comp are scanned for high-impact features (waterfront,
-    pool, hot tub, etc.). Matches get a strong bonus; mismatches in EITHER
-    direction get a heavy penalty.
-    """
-    score = 0
-    breakdown = []
 
-    feature_labels = {
-        "waterfront": "Waterfront/Ocean",
-        "lakefront": "Lakefront",
-        "pool": "Pool",
-        "hot_tub": "Hot Tub",
-        "ski_access": "Ski-in/out",
-    }
-
-    for feature, keywords in MUST_MATCH_FEATURES.items():
-        subject_has = subject_signals.get(f"must_match_{feature}", False)
-        comp_has = any(kw in text for kw in keywords)
-        label = feature_labels.get(feature, feature)
-
-        if subject_has and comp_has:
-            score += MUST_MATCH_BONUS
-            breakdown.append(f"+{MUST_MATCH_BONUS} {label} match (both have it)")
-        elif subject_has and not comp_has:
-            score += MUST_MATCH_PENALTY
-            breakdown.append(f"{MUST_MATCH_PENALTY} {label} mismatch (subject has, comp missing)")
-        elif not subject_has and comp_has:
-            score += MUST_MATCH_PENALTY
-            breakdown.append(f"{MUST_MATCH_PENALTY} {label} mismatch (comp has, subject missing)")
-        # Both missing → 0, no log
-
-    # Property type match: standalone home vs condo/townhouse
-    subject_standalone = subject_signals.get("property_type_standalone")
-    if subject_standalone is not None:
-        comp_is_standalone = any(kw in text for kw in STANDALONE_KEYWORDS)
-        comp_is_attached = any(kw in text for kw in ATTACHED_KEYWORDS)
-        # Determine comp type (attached is more specific, wins if both match)
-        if comp_is_attached:
-            comp_standalone = False
-        elif comp_is_standalone:
-            comp_standalone = True
-        else:
-            comp_standalone = None
-
-        if comp_standalone is not None:
-            if subject_standalone == comp_standalone:
-                score += 6
-                type_label = "standalone home" if subject_standalone else "condo/townhome"
-                breakdown.append(f"+6 Property type match (both {type_label})")
-            else:
-                score -= 8
-                subj_label = "standalone home" if subject_standalone else "condo/townhome"
-                comp_label = "condo/townhome" if subject_standalone else "standalone home"
-                breakdown.append(f"-8 Property type mismatch (subject is {subj_label}, comp is {comp_label})")
-
-    return score, breakdown
+def _score_distance(comp: dict, subject: dict) -> tuple:
+    """Proximity to the subject. Previously there was NO distance term at all —
+    comps could sit anywhere in the metro. Returns (points, breakdown)."""
+    d = _haversine_km(subject.get("latitude"), subject.get("longitude"),
+                      comp.get("latitude"), comp.get("longitude"))
+    comp["distance_km"] = round(d, 2) if d is not None else None
+    if d is None:
+        return 0, []
+    if d <= 1.0:
+        return 4, [f"+4 Same immediate area ({d:.1f} km from subject)"]
+    if d <= 3.0:
+        return 3, [f"+3 Very close ({d:.1f} km)"]
+    if d <= 8.0:
+        return 2, [f"+2 Same submarket ({d:.1f} km)"]
+    if d <= 15.0:
+        return 1, [f"+1 Same market ({d:.1f} km)"]
+    if d > 25.0:
+        return -3, [f"-3 Far from subject ({d:.1f} km) — different submarket"]
+    return 0, []
 
 
 # ── Main scoring function ──────────────────────────────────────────────────
@@ -546,6 +538,7 @@ def score_comp(
     subject_adr: Optional[float],
     subject_bedrooms: Optional[int],
     subject_guests: Optional[int],
+    subject: Optional[dict] = None,
 ) -> dict:
     """
     Score a single comp against subject across 5 weighted categories.
@@ -567,36 +560,32 @@ def score_comp(
     comp_sleeps = _parse_int(comp.get("sleeps")) or _parse_int(comp.get("max_guests"))
     comp_occ = _parse_pct(comp.get("occupancy_pct"))
     comp_reviews = _parse_int(comp.get("reviews")) or _parse_int(comp.get("review_count")) or 0
-    comp_rating = _parse_float(comp.get("rating")) or 0.0
-    comp_days = _parse_int(comp.get("days_available"))
+    comp_rating = None if comp.get("rating_is_unrated") else _parse_float(comp.get("rating"))
+    comp_booked = _parse_int(comp.get("nights_booked"))
+    comp_revpar = _parse_float(comp.get("revpar"))
     comp_revenue_potential = _parse_currency(comp.get("revenue_potential"))
     comp_annual_revenue = _parse_currency(comp.get("annual_revenue"))
 
     # ── Hard disqualifiers ─────────────────────────────────────────────────
 
-    # 1. Luxury subject → comp must be within range of subject ADR.
-    #    Scale the floor with ADR tier: ultra-luxury ($1500+) properties
-    #    have thinner comp pools, so the floor is more lenient.
+    # 1. Luxury subject → comp must be in top 60% of ADR range
     if subject_signals.get("luxury") and subject_adr and comp_adr:
-        if subject_adr >= 1500:
-            luxury_adr_floor = subject_adr * 0.35
-        elif subject_adr >= 800:
-            luxury_adr_floor = subject_adr * 0.45
-        else:
-            luxury_adr_floor = subject_adr * 0.55
+        luxury_adr_floor = subject_adr * 0.55
         if comp_adr < luxury_adr_floor:
             hard_fail = True
             hard_fail_reason = (
-                f"Luxury subject (ADR ${subject_adr:.0f}) — "
-                f"comp ADR ${comp_adr:.0f} is below luxury floor ${luxury_adr_floor:.0f}"
+                f"Luxury subject (ADR CA${subject_adr:.0f}) — "
+                f"comp ADR CA${comp_adr:.0f} is below luxury floor CA${luxury_adr_floor:.0f}"
             )
 
-    # 2. Bedroom count mismatch — tight tolerance for credible comps
-    if subject_bedrooms and comp_bedrooms:
-        if subject_bedrooms <= 7:
-            max_bed_diff = 1  # ±1 for 1-7BR — comps must be close
+    # 2. Bedroom count mismatch — scale tolerance with property size
+    if subject_bedrooms is not None and comp_bedrooms is not None:
+        if subject_bedrooms <= 4:
+            max_bed_diff = 1
+        elif subject_bedrooms <= 7:
+            max_bed_diff = 2
         else:
-            max_bed_diff = 2  # 8+ BR properties: allow ±2 (thin markets)
+            max_bed_diff = 3  # 8+ BR properties: allow ±3
         bed_diff = abs(comp_bedrooms - subject_bedrooms)
         if bed_diff > max_bed_diff:
             hard_fail = True
@@ -606,21 +595,53 @@ def score_comp(
             )
 
     # 3. Guest capacity mismatch — scale tolerance with property size
-    if subject_guests and comp_sleeps:
+    if subject_guests is not None and comp_sleeps is not None:
         if subject_guests <= 6:
-            max_guest_diff = 2
-        elif subject_guests <= 10:
             max_guest_diff = 3
-        elif subject_guests <= 16:
+        elif subject_guests <= 10:
             max_guest_diff = 4
+        elif subject_guests <= 16:
+            max_guest_diff = 6
         else:
-            max_guest_diff = 6  # 17+ guest properties: allow ±6
+            max_guest_diff = 8  # 17+ guest properties: allow ±8
         guest_diff = abs(comp_sleeps - subject_guests)
         if guest_diff > max_guest_diff:
             hard_fail = True
             hard_fail_reason = (
                 f"Guest capacity mismatch: subject sleeps {subject_guests}, "
                 f"comp sleeps {comp_sleeps} (max ±{max_guest_diff} allowed)"
+            )
+
+    # 4. Dormant / dead listings are not comparable operators. A comp that
+    #    booked nothing in the trailing 90 days tells you about a failed
+    #    listing, not about the market the client is buying into.
+    if not hard_fail:
+        adj_occ = comp_occ if comp_occ is not None else None
+        l90 = comp.get("l90d_nights_booked")
+        if adj_occ is not None and adj_occ < MIN_ADJUSTED_OCCUPANCY:
+            hard_fail = True
+            hard_fail_reason = (
+                f"Dormant listing: {adj_occ:.0f}% adjusted occupancy "
+                f"(floor {MIN_ADJUSTED_OCCUPANCY}%) — not a comparable operator"
+            )
+        elif l90 == 0 and comp_booked is not None and comp_booked < 60:
+            hard_fail = True
+            hard_fail_reason = (
+                "Dead listing: 0 nights booked in the last 90 days and "
+                f"only {comp_booked} in the trailing year"
+            )
+        elif (comp.get("nights_listed") is not None
+              and comp["nights_listed"] < MIN_NIGHTS_LISTED):
+            hard_fail = True
+            hard_fail_reason = (
+                f"Part-time rental: listed only {comp['nights_listed']} of 365 nights "
+                f"(floor {MIN_NIGHTS_LISTED}) — occupancy is not comparable"
+            )
+        elif comp_reviews < MIN_REVIEWS and comp.get("rating_is_unrated"):
+            hard_fail = True
+            hard_fail_reason = (
+                f"Insufficient history: {comp_reviews} reviews and no rating — "
+                "unreliable data point"
             )
 
     if hard_fail:
@@ -643,7 +664,7 @@ def score_comp(
 
     # Category 2: Financial match
     pts, lines = _score_financial_match(
-        comp_adr, comp_occ, comp_days,
+        comp_adr, comp_occ, comp_revpar,
         comp_revenue_potential, comp_annual_revenue,
         subject_adr,
     )
@@ -651,47 +672,41 @@ def score_comp(
     breakdown.extend(lines)
 
     # Category 3: Quality match
-    pts, lines = _score_quality_match(comp_rating, comp_reviews, comp_occ, subject_signals)
+    pts, lines = _score_quality_match(comp_rating, comp_reviews, comp_occ, subject_signals, comp)
     category_scores["quality"] = pts
     breakdown.extend(lines)
 
     # Category 4: Amenity match
-    pts, lines = _score_amenity_match(text, subject_signals)
+    pts, lines = _score_amenity_match(text, subject_signals, comp.get("amenities_raw"))
     category_scores["amenity"] = pts
     breakdown.extend(lines)
 
     # Category 5: Data reliability
-    pts, lines = _score_data_reliability(comp, comp_days)
+    pts, lines = _score_data_reliability(comp, comp_booked)
     category_scores["reliability"] = pts
     breakdown.extend(lines)
 
-    # Category 6: Must-match features (waterfront, pool, hot tub, etc.)
-    pts, lines = _score_must_match(text, subject_signals)
-    category_scores["must_match"] = pts
+    # Category 6: Proximity — the strongest comparability signal there is,
+    # and previously absent entirely.
+    pts, lines = _score_distance(comp, subject or {})
+    category_scores["distance"] = pts
     breakdown.extend(lines)
 
     # ── Category minimum thresholds ────────────────────────────────────────
 
     total_score = sum(category_scores.values())
 
-    # Cross-category penalties. Tracked in category_scores under "penalty" so
-    # sum(category_scores.values()) stays consistent with comp["score"].
-    penalty = 0
     if category_scores.get("financial", 0) <= -2:
-        penalty -= 3
+        total_score -= 3
         breakdown.append("-3 PENALTY: Weak financial profile across multiple metrics")
 
     if category_scores.get("quality", 0) <= -2:
-        penalty -= 3
+        total_score -= 3
         breakdown.append("-3 PENALTY: Weak quality profile (low rating + few reviews + low occupancy)")
 
     if category_scores.get("reliability", 0) <= -3:
-        penalty -= 2
+        total_score -= 2
         breakdown.append("-2 PENALTY: Unreliable data (missing financials + part-time listing)")
-
-    if penalty:
-        category_scores["penalty"] = penalty
-    total_score += penalty
 
     comp["score"] = total_score
     comp["category_scores"] = category_scores
@@ -706,7 +721,7 @@ def score_comp(
 # ── Parsing helpers ───────────────────────────────────────────────────────
 
 def _parse_adr(adr_str) -> float:
-    """Parse 'CA$929' or '$929' or 929 or '929' into float."""
+    """Parse 'CA$929' or 929 or '929' into float."""
     if isinstance(adr_str, (int, float)):
         return float(adr_str)
     if not adr_str:
@@ -719,7 +734,7 @@ def _parse_adr(adr_str) -> float:
 
 
 def _parse_currency(val) -> Optional[float]:
-    """Parse 'CA$54.2K' or '$54,200' or 54200 into float."""
+    """Parse 'CA$54.2K' or 'CA$54,200' or 54200 into float."""
     if val is None:
         return None
     if isinstance(val, (int, float)):
@@ -763,16 +778,18 @@ def _parse_float(val) -> Optional[float]:
 
 
 def _parse_pct(val) -> Optional[float]:
-    """Parse '76%' or 76 or 0.76 into float percentage."""
+    """Parse '76%' or 76 into a 0-100 float.
+
+    Does NOT guess units. The adapter normalises occupancy to 0-100 before it
+    reaches here; the old `v if v > 1 else v * 100` heuristic turned a real
+    1.0% occupancy into 100% and scored it "+3 proven performer".
+    """
     if val is None:
         return None
     if isinstance(val, (int, float)):
-        v = float(val)
-        return v if v > 1 else v * 100
+        return float(val)
     try:
-        cleaned = str(val).replace("%", "").replace(",", "").strip()
-        v = float(cleaned)
-        return v if v > 1 else v * 100
+        return float(str(val).replace("%", "").replace(",", "").strip())
     except (ValueError, TypeError):
         return None
 
@@ -784,9 +801,12 @@ def rank_comps(subject: dict, comps: list, top_n: int = 6) -> dict:
     Score all comps, filter hard fails, return top_n by score.
     """
     subject_signals = detect_subject_signals(subject)
-    subject_adr = _parse_adr(subject.get("adr", 0))
+    if subject.get("latitude") is None and subject.get("lat") is not None:
+        subject["latitude"] = subject.get("lat")
+    if subject.get("longitude") is None and subject.get("lng") is not None:
+        subject["longitude"] = subject.get("lng")
+    subject_adr = _parse_adr(subject.get("adr") or subject.get("airdna_adr", 0))
     subject_bedrooms = _parse_int(subject.get("bedrooms"))
-    subject_bathrooms = _parse_float(subject.get("bathrooms"))
     subject_guests = _parse_int(subject.get("max_guests") or subject.get("guests"))
 
     quality_tier = subject_signals.get("quality_tier", "unknown")
@@ -794,87 +814,48 @@ def rank_comps(subject: dict, comps: list, top_n: int = 6) -> dict:
     neg_sent = subject_signals.get("review_sentiment_negative", 0)
 
     print(f"[scorer] Subject signals: {[k for k, v in subject_signals.items() if v and v is not True or v is True]}", file=sys.stderr)
-    print(f"[scorer] Subject ADR: ${subject_adr:.0f}", file=sys.stderr)
+    print(f"[scorer] Subject ADR: CA${subject_adr:.0f}", file=sys.stderr)
     print(f"[scorer] Subject config: {subject_bedrooms}BR / sleeps {subject_guests}", file=sys.stderr)
     print(f"[scorer] Subject quality tier: {quality_tier} (sentiment: +{pos_sent}/-{neg_sent})", file=sys.stderr)
     print(f"[scorer] Subject superhost: {subject_signals.get('superhost', False)}", file=sys.stderr)
-    must_match_active = [k.replace("must_match_", "") for k, v in subject_signals.items() if k.startswith("must_match_") and v]
-    if must_match_active:
-        print(f"[scorer] Must-match features: {must_match_active}", file=sys.stderr)
-    print(f"[scorer] Scoring {len(comps)} candidates across 6 categories...", file=sys.stderr)
+    print(f"[scorer] Scoring {len(comps)} candidates across 5 categories...", file=sys.stderr)
 
     scored = [
-        score_comp(c, subject_signals, subject_adr, subject_bedrooms, subject_guests)
+        score_comp(c, subject_signals, subject_adr, subject_bedrooms,
+                   subject_guests, subject)
         for c in comps
     ]
 
     hard_fails = [c for c in scored if c["hard_fail"]]
     passing    = [c for c in scored if not c["hard_fail"]]
 
-    passing.sort(key=lambda c: c["score"], reverse=True)
+    # Deterministic ordering. Score ties were previously resolved by input
+    # order, so 18 of 20 input shuffles changed the delivered comp set.
+    # Tie-break: closer ADR to subject, then closer distance, then more reviews.
+    def _tiebreak(c):
+        adr_gap = abs((c.get("adr_raw") or 0) - (subject_adr or 0)) / max(subject_adr or 1, 1)
+        dist = c.get("distance_km")
+        return (
+            -c["score"],
+            round(adr_gap, 4),
+            dist if dist is not None else 9999.0,
+            -(c.get("reviews") or 0),
+            str(c.get("name") or ""),
+        )
+    passing.sort(key=_tiebreak)
 
-    # ── Tiered selection: fill comp slots from tightest match first ────
-    # Tier 1: Exact bed AND bath match
-    # Tier 2: Exact bed match, bath within ±1
-    # Tier 3: Bed ±1, any bath
-    # Tier 4: Remaining passing comps (already within hard-fail tolerance)
-    # Within each tier, comps are ranked by score (already sorted above).
-
-    def _comp_bed_bath(c: dict) -> tuple:
-        return (_parse_int(c.get("bedrooms")), _parse_float(c.get("bathrooms")))
-
-    def _match_tier(c: dict) -> int:
-        c_beds, c_baths = _comp_bed_bath(c)
-        if c_beds is None or c_baths is None:
-            return 4
-        bed_diff = abs(c_beds - subject_bedrooms) if subject_bedrooms else 99
-        bath_diff = abs(c_baths - subject_bathrooms) if subject_bathrooms else 99
-        if bed_diff == 0 and bath_diff == 0:
-            return 1
-        if bed_diff == 0 and bath_diff <= 1:
-            return 2
-        if bed_diff <= 1:
-            return 3
-        return 4
-
-    selected: list[dict] = []
-    selected_ids: set[str] = set()
-
-    tier_names = {1: "exact bed+bath", 2: "exact bed, bath ±1",
-                  3: "bed ±1", 4: "wider"}
-
-    for tier in (1, 2, 3, 4):
-        if len(selected) >= top_n:
-            break
-        tier_comps = [c for c in passing
-                      if _match_tier(c) == tier
-                      and id(c) not in selected_ids]
-        for c in tier_comps:
-            if len(selected) >= top_n:
-                break
-            selected.append(c)
-            selected_ids.add(id(c))
-
-    # Log which tiers were used
-    tier_counts = {}
-    for c in selected:
-        t = _match_tier(c)
-        tier_counts[t] = tier_counts.get(t, 0) + 1
-    tier_summary = ", ".join(f"{tier_names[t]}: {n}" for t, n in sorted(tier_counts.items()))
-    if tier_summary:
-        print(f"[scorer] Selection tiers: {tier_summary}", file=sys.stderr)
+    selected = passing[:top_n]
 
     # Log scoring for transparency
-    for i, c in enumerate(passing[:max(len(selected) + 3, top_n + 3)]):
-        flag = "SELECTED" if c in selected else "not selected"
-        tier = _match_tier(c)
+    for i, c in enumerate(passing[:top_n + 3]):
+        flag = "SELECTED" if i < top_n else "not selected"
         cats = c.get("category_scores", {})
         print(
             f"[scorer] [{flag}] {c.get('name', 'Unknown')[:40]} "
-            f"total={c['score']} tier={tier} "
+            f"total={c['score']} "
             f"[phys={cats.get('physical', 0)} fin={cats.get('financial', 0)} "
             f"qual={cats.get('quality', 0)} amen={cats.get('amenity', 0)} "
-            f"reli={cats.get('reliability', 0)} mm={cats.get('must_match', 0)}]",
+            f"reli={cats.get('reliability', 0)} dist={cats.get('distance', 0)}]",
             file=sys.stderr,
         )
 
@@ -896,6 +877,7 @@ def rank_comps(subject: dict, comps: list, top_n: int = 6) -> dict:
             return round(sum(vals) / len(vals), 2) if vals else None
 
         averages = {
+            "nights_booked":     _avg("nights_booked"),
             "adr":               _avg("adr_raw"),
             "occupancy_pct":     _avg("occupancy_pct", lambda x: float(str(x).replace("%", ""))),
             "revenue_potential": _avg("revenue_potential_raw", float),
@@ -923,7 +905,7 @@ def rank_comps(subject: dict, comps: list, top_n: int = 6) -> dict:
 # ── CLI ────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Solnest Comp Scorer v2")
+    parser = argparse.ArgumentParser(description="STR Comp Scorer")
     parser.add_argument("--subject", required=True, help="Subject property JSON string")
     parser.add_argument("--comps",   required=True, help="JSON array of comp candidates")
     parser.add_argument("--top",     type=int, default=6, help="Number of comps to select")
