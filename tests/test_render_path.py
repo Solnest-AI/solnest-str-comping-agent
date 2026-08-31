@@ -110,3 +110,25 @@ def test_skill_file_exists_and_declares_the_two_pass_loop():
     assert "--render" in text and "--narratives" in text, "the loop must be documented"
     assert "AIRROI_API_KEY" in text
     assert "Never invent a number" in text, "the anti-fabrication rule must stay"
+
+
+def test_rerun_command_uses_the_free_render_path():
+    """The printed handoff must not tell users to re-run the whole pipeline.
+
+    This shipped wrong once: the instruction said `--input`, which re-runs every
+    fetch and costs ~$0.40 of the user's AirROI credit just to change wording.
+    """
+    from generators.narrative_brief import rerun_command
+    cmd = rerun_command("output/x.report-data.json", "output/x.narratives.json")
+    assert "--render" in cmd
+    assert "--input" not in cmd
+    assert "x.report-data.json" in cmd and "x.narratives.json" in cmd
+
+
+def test_brief_rules_cover_the_known_traps():
+    """The brief is the only thing Claude Code reads; its rules must be complete."""
+    from generators.narrative_brief import NARRATIVE_RULES
+    joined = " ".join(NARRATIVE_RULES).lower()
+    for needle in ["never invent", "outside the low-high", "fee-inclusive",
+                   "adjusted occupancy", "inward"]:
+        assert needle in joined, f"brief rules lost coverage of: {needle}"

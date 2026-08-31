@@ -148,7 +148,8 @@ NARRATIVE_RULES: list[str] = [
     "Use ONLY the months named in market_seasonality. Never substitute another "
     "season, climate, or region.",
     "Never state an occupancy figure or range outside the low-high band in "
-    "comp_set.occupancy_pct_summary.",
+    "comp_set.occupancy_pct_summary. Round bounds INWARD (a low of 61.4 becomes "
+    "61.5 or 'about 62', never 61) so the range you claim never exceeds the real one.",
     "annual_revenue is fee-INCLUSIVE and adr is fee-EXCLUSIVE. Do not divide "
     "one by the other, and do not present them as the same basis.",
     "occupancy_pct is ADJUSTED occupancy (nights booked / nights open), not "
@@ -277,6 +278,7 @@ def build_narrative_brief(
     seasonal_data: Optional[list[float]] = None,
     input_ref: str = "",
     narratives_path: str = "",
+    data_path: str = "",
 ) -> dict:
     """Assemble everything Claude Code needs to write the narrative copy.
 
@@ -298,7 +300,7 @@ def build_narrative_brief(
             f"(see `output_example`) to {narratives_path or '<slug>.narratives.json'} "
             "and re-run the agent with --narratives pointing at it."
         ),
-        "rerun_command": rerun_command(input_ref, narratives_path),
+        "rerun_command": rerun_command(data_path, narratives_path),
         "rules": NARRATIVE_RULES,
         "subject": {
             "address": prop.address,
@@ -444,10 +446,21 @@ def narratives_output_path(output_dir: Path, prop: PropertyBasics) -> Path:
     return Path(output_dir) / f"{brief_slug(prop)}.narratives.json"
 
 
-def rerun_command(input_ref: str, narratives_path: str) -> str:
-    ref = input_ref or "<your original --input value>"
+def report_data_path(output_dir, prop) -> Path:
+    """Where pass 1 caches its assembled output for `--render` to reuse."""
+    return Path(output_dir) / f"{brief_slug(prop)}.report-data.json"
+
+
+def rerun_command(data_path: str, narratives_path: str) -> str:
+    """The command that applies new copy.
+
+    MUST be the `--render` form. The `--input` form re-runs the whole pipeline,
+    which costs the user another round of AirROI credit and ~30s just to change
+    the wording — the exact thing `--render` exists to avoid.
+    """
+    data = data_path or "<slug>.report-data.json"
     out = narratives_path or "<slug>.narratives.json"
-    return f'python agent.py --input "{ref}" --narratives "{out}"'
+    return f'python agent.py --render "{data}" --narratives "{out}"'
 
 
 def write_narrative_brief(brief: dict, path: Path) -> Path:

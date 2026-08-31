@@ -52,6 +52,7 @@ from generators.narrative_brief import (
     months_from_label,
     narrative_brief_path,
     narratives_output_path,
+    report_data_path,
     occupancy_stats,
     share_from_label,
     write_narrative_brief,
@@ -593,13 +594,13 @@ def emit_narrative_brief(
         seasonal_data=seasonal_data,
         input_ref=input_ref,
         narratives_path=str(narr_path.resolve()),
+        data_path=str(report_data_path(out, prop)),
     )
     write_narrative_brief(brief, brief_path)
 
     if announce:
         print(handoff_message(brief_path, narr_path, rerun_command(
-            input_ref, str(narr_path.resolve())
-        )))
+            str(report_data_path(out, prop)), str(narr_path))))
     return brief_path
 
 

@@ -68,7 +68,9 @@ preferences.
    to say occupancy runs 60%, the brief must say 60%. Do not round a median into a range
    or infer a trend the data does not show.
 2. **Never state an occupancy or revenue figure outside the comp set's observed range.**
-   The brief gives you the median, min and max. Stay inside them.
+   The brief gives you the median, min and max. Stay inside them, and **round bounds
+   inward**: a low of 61.4% is "61.5%" or "about 62%", never "61%". Rounding a bound
+   outward silently widens the range you are claiming.
 3. **Use the market's real season.** The brief carries the derived peak and shoulder
    months for this specific market, computed from its own revenue distribution. Never
    assume a ski season, a summer season, or any calendar you were not given.

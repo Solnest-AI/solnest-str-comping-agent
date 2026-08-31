@@ -45,7 +45,7 @@ from generators.calculator import derive_calculator_defaults, derive_seasonal_da
 from generators.narratives import (
     generate_narratives, load_narratives_from_file, NarrativeFileError,
 )
-from generators.narrative_brief import brief_slug
+from generators.narrative_brief import report_data_path
 from generators.methodology import build_methodology
 from validators.sanity import (
     run_phase_a, run_phase_b, write_failure_report,
@@ -455,10 +455,6 @@ async def _render_and_gate(report_data: ReportData, slug: str) -> Path:
     print(f"[Report] Saved to: {final_path.resolve()}")
     return final_path
 
-
-def report_data_path(output_dir: Path, prop: PropertyBasics) -> Path:
-    """Where the machine-readable pipeline output is cached for --render."""
-    return Path(output_dir) / f"{brief_slug(prop)}.report-data.json"
 
 
 async def _render_only(args) -> None:

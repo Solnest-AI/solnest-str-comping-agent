@@ -247,7 +247,12 @@ def test_keyless_run_returns_template_copy_and_writes_the_brief(case, tmp_path, 
     assert "NARRATIVE HANDOFF" in printed
     assert "--narratives" in printed
     assert str(brief_path.resolve()) in printed
-    assert "https://www.airbnb.com/rooms/12345" in printed
+    # The printed command must be the FREE --render path, not a second full
+    # run. It previously echoed the original --input URL, and following that
+    # instruction cost another ~$0.40 of AirROI credit just to reword copy.
+    assert "--render" in printed
+    assert "--input" not in printed
+    assert ".report-data.json" in printed
 
 
 def test_keyless_run_writes_no_brief_without_an_output_dir(case, tmp_path):
