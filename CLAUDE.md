@@ -1,3 +1,5 @@
+> **Using this in Claude Code?** The skill at `.claude/skills/str-comping-agent/SKILL.md` is the operating manual and it drives the two-pass loop for you. This file covers setup and troubleshooting.
+
 # STR Comping Agent: operating manual for Claude Code
 
 A Python CLI that turns a property (Airbnb URL, Zillow/Realtor URL, or a street

@@ -42,7 +42,10 @@ import comp_filters
 
 
 from generators.calculator import derive_calculator_defaults, derive_seasonal_data, derive_season_labels, airbtics_to_seasonal
-from generators.narratives import generate_narratives
+from generators.narratives import (
+    generate_narratives, load_narratives_from_file, NarrativeFileError,
+)
+from generators.narrative_brief import brief_slug
 from generators.methodology import build_methodology
 from validators.sanity import (
     run_phase_a, run_phase_b, write_failure_report,
@@ -425,6 +428,86 @@ def _build_rentalizer(estimate_data: dict, prop: PropertyBasics) -> RentalizerDa
 
 # ── Main orchestration ────────────────────────────────────────────────
 
+async def _render_and_gate(report_data: ReportData, slug: str) -> Path:
+    """Render to staging, run the Phase B gate, promote on success.
+
+    Shared by the full pipeline and by --render so both paths get identical
+    treatment: the user never sees a half-broken HTML file either way.
+    """
+    staging_dir = config.OUTPUT_DIR / ".staging"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+
+    staging_path = save_report(report_data, staging_dir)
+    print(f"[Staging] Rendered to: {staging_path.resolve()}")
+
+    print("\n--- Sanity Phase B (post-render, blocking) ---")
+    phase_b_failures = await run_phase_b(staging_path)
+    if phase_b_failures:
+        write_failure_report("B", phase_b_failures, config.OUTPUT_DIR, subject_slug=slug)
+        staging_path.unlink(missing_ok=True)
+        print("\n[SANITY] Phase B blocking — staging file deleted, no report delivered.")
+        sys.exit(2)
+    print("[Sanity] Phase B passed — 6 comp cards, all images live, "
+          "no AirDNA strings, no Jinja artifacts.")
+
+    final_path = config.OUTPUT_DIR / staging_path.name
+    staging_path.replace(final_path)
+    print(f"[Report] Saved to: {final_path.resolve()}")
+    return final_path
+
+
+def report_data_path(output_dir: Path, prop: PropertyBasics) -> Path:
+    """Where the machine-readable pipeline output is cached for --render."""
+    return Path(output_dir) / f"{brief_slug(prop)}.report-data.json"
+
+
+async def _render_only(args) -> None:
+    """--render: rebuild the HTML from cached data plus new narrative copy.
+
+    This is the second half of the Claude Code loop. It touches NO network and
+    spends NO API credit: the expensive work (AirROI, Airbtics, liveness probes)
+    already happened on the first pass and its result is on disk. Swapping in
+    better copy should be free, otherwise nobody does it twice.
+    """
+    data_path = Path(args.render)
+    if not data_path.exists():
+        print(f"[Render] No such file: {data_path}")
+        sys.exit(2)
+
+    try:
+        report_data = ReportData.model_validate_json(data_path.read_text())
+    except Exception as e:
+        print(f"[Render] {data_path} is not a valid report-data file: {e}")
+        sys.exit(2)
+
+    print(f"[Render] Loaded pipeline output from {data_path.name} "
+          f"({len(report_data.comps)} comps, no API calls needed)")
+
+    if args.narratives:
+        try:
+            report_data.narratives = load_narratives_from_file(
+                args.narratives,
+                report_data.narratives.peak_season_label,
+                report_data.narratives.shoulder_season_label,
+            )
+            print(f"[Render] Applied narrative copy from {args.narratives}")
+        except NarrativeFileError as e:
+            print(f"[Render] {e}")
+            sys.exit(2)
+
+    report_data.report_date = date.today().strftime("%B %d, %Y")
+    slug = report_data.property.market.replace(" ", "-") or "report"
+    output_path = await _render_and_gate(report_data, slug)
+
+    if args.email:
+        print(f"\n--- Emailing report to {args.email} ---")
+        try:
+            send_report_email(args.email, report_data.property.short_address, output_path)
+            print("[Email] Sent.")
+        except Exception as e:
+            print(f"[Email] Failed: {e}")
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(
         description=f"{config.BRANDING.get('company_name', 'STR')} Income Analysis Report Generator",
@@ -436,7 +519,7 @@ Examples:
   python agent.py --input "<airbnb_url>" --email buyer@example.com
         """,
     )
-    parser.add_argument("--input", required=True,
+    parser.add_argument("--input", required=False,
                         help="Airbnb URL, realtor.ca URL, or physical property address")
     parser.add_argument("--email", default=None,
                         help="Email address to send the report to (optional)")
@@ -468,6 +551,10 @@ Examples:
     parser.add_argument("--radius", type=int, default=None,
                         help="AirROI comp search radius in miles.")
     # ── Narrative copy ─────────────────────────────────────────────────
+    parser.add_argument("--render", default=None, metavar="DATA_JSON",
+                        help="Re-render an existing report from its *.report-data.json "
+                             "without re-running the pipeline. Costs nothing and makes no "
+                             "API calls. Pair with --narratives to swap in better copy.")
     parser.add_argument("--narratives", default=None, metavar="FILE",
                         help="Path to a narratives JSON file (as written by Claude Code from the "
                              "emitted *.narrative-brief.json). Skips any LLM call.")
@@ -481,6 +568,11 @@ Examples:
                         help="Override currency (auto-detected from address: $ for US, CA$ for Canada)")
 
     args = parser.parse_args()
+
+    # --render is a pure local operation: no keys, no network, no cost.
+    if args.render:
+        await _render_only(args)
+        return
 
     if not _verify_setup():
         sys.exit(1)
@@ -1017,31 +1109,15 @@ Examples:
         seasonal_data=seasonal_data,
     )
 
-    # Staging-path pattern: render to .staging/, run Phase B, only then
-    # move to the final output path. User never sees a broken file.
-    staging_dir = config.OUTPUT_DIR / ".staging"
-    staging_dir.mkdir(parents=True, exist_ok=True)
+    # Cache the assembled pipeline output so the copy can be improved later
+    # without paying for the data again. This is what makes the Claude Code
+    # narrative loop free instead of a second full run.
+    config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    data_path = report_data_path(config.OUTPUT_DIR, prop)
+    data_path.write_text(report_data.model_dump_json(indent=1))
+    print(f"[Data] Pipeline output cached: {data_path.name}")
 
-    staging_path = save_report(report_data, staging_dir)
-    print(f"[Staging] Rendered to: {staging_path.resolve()}")
-
-    # Phase B — post-render blocking checks
-    print("\n--- Step 10b: Sanity Phase B (post-render, blocking) ---")
-    phase_b_failures = await run_phase_b(staging_path)
-    if phase_b_failures:
-        write_failure_report(
-            "B", phase_b_failures, config.OUTPUT_DIR, subject_slug=slug,
-        )
-        staging_path.unlink(missing_ok=True)
-        print("\n[SANITY] Phase B blocking — staging file deleted, no report delivered.")
-        sys.exit(2)
-    print("[Sanity] Phase B passed — 6 comp cards, all images live, no AirDNA strings, no Jinja artifacts.")
-
-    # Promote staging -> final
-    final_path = config.OUTPUT_DIR / staging_path.name
-    staging_path.replace(final_path)
-    output_path = final_path
-    print(f"[Report] Saved to: {output_path.resolve()}")
+    output_path = await _render_and_gate(report_data, slug)
 
     # Email
     if args.email:

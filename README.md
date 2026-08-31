@@ -100,46 +100,33 @@ No Anthropic key. See the narrative handoff below.
 
 ---
 
-## Usage
+## Run it as a Claude Code skill (recommended)
+
+Clone the repo, open Claude Code in the folder, and just ask:
+
+> run comps on https://www.airbnb.com/rooms/12345678
+
+The bundled skill at `.claude/skills/str-comping-agent/SKILL.md` drives the whole
+loop: it runs the pipeline, reads the narrative brief, writes the analysis copy
+itself, and re-renders. You get one finished HTML report.
+
+## Or run it directly
 
 ```bash
-# Airbnb URL: best results, resolves entirely through AirROI
+# Pass 1 — fetch, score, render. Costs about $0.40 of AirROI credit, ~30s.
 python agent.py --input "https://www.airbnb.com/rooms/12345678"
+#   output/<slug>.html                    the report
+#   output/<slug>.report-data.json        cached pipeline output
+#   output/<slug>.narrative-brief.json    what to write the copy from
 
-# Zillow / Realtor URL: needs FIRECRAWL_API_KEY
-python agent.py --input "https://www.zillow.com/homedetails/123-Main-St/12345_zpid/"
-
-# Street address: pass the details if there is no live listing
-python agent.py --input "123 Main St, Nashville, TN 37203" --beds 3 --baths 2 --guests 8
+# Pass 2 — swap in better copy. No API calls, no cost, under a second.
+python agent.py --render "output/<slug>.report-data.json" \
+                --narratives "output/<slug>.narratives.json"
 ```
 
-Reports are written to `output/` as self-contained `.html` files.
-
-### Flags
-
-`--input` is the only required one.
-
-| Flag | What it does |
-|---|---|
-| `--input` | **Required.** Airbnb URL, Zillow/Realtor URL, or street address |
-| `--narratives PATH` | Load narrative copy written by Claude Code (see below) |
-| `--email you@example.com` | Email the report (needs Gmail configured) |
-| `--beds` / `--baths` / `--guests` | Property details, for addresses with no live listing |
-| `--market "City Name"` | Override market detection |
-| `--radius N` | AirROI comp search radius, in miles |
-| `--require "pool,hot_tub"` | Require comps to have these features |
-| `--exclude "oceanfront,beachfront"` | Drop comps whose names contain these keywords (alias `--exclude-comps`; also accepts a full listing name to drop one specific comp) |
-| `--no-feature-filter` | Disable the automatic must-have feature filter |
-| `--subject-on-water` | Declare the subject is on water, skipping the auto water-proximity filter |
-| `--allow-oceanfront-comps` | Keep waterfront comps even when the subject is inland |
-| `--currency "$"` / `"CA$"` | Override currency (auto-detected from the address) |
-| `--hero-url "https://..."` | Supply the hero photo when the listing scrape is blocked |
-| `--listing-url "https://..."` | Link the report's "View Listing" button |
-| `--skip-financials` | Dev only. Skips AirROI, produces an empty estimate |
-
-`python agent.py --help` is authoritative.
-
----
+Pass 1 is the expensive half and only needs to run once per property. Re-rendering
+with new copy is free, which is the point: the analysis text can be rewritten as
+many times as you like without paying for the data again.
 
 ## The narrative handoff
 
