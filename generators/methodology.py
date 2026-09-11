@@ -1,5 +1,6 @@
 """Build the methodology section dynamically from property + comp data."""
 
+from markupsafe import escape
 from schema import (
     PropertyBasics, CompProperty, MethodologyData, CalculatorDefaults,
 )
@@ -98,9 +99,9 @@ def build_methodology(
 
     drivers = []
     if peak_label:
-        drivers.append(f"<strong>Peak Season:</strong> {peak_label}")
+        drivers.append(f"<strong>Peak Season:</strong> {escape(peak_label)}")
     if shoulder_label:
-        drivers.append(f"<strong>Shoulder Season:</strong> {shoulder_label}")
+        drivers.append(f"<strong>Shoulder Season:</strong> {escape(shoulder_label)}")
     drivers += [
         "<strong>Amenity Premium:</strong> Differentiating features vs the comp set",
         "<strong>Location Premium:</strong> Proximity and setting",
@@ -112,7 +113,7 @@ def build_methodology(
             "<strong>AirROI:</strong> Property-level STR revenue, ADR, and occupancy",
             "<strong>Airbtics:</strong> Market-level overlay where coverage exists",
             "<strong>Airbnb:</strong> Live listing data and guest reviews",
-            f"<strong>Market Research:</strong> {prop.market} tourism trends",
+            f"<strong>Market Research:</strong> {escape(prop.market)} tourism trends",
             "<strong>Comp Analysis:</strong> 6-category weighted comparable scoring",
         ],
         assumptions=[

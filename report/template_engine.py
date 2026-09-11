@@ -35,7 +35,12 @@ def render_report(data: ReportData) -> str:
     """Render the Jinja2 template with all report data. Returns HTML string."""
     env = jinja2.Environment(
         loader=jinja2.FileSystemLoader(str(TEMPLATES_DIR)),
-        autoescape=False,  # HTML template manages its own escaping
+        # Listing names, descriptions and LLM narrative text land in this
+        # template verbatim. Escaping is on by default; the only values
+        # allowed to carry markup are the methodology lists, which build
+        # their own <strong> tags and escape their interpolations at
+        # source, and are marked |safe individually in the template.
+        autoescape=True,
     )
     env.filters["format_currency"] = format_currency
     env.filters["format_currency_k"] = format_currency_k

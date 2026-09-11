@@ -1052,7 +1052,7 @@
           <div class="text-base font-bold mb-3" style="color:var(--sol-forest);">📊 Data Sources</div>
           <ul class="text-sm space-y-2 leading-relaxed" style="color:#57534e;">
             {% for item in methodology.data_sources %}
-            <li>• {{ item }}</li>
+            <li>• {{ item|safe }}</li>
             {% endfor %}
           </ul>
         </div>
@@ -1070,7 +1070,7 @@
           <div class="text-base font-bold mb-3" style="color:var(--sol-forest);">💡 Performance Drivers</div>
           <ul class="text-sm space-y-2 leading-relaxed" style="color:#57534e;">
             {% for item in methodology.performance_drivers %}
-            <li>• {{ item }}</li>
+            <li>• {{ item|safe }}</li>
             {% endfor %}
           </ul>
         </div>

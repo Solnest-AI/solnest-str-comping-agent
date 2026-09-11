@@ -49,7 +49,7 @@ from generators.narratives import (
 from generators.narrative_brief import report_data_path
 from generators.methodology import build_methodology
 from validators.sanity import (
-    run_phase_a, run_phase_b, write_failure_report,
+    run_phase_a, run_phase_b, write_failure_report, validate_calculator_defaults,
 )
 from report.template_engine import save_report
 from report.email_sender import send_report_email
@@ -192,14 +192,28 @@ def _is_airbnb_url(value: str) -> bool:
 
 # ── Interactive fallback ──────────────────────────────────────────────
 
+def _ask_number(prompt: str, cast, *, attempts: int = 3):
+    """Prompt until the answer parses. A typo here used to raise ValueError and
+    abort the run AFTER the paid AirROI calls had already been made."""
+    for remaining in range(attempts - 1, -1, -1):
+        raw = input(prompt) or "0"
+        try:
+            return cast(raw)
+        except (TypeError, ValueError):
+            if remaining:
+                print(f"    '{raw}' is not a number, try again ({remaining} left).")
+    print(f"    Giving up on '{prompt.strip()}', using 0.")
+    return cast("0")
+
+
 def _prompt_missing_details(prop: PropertyBasics) -> PropertyBasics:
     """Interactively ask for missing critical property details."""
     if prop.bedrooms <= 0:
-        prop.bedrooms = int(input("  Number of bedrooms: ") or "0")
+        prop.bedrooms = _ask_number("  Number of bedrooms: ", int)
     if prop.bathrooms <= 0:
-        prop.bathrooms = float(input("  Number of bathrooms: ") or "0")
+        prop.bathrooms = _ask_number("  Number of bathrooms: ", float)
     if prop.max_guests <= 0:
-        prop.max_guests = int(input("  Max guests: ") or "0")
+        prop.max_guests = _ask_number("  Max guests: ", int)
     if not prop.market or prop.market == "Unknown Market":
         prop.market = input("  Market/city name (e.g. Sun Peaks): ") or "Unknown Market"
     return prop
@@ -1147,6 +1161,20 @@ Examples:
         report_date=date.today().strftime("%B %d, %Y"),
         seasonal_data=seasonal_data,
     )
+
+    # The Phase A gate ran before this calculator existed, so it only ever saw
+    # the pydantic defaults. Validate the real one here, where a broken slider
+    # (zero ADR, bounds that do not bracket the default) can still be caught
+    # before the report is written.
+    calc_failures = validate_calculator_defaults(calculator)
+    if calc_failures:
+        write_failure_report(
+            "A", calc_failures, config.OUTPUT_DIR, subject_slug=slug,
+        )
+        print("\n[FAIL] Calculator sanity failed:", file=sys.stderr)
+        for f in calc_failures:
+            print(f"  - {f}", file=sys.stderr)
+        sys.exit(1)
 
     # Cache the assembled pipeline output so the copy can be improved later
     # without paying for the data again. This is what makes the Claude Code

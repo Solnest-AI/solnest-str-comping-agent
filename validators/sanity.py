@@ -169,6 +169,31 @@ def _check_revenue_sanity(comp: CompProperty) -> Optional[str]:
     return None
 
 
+def validate_calculator_defaults(calc) -> list[str]:
+    """Check the revenue-calculator defaults are present and positive.
+
+    Split out so it can run against the REAL calculator after it is derived,
+    not just against the pydantic defaults that exist when Phase A fires.
+    """
+    failures: list[str] = []
+    for field in ("adr_default", "occ_default", "days_default",
+                  "adr_min", "adr_max", "occ_min", "occ_max"):
+        v = getattr(calc, field, None)
+        if v is None or (isinstance(v, (int, float)) and v <= 0):
+            failures.append(f"calculator.{field} is missing/zero: {v}")
+
+    # Bounds must bracket the default, or the slider silently contradicts the
+    # headline the report prints.
+    for lo, mid, hi in (("adr_min", "adr_default", "adr_max"),
+                        ("occ_min", "occ_default", "occ_max")):
+        a, b, c = (getattr(calc, lo, None), getattr(calc, mid, None), getattr(calc, hi, None))
+        if None in (a, b, c):
+            continue
+        if not (a <= b <= c):
+            failures.append(f"calculator {lo}<={mid}<={hi} violated: {a}, {b}, {c}")
+    return failures
+
+
 async def run_phase_a(data: ReportData) -> list[str]:
     """Pre-render blocking gate. Returns list of failure strings. Empty = pass.
 
@@ -212,13 +237,12 @@ async def run_phase_a(data: ReportData) -> list[str]:
     if not prop.currency:
         failures.append("property.currency is empty")
 
-    # 6. Calculator defaults
-    calc = data.calculator
-    for field in ("adr_default", "occ_default", "days_default",
-                  "adr_min", "adr_max", "occ_min", "occ_max"):
-        v = getattr(calc, field, None)
-        if v is None or (isinstance(v, (int, float)) and v <= 0):
-            failures.append(f"calculator.{field} is missing/zero: {v}")
+    # 6. Calculator defaults.
+    # NOTE: run_phase_a fires before the real calculator is derived, so at this
+    # point data.calculator is usually the pydantic default and this pass is
+    # vacuous. validate_calculator_defaults() is called again from the pipeline
+    # once the real calculator exists — that is the call that has teeth.
+    failures.extend(validate_calculator_defaults(data.calculator))
 
     # 7. HTTP liveness — subject hero + comp heroes + comp Airbnb URLs (parallel HEAD)
     async with httpx.AsyncClient(

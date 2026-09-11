@@ -26,6 +26,7 @@ from typing import Any, Optional
 import httpx
 
 import config
+from urllib.parse import quote
 
 
 # ── Exceptions ────────────────────────────────────────────────────────
@@ -105,7 +106,7 @@ async def search_markets(
     match — callers should check `if not markets` rather than `is None`.
     """
     result = await _request(
-        f"/markets/search?query={query}",
+        f"/markets/search?query={quote(str(query), safe='')}",
         method="GET",
         client=client,
     )
@@ -304,9 +305,12 @@ async def get_market_overlay(
                 "metrics": metrics or [],
             }
 
-    except AirbticsError as e:
-        # Surface the error but don't break the pipeline
-        print(f"[airbtics] overlay failed: {e}", file=sys.stderr)
+    except (AirbticsError, httpx.HTTPError, asyncio.TimeoutError) as e:
+        # Surface the error but don't break the pipeline. This catches
+        # transport failures (connect/read timeout, DNS, reset) as well as
+        # AirbticsError: the overlay is optional, and by this point the run
+        # has already paid for its AirROI calls.
+        print(f"[airbtics] overlay failed: {type(e).__name__}: {e}", file=sys.stderr)
         return None
 
 
