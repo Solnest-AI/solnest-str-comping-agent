@@ -10,3 +10,64 @@ output/
 venv/
 .DS_Store
 dist/
+
+# ===== BEGIN solnest-secrets-guard (added 2026-08-16) =====
+# Keeps credentials out of git. Add your own rules BELOW this block.
+
+# Environment files
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+!.env.*.example
+
+# MCP / agent config (frequently holds inline API keys)
+.mcp.json
+.mcp.local.json
+!.mcp.json.example
+.claude.json
+.claude/settings.local.json
+
+# Keys & certificates
+*.pem
+*.p12
+*.pfx
+*.keystore
+*.jks
+*.ppk
+id_rsa
+id_rsa.*
+id_ecdsa
+id_ed25519
+
+# Cloud / service-account credentials
+credentials.json
+client_secret*.json
+service-account*.json
+*-service-account.json
+gha-creds-*.json
+token.json
+tokens.json
+.netrc
+.npmrc
+.pypirc
+
+# Local secret stores
+secrets/
+secrets.json
+secrets.yml
+secrets.yaml
+*.secret
+
+# Terraform (state and tfvars carry plaintext secrets)
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform/
+
+# OS noise
+.DS_Store
+Thumbs.db
+# ===== END solnest-secrets-guard =====

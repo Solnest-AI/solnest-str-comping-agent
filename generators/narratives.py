@@ -45,6 +45,7 @@ from generators.narrative_brief import (
     NARRATIVE_INPUT_SCHEMA,
     NARRATIVE_LIST_FIELDS,
     NARRATIVE_RULES,
+    _own_performance,
     adr_stats,
     build_narrative_brief,
     comp_occupancy_line,
@@ -326,6 +327,23 @@ def _build_prompt(
     # lists that drift apart.
     rules_block = "\n".join(f"- {r}" for r in NARRATIVE_RULES)
 
+    # Same facts the Claude Code brief gets, so the two paths cannot drift.
+    _own = _own_performance(prop, occupancy_stats(comps))
+    if _own is None:
+        subject_facts = (
+            "- No trailing performance history (not yet listed, or too new). "
+            "Every figure below is a market projection, never this property's "
+            "measured result."
+        )
+    else:
+        subject_facts = "\n".join([
+            f"- Trailing 12 months revenue: ${_own['annual_revenue']:,.0f} (fees included)",
+            f"- Trailing 12 months adjusted occupancy: {_own['occupancy_pct']:.0f}%",
+            f"- Nights booked: {_own['nights_booked']} of {_own['nights_listed']} open nights",
+            f"- Average rate: ${_own['adr']:,.0f} (fees excluded)",
+            f"- POSITION vs comp median: {_own['position_vs_comp_median'] or 'unknown'}",
+        ])
+
     return f"""Analyze this short-term rental property and generate marketing narratives for the income analysis report.
 
 SUBJECT PROPERTY:
@@ -335,6 +353,9 @@ SUBJECT PROPERTY:
 - Type: {prop.property_type}
 - Amenities: {', '.join(prop.amenities) if prop.amenities else 'Not reported'}
 - Description: {prop.description or 'N/A'}
+
+SUBJECT'S OWN MEASURED PERFORMANCE:
+{subject_facts}
 
 RENTALIZER ESTIMATES:
 - Revenue Potential: ${rentalizer.revenue_potential:,.0f}

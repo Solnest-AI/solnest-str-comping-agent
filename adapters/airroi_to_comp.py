@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from schema import CompProperty, PropertyBasics
+from schema import CompProperty, PropertyBasics, SubjectPerformance
 
 
 # ── Amenity mapping: AirROI key → (scorer keyword, display label, emoji) ──
@@ -188,6 +188,20 @@ def _amenities_to_badges(
     # "Hair Dryer" and "Shampoo" as headline features.
 
     return labels, emojis
+
+
+def _safe_float(v, default=0.0):
+    try:
+        return float(v) if v is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(v, default=0):
+    try:
+        return int(float(v)) if v is not None else default
+    except (TypeError, ValueError):
+        return default
 
 
 def _coerce_occ_pct(val) -> Optional[float]:
@@ -456,18 +470,6 @@ def to_comp_property(scored_comp: dict) -> CompProperty:
         amenities_raw, text_context=text_context,
     )
 
-    def _safe_float(v, default=0.0):
-        try:
-            return float(v) if v is not None else default
-        except (TypeError, ValueError):
-            return default
-
-    def _safe_int(v, default=0):
-        try:
-            return int(v) if v is not None else default
-        except (TypeError, ValueError):
-            return default
-
     return CompProperty(
         name=scored_comp.get("name") or "Unnamed listing",
         image_url=image_url,
@@ -503,6 +505,62 @@ def to_comp_property(scored_comp: dict) -> CompProperty:
         longitude=scored_comp.get("longitude"),
         rescued=bool(scored_comp.get("rescued")),
         airbnb_url=airbnb_url,
+    )
+
+
+# ── Public: subject's OWN performance — AirROI get_listing → SubjectPerformance ──
+
+def subject_performance_from_listing(
+    airroi_listing: Optional[dict],
+) -> Optional[SubjectPerformance]:
+    """Extract the subject's own trailing-12-month metrics from get_listing().
+
+    Deliberately routed through map_for_scorer() rather than reading
+    performance_metrics directly. That function already encodes the two
+    corrections this data needs and both were expensive to find:
+
+      * nights_listed = ttm_total_days - ttm_blocked_days. Reading
+        ttm_available_days here instead INVERTS the number, because AirROI's
+        "available" means UNSOLD, not open-for-booking.
+      * ttm_revenue is fee-inclusive while ttm_avg_rate is not, so revenue
+        and rate must never be divided into one another naively.
+
+    A second implementation would drift from those on the first schema change.
+
+    Returns None when the listing has no usable trailing history — a brand
+    new listing, a delisted one, or a non-Airbnb subject. Callers must treat
+    None as "infer from the market", not as zero.
+    """
+    if not isinstance(airroi_listing, dict):
+        return None
+
+    try:
+        m = map_for_scorer(airroi_listing)
+    except (TypeError, ValueError):
+        return None
+
+    booked = _safe_int(m.get("nights_booked"))
+    revenue = _safe_float(m.get("annual_revenue"))
+
+    # No bookings or no revenue means no history to anchor on. Say so with
+    # None rather than returning a zeroed model that reads as "0% occupancy".
+    if not booked or not revenue or revenue <= 0:
+        return None
+
+    return SubjectPerformance(
+        annual_revenue=revenue,
+        occupancy_pct=_safe_float(m.get("occupancy_pct")),
+        occupancy_raw_pct=(_safe_float(m.get("occupancy_raw_pct"))
+                           if m.get("occupancy_raw_pct") is not None else None),
+        adr=_safe_float(m.get("adr")),
+        nights_booked=booked,
+        nights_listed=_safe_int(m.get("nights_listed")),
+        revpar=(_safe_float(m.get("revpar"))
+                if m.get("revpar") is not None else None),
+        l90d_occupancy_pct=(_safe_float(m.get("l90d_occupancy_pct"))
+                            if m.get("l90d_occupancy_pct") is not None else None),
+        l90d_nights_booked=(_safe_int(m.get("l90d_nights_booked"))
+                            if m.get("l90d_nights_booked") is not None else None),
     )
 
 

@@ -1,6 +1,8 @@
 """Build the methodology section dynamically from property + comp data."""
 
-from schema import PropertyBasics, CompProperty, MethodologyData
+from schema import (
+    PropertyBasics, CompProperty, MethodologyData, CalculatorDefaults,
+)
 
 
 def _bed_tolerance(bedrooms: int) -> int:
@@ -12,11 +14,44 @@ def _bed_tolerance(bedrooms: int) -> int:
     return 3
 
 
+def _occupancy_assumption(
+    prop: PropertyBasics,
+    calculator: "CalculatorDefaults | None",
+) -> str:
+    """State which occupancy the projection was built on.
+
+    The three bases are not equally strong and the report should not present
+    them as if they were. Anchoring to the six displayed comps over-projected
+    by +72% (median) across 125 backtested listings, because those six are
+    selected for quality and sit near the market's 81st percentile.
+    """
+    basis = getattr(calculator, "occ_basis", None) if calculator else None
+    sp = getattr(prop, "subject_performance", None)
+
+    if basis == "subject" and sp is not None:
+        return (
+            f"Occupancy anchored to this property's own trailing 12 months "
+            f"({sp.occupancy_pct:.0f}% of {sp.nights_listed} open nights), "
+            f"not inferred from the comparables"
+        )
+    if basis == "market_pool":
+        return (
+            "Occupancy anchored to the median of every comparable listing in "
+            "this market, not to the six shown (those are selected for "
+            "quality and run above the market median)"
+        )
+    return (
+        "Occupancy anchored to the median of the six comparables shown - a "
+        "well-run-operator figure rather than a market average"
+    )
+
+
 def build_methodology(
     prop: PropertyBasics,
     comps: list[CompProperty],
     peak_label: str = "",
     shoulder_label: str = "",
+    calculator: CalculatorDefaults | None = None,
 ) -> MethodologyData:
     tol = _bed_tolerance(prop.bedrooms)
     bed_low = max(0, prop.bedrooms - tol)
@@ -81,6 +116,7 @@ def build_methodology(
             "<strong>Comp Analysis:</strong> 6-category weighted comparable scoring",
         ],
         assumptions=[
+            _occupancy_assumption(prop, calculator),
             "Adjustable listed nights per year (100-365)",
             "Revenue shown gross of platform fees, utilities, taxes, and management",
             "Professional property management",

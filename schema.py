@@ -5,6 +5,45 @@ from pydantic import BaseModel, Field
 from typing import Optional
 
 
+class SubjectPerformance(BaseModel):
+    """The subject property's OWN trailing-12-month numbers.
+
+    AirROI returns a full `performance_metrics` block on `get_listing()` for
+    any already-listed property. That block used to be fetched and dropped on
+    the floor: the report then inferred the subject's occupancy from the comp
+    set even when we were holding its real, measured occupancy. On the
+    Gatlinburg fixture that produced a report telling a property running 84.3%
+    that it was at 50% and should improve toward the comp median it was
+    already 14 points above.
+
+    Present only when the subject is a live Airbnb listing with history.
+    A property not yet on the market has no `subject_performance` and the
+    report falls back to market inference, which is the correct behaviour
+    for a pre-purchase analysis.
+    """
+    annual_revenue: float = 0                # ttm_revenue, fee-INCLUSIVE
+    occupancy_pct: float = 0                 # adjusted: booked / open nights
+    occupancy_raw_pct: Optional[float] = None  # booked / 365
+    adr: float = 0                           # room rate, fees EXCLUDED
+    nights_booked: int = 0
+    nights_listed: int = 0                   # open inventory (total - blocked)
+    revpar: Optional[float] = None
+    l90d_occupancy_pct: Optional[float] = None
+    l90d_nights_booked: Optional[int] = None
+
+    @property
+    def has_history(self) -> bool:
+        """True when there is enough real history to anchor an estimate."""
+        return self.nights_booked > 0 and self.annual_revenue > 0
+
+    @property
+    def revenue_per_booked_night(self) -> float:
+        """Fee-INCLUSIVE rate basis, matching how comp cards report revenue."""
+        if self.nights_booked:
+            return self.annual_revenue / self.nights_booked
+        return self.adr
+
+
 class PropertyBasics(BaseModel):
     address: str                                    # "5411 Lookout Ridge, Sun Peaks, BC V0E 5N0"
     short_address: str                              # "5411 Lookout Ridge, Sun Peaks BC"
@@ -27,6 +66,9 @@ class PropertyBasics(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     country_code: Optional[str] = None    # ISO-2 from AirROI location_info
+    # The subject's own trailing-12-month performance, when it is already
+    # listed. None for a pre-purchase / not-yet-listed property.
+    subject_performance: Optional[SubjectPerformance] = None
 
 
 class RentalizerData(BaseModel):
@@ -87,6 +129,14 @@ class CalculatorDefaults(BaseModel):
     days_step: int = 5
     occ_range_text: str = ""
     adr_range_text: str = ""
+    # Where each default came from, so the report can disclose its basis
+    # instead of presenting every number as if it were derived the same way.
+    # "subject" = the property's own trailing 12 months (strongest),
+    # "market_pool" = median of every comparable listing AirROI returned,
+    # "comp_set" = median of the six displayed comps (weakest: those six are
+    # selected for quality, so they sit well above the market median).
+    occ_basis: str = "comp_set"
+    adr_basis: str = "comp_set"
 
 
 class PositioningCard(BaseModel):

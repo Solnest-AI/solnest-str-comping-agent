@@ -14,12 +14,89 @@ def _round_up(value: float, step: int) -> int:
     return int(math.ceil(value / step) * step)
 
 
+# Minimum market-pool size before its median is trusted over the comp median.
+# Below this a "pool" is just the comp set with extra steps.
+MIN_POOL_FOR_ANCHOR = 8
+
+# Slider granularity for the nightly rate. $50 steps quantise a ~$420 rate by
+# 12%, which cost up to 5% of the headline purely to rounding and partly undid
+# the point of anchoring to the subject's own numbers. Measured across the 125
+# backtested listings: $50 -> median 1.70% error, 92% within 5%;
+# $25 -> median 1.04%, 100% within 5%. Finer steps buy almost nothing more.
+ADR_STEP = 25
+
+
+def _occupancy_anchor(
+    comps: list[CompProperty],
+    prop: PropertyBasics,
+    pool_occupancies: list[float] | None,
+) -> tuple[float, str]:
+    """Pick the occupancy the headline projection is built on.
+
+    Order matters and it is measured, not aesthetic. Backtested leave-one-out
+    against 125 live listings with known trailing-12-month revenue:
+
+        anchor            median error   bias    within +/-30%
+        comp-set median          47%     +47%        31%
+        market-pool median       36%      +5%        48%
+        subject's own history    19%      +8%        66%
+
+    The comp-set median is the worst of the three and it was the default.
+    The six displayed comps are SELECTED for quality, so their median sits
+    around the market's 81st percentile (63.8% occupancy against a market
+    median of 40.8%). Anchoring a projection to them projects the top of the
+    market onto an average property.
+    """
+    sp = getattr(prop, "subject_performance", None)
+    if sp is not None and sp.has_history and sp.occupancy_pct > 0:
+        return float(sp.occupancy_pct), "subject"
+
+    if pool_occupancies:
+        usable = [float(o) for o in pool_occupancies if o is not None and o > 0]
+        if len(usable) >= MIN_POOL_FOR_ANCHOR:
+            return statistics.median(usable), "market_pool"
+
+    return statistics.median([c.occupancy_pct for c in comps]), "comp_set"
+
+
+def _rate_anchor(
+    comps: list[CompProperty],
+    prop: PropertyBasics,
+    adr_values: list[float],
+) -> tuple[float, str]:
+    """Pick the nightly rate the headline projection is built on.
+
+    Fee-INCLUSIVE (revenue per booked night), because the calculator's output
+    sits next to comp cards whose revenue includes cleaning and guest fees.
+    Driving it off raw ADR understated those cards by a median 17%.
+
+    Unlike occupancy, the rate default was already close to unbiased (+2%
+    bias, 19% error) — comps are size- and market-matched, so they price
+    similarly even when they out-operate the subject. The subject's own rate
+    still wins when we have it.
+    """
+    sp = getattr(prop, "subject_performance", None)
+    if sp is not None and sp.has_history:
+        own = sp.revenue_per_booked_night
+        if own > 0:
+            return own, "subject"
+
+    return statistics.median(adr_values), "comp_set"
+
+
 def derive_calculator_defaults(
     comps: list[CompProperty],
     rentalizer: RentalizerData,
     prop: PropertyBasics,
+    pool_occupancies: list[float] | None = None,
 ) -> CalculatorDefaults:
-    """Calculate slider min/max/default from comp data and Rentalizer output."""
+    """Calculate slider min/max/default from comp data and Rentalizer output.
+
+    `pool_occupancies` is the adjusted occupancy of EVERY comparable listing
+    the market query returned, not just the six that made the report. Pass it
+    whenever it is available: see _occupancy_anchor for why the six selected
+    comps are the wrong thing to anchor a projection to.
+    """
     if not comps:
         # Fallback to Rentalizer data only
         return CalculatorDefaults(
@@ -45,18 +122,34 @@ def derive_calculator_defaults(
         for c in comps
     ]
 
-    occ_min = max(20, _round_down(min(occ_values) - 10, 5))
-    occ_max = min(90, _round_up(max(occ_values) + 10, 5))
-    # Keep the default inside its own slider bounds, else the headline jumps
-    # the instant the client touches any control.
-    occ_default = int(min(occ_max, max(occ_min, round(statistics.median(occ_values)))))
+    occ_anchor, occ_basis = _occupancy_anchor(comps, prop, pool_occupancies)
+    adr_anchor, adr_basis = _rate_anchor(comps, prop, adr_values)
 
-    adr_min = _round_down(min(adr_values) * 0.7, 50)
-    adr_max = _round_up(max(adr_values) * 1.2, 50)
+    # Bounds must CONTAIN the anchor. Deriving them from the comps alone and
+    # then clamping would silently drag a 40% market anchor back up to the
+    # comp-set floor and undo the correction without saying so.
+    occ_min = max(10, _round_down(min(min(occ_values), occ_anchor) - 10, 5))
+    occ_max = min(95, _round_up(max(max(occ_values), occ_anchor) + 10, 5))
+    occ_default = int(min(occ_max, max(occ_min, round(occ_anchor))))
+
+    adr_min = _round_down(min(min(adr_values), adr_anchor) * 0.7, ADR_STEP)
+    adr_max = _round_up(max(max(adr_values), adr_anchor) * 1.2, ADR_STEP)
     # Round to nearest, not down: flooring to the next lower $50 is a
     # one-directional understatement of up to 11.9% in low-ADR markets.
-    adr_default = int(round(statistics.median(adr_values) / 50) * 50)
+    adr_default = int(round(adr_anchor / ADR_STEP) * ADR_STEP)
     adr_default = max(adr_min, min(adr_max, adr_default))
+
+    # Nights listed: the subject's own open inventory when we have it. A host
+    # who blocks half the year for personal use should not be shown a
+    # 365-night projection just because the comps run year-round.
+    sp = getattr(prop, "subject_performance", None)
+    comp_days = [c.nights_listed for c in comps]
+    if sp is not None and sp.has_history and sp.nights_listed > 0:
+        days_default = int(sp.nights_listed)
+    else:
+        days_default = int(round(statistics.median(comp_days)))
+    days_min = max(100, _round_down(min(min(comp_days), days_default), 5))
+    days_default = max(days_min, min(365, days_default))
 
     occ_range_text = f"{occ_min}-{occ_max}% for premium {prop.market} properties"
     adr_range_text = (
@@ -72,13 +165,15 @@ def derive_calculator_defaults(
         adr_min=adr_min,
         adr_max=adr_max,
         adr_default=adr_default,
-        adr_step=50,
-        days_min=max(100, _round_down(min(c.nights_listed for c in comps), 5)),
+        adr_step=ADR_STEP,
+        days_min=days_min,
         days_max=365,
-        days_default=int(round(statistics.median([c.nights_listed for c in comps]))),
+        days_default=days_default,
         days_step=5,
         occ_range_text=occ_range_text,
         adr_range_text=adr_range_text,
+        occ_basis=occ_basis,
+        adr_basis=adr_basis,
     )
 
 

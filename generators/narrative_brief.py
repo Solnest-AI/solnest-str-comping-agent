@@ -158,6 +158,16 @@ NARRATIVE_RULES: list[str] = [
     "rating of zero and must not be described as weak.",
     "Amenity ideas and guest segments must fit this market. Do not import "
     "activities the market does not have.",
+    "If `subject.own_performance` is present it is this property's MEASURED "
+    "result, not an estimate. Never contradict it and never call the property "
+    "under-performing unless own_performance.position says it is below the "
+    "comp median.",
+    "When own_performance.position is 'above', the comp median is NOT a "
+    "target. Do not frame its occupancy as a gap to close. Upside there comes "
+    "from rate and shoulder-season demand, not from nights it already fills.",
+    "When `subject.own_performance` is null the property has no track record. "
+    "Write about market opportunity and never imply it currently earns or "
+    "books anything.",
     "Write for a property owner weighing ROI: professional, data-informed, "
     "confident, not hyperbolic. No markdown, no headings, plain sentences.",
 ]
@@ -245,6 +255,44 @@ def _round(value, digits: int = 1):
     return None if value is None else round(float(value), digits)
 
 
+def _own_performance(prop, occ_summary: Optional[dict]) -> Optional[dict]:
+    """The subject's OWN measured trailing 12 months, or None if unlisted.
+
+    AirROI returns this on get_listing() for any already-listed property. It
+    used to be fetched and discarded, so the copy described every subject as
+    an under-performer with headroom — including one running 84% adjusted
+    occupancy, 14 points ABOVE the comp median it was told to catch up to.
+
+    `position` is precomputed rather than left to the writer: comparing two
+    numbers is exactly the step a language model gets wrong under a prompt
+    that rewards optimism.
+    """
+    sp = getattr(prop, "subject_performance", None)
+    if sp is None or not sp.has_history:
+        return None
+
+    position = None
+    if occ_summary and occ_summary.get("median") is not None:
+        gap = sp.occupancy_pct - float(occ_summary["median"])
+        position = "above" if gap >= 5 else ("below" if gap <= -5 else "in_line")
+
+    return {
+        "_note": (
+            "MEASURED, not estimated. annual_revenue is fee-INCLUSIVE; adr is "
+            "fee-EXCLUSIVE; occupancy_pct is adjusted (booked / open nights)."
+        ),
+        "annual_revenue": _round(sp.annual_revenue, 0),
+        "occupancy_pct": _round(sp.occupancy_pct),
+        "nights_booked": sp.nights_booked,
+        "nights_listed": sp.nights_listed,
+        "adr": _round(sp.adr, 0),
+        "revenue_per_booked_night": _round(sp.revenue_per_booked_night, 0),
+        "l90d_occupancy_pct": (_round(sp.l90d_occupancy_pct)
+                               if sp.l90d_occupancy_pct is not None else None),
+        "position_vs_comp_median": position,
+    }
+
+
 def _comp_row(index: int, comp: CompProperty) -> dict:
     """One comp, flattened to the fields the copy is allowed to reference."""
     return {
@@ -315,6 +363,7 @@ def build_narrative_brief(
             "review_count": prop.review_count,
             "amenities": list(prop.amenities or []),
             "description": prop.description,
+            "own_performance": _own_performance(prop, occ),
         },
         "revenue_estimate": {
             "_note": (

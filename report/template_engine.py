@@ -51,7 +51,33 @@ def render_report(data: ReportData) -> str:
     initial_revenue = initial_occ_nights * calc.adr_default
     initial_revpar = round(initial_revenue / calc.days_default) if calc.days_default else 0
 
+    # Say where the headline's occupancy came from. The three bases are not
+    # equally strong and a report that presents them identically is hiding
+    # the difference: the comp-set median sits near the market's 81st
+    # percentile and over-projected by +72% across 125 backtested listings.
+    sp = getattr(data.property, "subject_performance", None)
+    if calc.occ_basis == "subject" and sp is not None:
+        occ_basis_text = (
+            f"Occupancy is this property's own measured result over the last "
+            f"12 months ({sp.occupancy_pct:.0f}% of {sp.nights_listed} open "
+            f"nights), not an estimate from the comparables."
+        )
+    elif calc.occ_basis == "market_pool":
+        occ_basis_text = (
+            "Occupancy is the median across every comparable listing in this "
+            "market, not the median of the six shown below. Those six are "
+            "selected for quality and run well above the market median."
+        )
+    else:
+        occ_basis_text = (
+            "Occupancy is the median of the six comparables shown below. "
+            "Those six are selected for quality, so treat this as a "
+            "well-run-operator figure rather than a market average."
+        )
+
     return template.render(
+        subject_performance=sp,
+        occ_basis_text=occ_basis_text,
         branding=config.BRANDING,
         property=data.property,
         rentalizer=data.rentalizer,

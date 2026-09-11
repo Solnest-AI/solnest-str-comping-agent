@@ -36,6 +36,7 @@ from scrapers.airbtics import get_market_overlay
 from scrapers.property_search import scrape_listing_url, search_for_property, search_hero_image
 from adapters.airroi_to_comp import (
     map_batch_for_scorer, to_comp_property, subject_for_scorer,
+    subject_performance_from_listing,
 )
 from comp_scorer import rank_comps
 import comp_filters
@@ -263,10 +264,26 @@ async def _resolve_subject(args) -> PropertyBasics:
                     amenities=[str(a) for a in (pd.get("amenities") or [])],
                 )
 
+                # The subject's own trailing-12-month history. This response
+                # already contains it; before this it was parsed for 15 other
+                # fields and the performance block thrown away, so the report
+                # inferred the subject's occupancy from comps even when we
+                # were holding its measured number.
+                prop.subject_performance = subject_performance_from_listing(data)
+
                 print(f"[AirROI] Found: {prop.title or prop.short_address}")
                 print(f"         {prop.bedrooms}BR / {prop.bathrooms}BA / Sleeps {prop.max_guests}")
                 print(f"         Rating: {prop.rating} ({prop.review_count} reviews) / Superhost: {prop.is_superhost}")
                 print(f"         Amenities: {len(prop.amenities)}")
+                sp = prop.subject_performance
+                if sp:
+                    print(f"[AirROI] Subject's OWN trailing 12mo: "
+                          f"{prop.currency}{sp.annual_revenue:,.0f} / "
+                          f"{sp.occupancy_pct:.1f}% adj occ / "
+                          f"{sp.nights_booked} nights booked")
+                else:
+                    print("[AirROI] No trailing history for subject "
+                          "— estimating from the market")
 
                 if prop.title:
                     prop.short_address = prop.title
@@ -968,9 +985,33 @@ Examples:
 
     # Step 7: Calculator defaults
     print("\n--- Step 7: Deriving calculator defaults ---")
-    calculator = derive_calculator_defaults(comps, rentalizer, prop)
+    # Anchor occupancy to the WHOLE market pool, not the six comps that made
+    # the report. Those six are picked for quality and sit near the market's
+    # 81st percentile; anchoring to them over-projected by +47% across 125
+    # backtested listings. `mapped` is every candidate the market query
+    # returned, before selection. Exclude the subject's own listing so a
+    # strong subject cannot inflate its own market baseline.
+    pool_occupancies = []
+    for cand in mapped:
+        li = cand.get("listing_info") or {}
+        if subject_airbnb_id and str(li.get("listing_id") or "") == subject_airbnb_id:
+            continue
+        occ = cand.get("occupancy_pct")
+        if occ is not None and occ > 0:
+            pool_occupancies.append(float(occ))
+
+    calculator = derive_calculator_defaults(
+        comps, rentalizer, prop, pool_occupancies=pool_occupancies,
+    )
+    _basis_label = {
+        "subject":     "the subject's own trailing 12 months",
+        "market_pool": f"market pool median of {len(pool_occupancies)} listings",
+        "comp_set":    "comp-set median (no pool or subject history available)",
+    }
     print(f"[Calculator] Occ: {calculator.occ_min}-{calculator.occ_max}% (default {calculator.occ_default}%)")
+    print(f"[Calculator]   occupancy basis: {_basis_label.get(calculator.occ_basis, calculator.occ_basis)}")
     print(f"[Calculator] ADR: {prop.currency}{calculator.adr_min:,} - {prop.currency}{calculator.adr_max:,} (default {prop.currency}{calculator.adr_default:,})")
+    print(f"[Calculator]   rate basis: {_basis_label.get(calculator.adr_basis, calculator.adr_basis)}")
 
     # Step 8: Seasonal data — pull per-comp monthly metrics from AirROI
     print("\n--- Step 8: Seasonal occupancy from market data ---")
@@ -1091,7 +1132,9 @@ Examples:
     print(f"[Narratives] Positioning: {narratives.positioning_summary[:80]}...")
 
     # Step 10: Methodology + final report
-    methodology = build_methodology(prop, comps, peak_label, shoulder_label)
+    methodology = build_methodology(
+        prop, comps, peak_label, shoulder_label, calculator=calculator,
+    )
 
     print("\n--- Step 10: Rendering HTML report (to staging) ---")
     report_data = ReportData(

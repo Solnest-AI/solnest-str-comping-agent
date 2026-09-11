@@ -900,7 +900,33 @@
         <div class="text-sm text-white/70">
           <span style="display:block;font-size:.75em;opacity:.7;margin-bottom:.4em;">Gross revenue including cleaning and guest fees. Before platform fees, utilities, HOA/strata, taxes, supplies, and management.</span>
           Based on <span id="displayOcc">{{ calculator.occ_default }}</span>% occupancy of <span id="displayDays">{{ calculator.days_default }}</span> listed nights at {{ property.currency }}<span id="displayAdr">{{ '{:,}'.format(calculator.adr_default) }}</span> per booked night (incl. fees)
+          {% if occ_basis_text %}<span style="display:block;font-size:.8em;opacity:.75;margin-top:.6em;">{{ occ_basis_text }}</span>{% endif %}
         </div>
+        {% if subject_performance %}
+        <div class="mt-6 pt-6" style="border-top:1px solid rgba(255,255,255,.25);">
+          <div class="text-xs font-bold uppercase tracking-[.2em] text-white/70 mb-3">
+            This Property's Last 12 Months (Actual)
+          </div>
+          <div class="metric-grid">
+            <div class="metric">
+              <div class="k">Revenue Earned</div>
+              <div class="v">{{ property.currency }}{{ '{:,.0f}'.format(subject_performance.annual_revenue) }}</div>
+            </div>
+            <div class="metric">
+              <div class="k">Occupancy</div>
+              <div class="v">{{ '{:.0f}'.format(subject_performance.occupancy_pct) }}%</div>
+            </div>
+            <div class="metric">
+              <div class="k">Nights Booked</div>
+              <div class="v">{{ subject_performance.nights_booked }} / {{ subject_performance.nights_listed }}</div>
+            </div>
+            <div class="metric">
+              <div class="k">Revenue per Booked Night</div>
+              <div class="v">{{ property.currency }}{{ '{:,.0f}'.format(subject_performance.revenue_per_booked_night) }}</div>
+            </div>
+          </div>
+        </div>
+        {% endif %}
         <div class="mt-6 text-xs text-white/60 max-w-2xl mx-auto leading-relaxed">
           *Gross revenue before cleaning, platform fees, utilities, HOA/strata, taxes, supplies, and management.
           Actual performance may vary based on seasonality, market conditions, and operational execution.
