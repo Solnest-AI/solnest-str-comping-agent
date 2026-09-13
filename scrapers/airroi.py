@@ -25,6 +25,7 @@ import httpx
 
 import config
 from schema import PropertyBasics
+from . import _cache
 
 
 # ── Retry policy ──────────────────────────────────────────────────────
@@ -185,11 +186,19 @@ async def _get(
     # Strip None params
     params = {k: v for k, v in params.items() if v is not None}
 
+    # Every call below this line costs money. Serve a same-day repeat from disk.
+    cached = _cache.get("airroi", endpoint, params)
+    if cached is not None:
+        return cached
+
     if client is None:
         async with _new_client() as c:
-            return await _request_with_retries(c, url, params, headers)
+            data = await _request_with_retries(c, url, params, headers)
+    else:
+        data = await _request_with_retries(client, url, params, headers)
 
-    return await _request_with_retries(client, url, params, headers)
+    _cache.put("airroi", endpoint, params, data)
+    return data
 
 
 def _location_params(

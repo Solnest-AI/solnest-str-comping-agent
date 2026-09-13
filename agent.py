@@ -12,6 +12,7 @@ Usage:
 import argparse
 import asyncio
 import io
+import os
 import re
 import sys
 from datetime import date
@@ -42,7 +43,7 @@ from comp_scorer import rank_comps
 import comp_filters
 
 
-from generators.calculator import derive_calculator_defaults, derive_seasonal_data, derive_season_labels, airbtics_to_seasonal
+from generators.calculator import derive_calculator_defaults, derive_seasonal_data, derive_seasonal_data_with_basis, derive_season_labels, airbtics_to_seasonal
 from generators.narratives import (
     generate_narratives, load_narratives_from_file, NarrativeFileError,
 )
@@ -575,8 +576,9 @@ Examples:
                              "when omitted.")
     parser.add_argument("--no-feature-filter", action="store_true",
                         help="Disable the auto must-have feature filter.")
-    parser.add_argument("--radius", type=int, default=None,
-                        help="AirROI comp search radius in miles.")
+    parser.add_argument("--no-cache", action="store_true",
+                        help="Bypass the 24h vendor-response cache and force fresh "
+                             "(paid) AirROI calls.")
     # ── Narrative copy ─────────────────────────────────────────────────
     parser.add_argument("--render", default=None, metavar="DATA_JSON",
                         help="Re-render an existing report from its *.report-data.json "
@@ -595,6 +597,9 @@ Examples:
                         help="Override currency (auto-detected from address: $ for US, CA$ for Canada)")
 
     args = parser.parse_args()
+
+    if getattr(args, "no_cache", False):
+        os.environ["AIRROI_CACHE"] = "0"
 
     # --render is a pure local operation: no keys, no network, no cost.
     if args.render:
@@ -1035,9 +1040,18 @@ Examples:
     # and discarding them was 60% of the AirROI bill on every market Airbtics
     # covers. Try Airbtics first; only pay for per-comp metrics if it came up short.
     airbtics_metrics = (overlay or {}).get("metrics") if overlay else None
-    seasonal_data = derive_seasonal_data(rentalizer, comp_monthly_data=None,
-                                         airbtics_metrics=airbtics_metrics)
-    if seasonal_data:
+    seasonal_data, seasonal_basis = derive_seasonal_data_with_basis(
+        rentalizer, comp_monthly_data=None, airbtics_metrics=airbtics_metrics)
+
+    # ONLY an Airbtics-supplied curve justifies skipping the per-comp calls.
+    # A "subject" curve is one property's own history, which is not a market
+    # seasonality signal, and skipping on it both mislabels the source and
+    # suppresses the fallback that would have produced a real one.
+    if seasonal_data and seasonal_basis != "airbtics":
+        print(f"[Seasonal] Curve came from '{seasonal_basis}', not Airbtics — "
+              "still fetching per-comp metrics for a real market curve.")
+        seasonal_data = []
+    elif seasonal_data:
         print("[Seasonal] Airbtics covered this market — skipping "
               f"{len(result['selected'])} per-comp metric calls (saved ~${0.10 * len(result['selected']):.2f})")
 

@@ -277,12 +277,17 @@ def _interpolate_gaps(series: list[float | None]) -> list[float] | None:
     return [float(v) for v in out] if all(v is not None for v in out) else None
 
 
-def derive_seasonal_data(
+def derive_seasonal_data_with_basis(
     rentalizer: RentalizerData,
     comp_monthly_data: list[list[float | None]] | None = None,
     airbtics_metrics: list[dict] | None = None,
-) -> list[float]:
-    """Return 12 monthly occupancy values (Jan-Dec) from real market data.
+) -> tuple[list[float], str]:
+    """Return (12 monthly occupancy values Jan-Dec, basis label).
+
+    The basis says WHICH source supplied the curve: "airbtics", "comps",
+    "subject" or "" when nothing did. Callers use it to decide whether the
+    per-comp AirROI metric calls can be skipped — only an Airbtics-supplied
+    curve justifies skipping them, and only Airbtics may be named as the source.
 
     Priority order (most reliable first):
       1. Airbtics monthly_metrics — clean, no clipping (when market is tracked)
@@ -303,7 +308,7 @@ def derive_seasonal_data(
             # have a credible curve, so fall through to the next source.
             filled = _interpolate_gaps(airbtics_series)
             if filled is not None:
-                return [min(v, SEASONAL_PEAK_CAP) for v in filled]
+                return [min(v, SEASONAL_PEAK_CAP) for v in filled], "airbtics"
 
     # Priority 2: per-comp AirROI monthly metrics (drops clipped values)
     if comp_monthly_data and any(any(v is not None for v in c) for c in comp_monthly_data):
@@ -311,14 +316,38 @@ def derive_seasonal_data(
         # Too many blank months to be a credible seasonal curve — fall through
         # and ultimately let the sanity gate block rather than ship a guess.
         if sum(1 for v in series if v is None) <= 3:
-            return [v if v is not None else 0.0 for v in series]
+            return [v if v is not None else 0.0 for v in series], "comps"
 
-    # Priority 3: subject's own monthly data (capped, since it's only one data point)
-    if rentalizer.monthly_occupancy and len(rentalizer.monthly_occupancy) == 12:
-        return [min(v, SEASONAL_PEAK_CAP) for v in rentalizer.monthly_occupancy]
+    # Priority 3: subject's own monthly data (capped, since it's only one data point).
+    #
+    # This MUST reject a series containing None. agent.py assigns
+    # rentalizer.monthly_occupancy = airbtics_to_seasonal(metrics) when the
+    # subject has no monthly data of its own, and that helper leaves uncovered
+    # months as None by design. Without this guard a market Airbtics tracks for
+    # fewer than 9 months would be rejected by Priority 1 and then resurrected
+    # here, where min(None, CAP) raises TypeError and kills the run AFTER the
+    # AirROI calls have been paid for. Verified by test_seasonal_sparse.py.
+    own = rentalizer.monthly_occupancy
+    if own and len(own) == 12 and all(v is not None for v in own):
+        return [min(v, SEASONAL_PEAK_CAP) for v in own], "subject"
 
     # Fully exhausted — return empty so sanity gate blocks delivery.
-    return []
+    return [], ""
+
+
+
+def derive_seasonal_data(
+    rentalizer: RentalizerData,
+    comp_monthly_data: list[list[float | None]] | None = None,
+    airbtics_metrics: list[dict] | None = None,
+) -> list[float]:
+    """Back-compat wrapper: the series only. Use the _with_basis form when the
+    caller needs to know which source paid for the curve."""
+    series, _ = derive_seasonal_data_with_basis(
+        rentalizer, comp_monthly_data=comp_monthly_data,
+        airbtics_metrics=airbtics_metrics,
+    )
+    return series
 
 
 _MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",

@@ -180,7 +180,7 @@ specifically. Fix the JSON and re-run.
 | `--email you@example.com` | Email the report after generating (needs Gmail configured) |
 | `--beds N` / `--baths N` / `--guests N` | Property details, needed for addresses with no live listing |
 | `--market "City"` | Override market detection |
-| `--radius N` | AirROI comp search radius in miles |
+| `--no-cache` | Bypass the 24h vendor-response cache and force fresh (paid) AirROI calls |
 | `--require "pool,hot_tub"` | Require comps to have these features |
 | `--exclude "oceanfront,beachfront"` | Drop comps whose names contain these keywords (alias `--exclude-comps`; also takes a full listing name to drop one specific comp) |
 | `--no-feature-filter` | Disable the automatic must-have feature filter |
@@ -245,11 +245,11 @@ produces a confidently wrong report:
 |---|---|---|
 | `AIRROI_API_KEY is not set` | No `.env`, or the key is blank | `cp .env.example .env`, paste the key, or run `python setup.py` |
 | `FIRECRAWL_API_KEY is not set` | Address or listing-URL input without Firecrawl | Add the key, or pass an Airbnb URL instead |
-| `Phase A sanity failed: <6 comps` | Too few comparable listings in this market | Widen with `--radius`, relax with `--no-feature-filter`, or try a denser market |
+| `Phase A sanity failed: <6 comps` | Too few comparable listings in this market | Relax with `--no-feature-filter`, or try a denser market. AirROI caps comparables at 25 and accepts only a 1-10 mile radius, so there is no way to widen the pool. |
 | Report renders but the prose is generic | You have not done the narrative handoff | Read `output/<slug>.narrative-brief.json` and re-run with `--narratives` |
 | `--narratives file not found` | Ran with `--narratives` before writing the file | Run once without it to generate the brief |
 | `NarrativeFileError: ... not valid JSON` | Markdown fences or commentary around the object | Write the bare JSON object only |
-| Comps look wrong (oversized, waterfront, dormant) | Filters too loose or too tight | `--require`, `--exclude`, `--radius`, `--allow-oceanfront-comps` |
+| Comps look wrong (oversized, waterfront, dormant) | Filters too loose or too tight | `--require`, `--exclude`, `--allow-oceanfront-comps` |
 | Module import error | Dependencies not installed | `pip install -r requirements.txt` |
 | Report shows someone else's company | No `branding.json` | `cp branding.example.json branding.json` and edit it |
 

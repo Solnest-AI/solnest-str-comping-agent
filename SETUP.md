@@ -149,7 +149,7 @@ write from, so the copy cannot invent numbers or seasons.
 |---|---|---|
 | `AIRROI_API_KEY is not set` | No `.env`, or the key is blank | `cp .env.example .env` and paste your key, or run `python setup.py` |
 | `FIRECRAWL_API_KEY is not set` | You passed an address or listing URL without Firecrawl | Add the key, or use an Airbnb URL |
-| `Phase A sanity failed: <6 comps` | Not enough comparable listings nearby | Try `--radius 10`, or `--no-feature-filter`, or a denser market |
+| `Phase A sanity failed: <6 comps` | Not enough comparable listings nearby | Try `--no-feature-filter`, or a denser market. There is no radius lever: AirROI caps results at 25 and only accepts a 1-10 mile radius, so widening is not possible. |
 | `--narratives file not found` | You used `--narratives` before writing the file | Run once without it to generate the brief |
 | `not valid JSON` | The narratives file has markdown fences or commentary | Write the bare JSON object only |
 | Report shows the wrong company | No `branding.json` | `cp branding.example.json branding.json` and edit it |

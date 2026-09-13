@@ -71,3 +71,6 @@ secrets.yaml
 .DS_Store
 Thumbs.db
 # ===== END solnest-secrets-guard =====
+
+# Vendor response cache (paid API results, never commit)
+.cache/
