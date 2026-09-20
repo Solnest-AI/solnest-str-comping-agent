@@ -22,15 +22,15 @@ def _rent():
 
 def _rows(months, occ=0.5):
     """AirROI returns a TRAILING window, so months may start mid-year."""
-    return [{"date": f"2026-{m:02d}-01", "avg": occ, "p25": occ - .1, "p50": occ,
-             "p75": occ + .1, "p90": occ + .2} for m in months]
+    return [{"date": f"2026-{m:02d}-01", "avg": occ - .05, "p25": occ - .1,
+             "p50": occ, "p75": occ + .1, "p90": occ + .2} for m in months]
 
 
 def test_rows_map_by_calendar_month_not_by_position():
     """The trailing window starts in September. A positional mapping would put
     September's value in January."""
-    rows = [{"date": "2025-09-01", "avg": 0.44}, {"date": "2025-10-01", "avg": 0.61},
-            {"date": "2026-01-01", "avg": 0.30}]
+    rows = [{"date": "2025-09-01", "p50": 0.44}, {"date": "2025-10-01", "p50": 0.61},
+            {"date": "2026-01-01", "p50": 0.30}]
     out = market_occupancy_to_seasonal(rows)
     assert out[8] == 44.0     # Sep
     assert out[9] == 61.0     # Oct
@@ -39,11 +39,23 @@ def test_rows_map_by_calendar_month_not_by_position():
 
 
 def test_fractions_become_percentages():
-    assert market_occupancy_to_seasonal([{"date": "2026-03-01", "avg": 0.615}])[2] == 61.5
+    assert market_occupancy_to_seasonal([{"date": "2026-03-01", "p50": 0.615}])[2] == 61.5
 
 
 def test_already_percent_values_are_left_alone():
-    assert market_occupancy_to_seasonal([{"date": "2026-03-01", "avg": 61.5}])[2] == 61.5
+    assert market_occupancy_to_seasonal([{"date": "2026-03-01", "p50": 61.5}])[2] == 61.5
+
+
+def test_median_is_preferred_over_the_mean():
+    """The mean is dragged down by dead listings parked at 0%. Measured on Sun
+    Peaks against the subject's own year: avg 20.9 MAE, p50 16.9, six comps 16.1.
+    Using avg here is what made the shipped chart worse than the comps."""
+    row = [{"date": "2026-01-01", "avg": 0.71, "p50": 0.79}]
+    assert market_occupancy_to_seasonal(row)[0] == 79.0
+
+
+def test_falls_back_to_mean_when_no_median_present():
+    assert market_occupancy_to_seasonal([{"date": "2026-01-01", "avg": 0.71}])[0] == 71.0
 
 
 def test_full_coverage_is_used_and_labelled_market():
@@ -80,8 +92,8 @@ def test_thin_market_falls_through_rather_than_guessing(covered):
 
 
 def test_malformed_rows_are_skipped_not_fatal():
-    rows = [{"date": "garbage", "avg": 0.5}, {"date": "2026-04-01", "avg": None},
-            "not a dict", {"date": "2026-05-01", "avg": 0.6}]
+    rows = [{"date": "garbage", "p50": 0.5}, {"date": "2026-04-01", "p50": None},
+            "not a dict", {"date": "2026-05-01", "p50": 0.6}]
     out = market_occupancy_to_seasonal(rows)
     assert out[4] == 60.0
     assert out[3] is None

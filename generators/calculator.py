@@ -264,8 +264,12 @@ def market_occupancy_to_seasonal(results: list[dict]) -> list[float | None]:
     source. Uncovered months stay None; the caller decides, exactly as with
     airbtics_to_seasonal.
 
-    `avg` is used rather than `p50`: the series it replaces was an average
-    across comps, and the chart is labelled "Occupancy %" for the market.
+    `p50` (median), NOT `avg`. Measured on Sun Peaks against the subject's own
+    12 months: avg is off by 20.9 points, p50 by 16.9, against 16.1 for the
+    six-comp average it replaces. The mean is dragged down by dead listings
+    parked at 0% occupancy; the median is the typical OPERATING property, which
+    is what a seasonality chart is about. p75 (17.1) and p90 (23.2) were also
+    tested and are worse. Falls back to `avg` when a row carries no `p50`.
     """
     out: list[float | None] = [None] * 12
     for row in results or []:
@@ -277,7 +281,9 @@ def market_occupancy_to_seasonal(results: list[dict]) -> list[float | None]:
             continue
         if not (0 <= mo <= 11):
             continue
-        v = row.get("avg")
+        v = row.get("p50")
+        if not isinstance(v, (int, float)):
+            v = row.get("avg")
         if isinstance(v, (int, float)):
             out[mo] = float(v) * 100 if float(v) <= 1 else float(v)
     return out
