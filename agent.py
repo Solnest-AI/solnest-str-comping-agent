@@ -44,7 +44,7 @@ from comp_scorer import rank_comps
 import comp_filters
 
 
-from generators.calculator import derive_calculator_defaults, derive_seasonal_data, derive_seasonal_data_with_basis, derive_season_labels, airbtics_to_seasonal
+from generators.calculator import derive_calculator_defaults, derive_seasonal_data, derive_seasonal_data_with_basis, derive_season_labels, airbtics_to_seasonal, market_occupancy_band
 from generators.narratives import (
     generate_narratives, load_narratives_from_file, NarrativeFileError,
 )
@@ -1096,6 +1096,8 @@ Examples:
     # from the headline. Verified live on Gatlinburg: 12 monthly rows with
     # p25-p90. Needs coordinates; falls through silently to the per-comp path.
     market_occ: list[dict] = []
+    seasonal_p25: list[float] = []
+    seasonal_p75: list[float] = []
     if (not seasonal_data and not args.skip_financials
             and getattr(prop, "latitude", None) is not None
             and getattr(prop, "longitude", None) is not None):
@@ -1109,6 +1111,9 @@ Examples:
                 rentalizer, comp_monthly_data=None,
                 airbtics_metrics=airbtics_metrics, market_occupancy=market_occ)
             if seasonal_data and seasonal_basis == "market":
+                band = market_occupancy_band(market_occ)
+                seasonal_p25 = [v for v in band["p25"] if v is not None] and band["p25"] or []
+                seasonal_p75 = [v for v in band["p75"] if v is not None] and band["p75"] or []
                 n = len(result["selected"])
                 print(f"[Seasonal] Market curve used — skipping {n} per-comp metric "
                       f"calls (${0.10 * n:.2f} -> $0.11)")
@@ -1119,6 +1124,40 @@ Examples:
             print(f"[Seasonal] Market curve unavailable ({type(e).__name__}) — "
                   "falling back to per-comp metrics", file=sys.stderr)
             seasonal_data = []
+
+    # THIS property's own monthly line, to overlay on the market band. Only
+    # bought when the property actually has a track record: for a pre-purchase
+    # comp there is nothing to plot and nothing is invented to fill it.
+    # One /listings/metrics/all call, $0.10.
+    subject_monthly: list[float | None] = []
+    if (seasonal_data and prop.subject_performance is not None
+            and prop.airroi_listing_id and not args.skip_financials):
+        try:
+            rows = await get_listing_metrics(
+                listing_id=int(prop.airroi_listing_id), num_months=12,
+                currency=("native" if prop.currency == "CA$" else "usd"),
+            )
+            subject_monthly = [None] * 12
+            for r in rows or []:
+                if not isinstance(r, dict):
+                    continue
+                try:
+                    mo = int(str(r.get("date") or "").split("-")[1]) - 1
+                except (ValueError, IndexError):
+                    continue
+                if not (0 <= mo <= 11):
+                    continue
+                occ = r.get("occupancy")
+                v = occ.get("avg") if isinstance(occ, dict) else occ
+                if isinstance(v, (int, float)):
+                    subject_monthly[mo] = float(v) * 100 if float(v) <= 1 else float(v)
+            open_months = sum(1 for v in subject_monthly if v is not None)
+            print(f"[Seasonal] Subject's own line: {open_months}/12 months with data "
+                  f"(months with no data = listing was not open)")
+        except (AirROIError, httpx.HTTPError, asyncio.TimeoutError) as e:
+            print(f"[Seasonal] Subject monthly unavailable ({type(e).__name__}) — "
+                  "chart will show the market band only", file=sys.stderr)
+            subject_monthly = []
 
     comp_monthly_data: list[list[float | None]] = []
     if not seasonal_data and not args.skip_financials and result["selected"]:
@@ -1239,6 +1278,9 @@ Examples:
         methodology=methodology,
         report_date=date.today().strftime("%B %d, %Y"),
         seasonal_data=seasonal_data,
+        seasonal_p25=seasonal_p25,
+        seasonal_p75=seasonal_p75,
+        subject_monthly=subject_monthly,
     )
 
     # The Phase A gate ran before this calculator existed, so it only ever saw

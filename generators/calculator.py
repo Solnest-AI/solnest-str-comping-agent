@@ -289,6 +289,34 @@ def market_occupancy_to_seasonal(results: list[dict]) -> list[float | None]:
     return out
 
 
+def market_occupancy_band(results: list[dict]) -> dict[str, list[float | None]]:
+    """Pull the p25/p50/p75 spread out of a market-occupancy response.
+
+    The same paid call that gives the median also carries the percentiles, and
+    throwing them away costs nothing to stop doing. Shading p25-p75 behind the
+    median turns "the market does X" into "the market ranges from X to Y and
+    you are here", which is the comparison an owner actually wants to see.
+
+    Same calendar mapping rules as market_occupancy_to_seasonal: rows cover a
+    trailing twelve months and map by calendar month, fractions become percent.
+    """
+    out: dict[str, list[float | None]] = {k: [None] * 12 for k in ("p25", "p50", "p75")}
+    for row in results or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            mo = int(str(row.get("date") or "").split("-")[1]) - 1
+        except (ValueError, IndexError):
+            continue
+        if not (0 <= mo <= 11):
+            continue
+        for key in ("p25", "p50", "p75"):
+            v = row.get(key)
+            if isinstance(v, (int, float)):
+                out[key][mo] = float(v) * 100 if float(v) <= 1 else float(v)
+    return out
+
+
 def _interpolate_gaps(series: list[float | None]) -> list[float] | None:
     """Fill isolated None months from their circular neighbours.
 

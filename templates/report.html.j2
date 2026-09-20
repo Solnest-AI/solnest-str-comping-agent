@@ -1154,25 +1154,71 @@
       type: 'line',
       data: {
         labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
-        datasets: [{
-          label: 'Occupancy %',
-          data: {{ seasonal_data | tojson }},
-          borderColor: '#1f3c34',
-          backgroundColor: 'rgba(31, 60, 52, 0.08)',
-          borderWidth: 3,
-          fill: true,
-          tension: 0.4,
-          pointRadius: 5,
-          pointBackgroundColor: '#1f3c34',
-          pointBorderColor: 'white',
-          pointBorderWidth: 2
-        }]
+        datasets: [
+          {%- if seasonal_p75 %}
+          {
+            label: 'Market top quartile',
+            data: {{ seasonal_p75 | tojson }},
+            borderColor: 'rgba(31, 60, 52, 0.22)',
+            backgroundColor: 'rgba(31, 60, 52, 0.10)',
+            borderWidth: 1,
+            borderDash: [4, 4],
+            fill: '+1',
+            tension: 0.4,
+            pointRadius: 0
+          },
+          {%- endif %}
+          {
+            label: 'Market median',
+            data: {{ seasonal_data | tojson }},
+            borderColor: '#1f3c34',
+            backgroundColor: 'rgba(31, 60, 52, 0.06)',
+            borderWidth: {% if subject_monthly %}2{% else %}3{% endif %},
+            fill: {% if seasonal_p25 %}false{% else %}true{% endif %},
+            tension: 0.4,
+            pointRadius: {% if subject_monthly %}0{% else %}5{% endif %},
+            pointBackgroundColor: '#1f3c34',
+            pointBorderColor: 'white',
+            pointBorderWidth: 2
+          },
+          {%- if seasonal_p25 %}
+          {
+            label: 'Market bottom quartile',
+            data: {{ seasonal_p25 | tojson }},
+            borderColor: 'rgba(31, 60, 52, 0.22)',
+            backgroundColor: 'rgba(31, 60, 52, 0.10)',
+            borderWidth: 1,
+            borderDash: [4, 4],
+            fill: false,
+            tension: 0.4,
+            pointRadius: 0
+          },
+          {%- endif %}
+          {%- if subject_monthly %}
+          {
+            label: 'This property',
+            data: {{ subject_monthly | tojson }},
+            borderColor: '#c8963e',
+            backgroundColor: '#c8963e',
+            borderWidth: 4,
+            fill: false,
+            tension: 0.4,
+            spanGaps: false,
+            pointRadius: 5,
+            pointBackgroundColor: '#c8963e',
+            pointBorderColor: 'white',
+            pointBorderWidth: 2
+          }
+          {%- endif %}
+        ]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
-          legend: { display: false }
+          legend: { display: true, position: 'bottom',
+                    labels: { boxWidth: 14, usePointStyle: false, padding: 14,
+                              filter: function(i){ return i.text !== 'Market bottom quartile'; } } }
         },
         scales: {
           y: {

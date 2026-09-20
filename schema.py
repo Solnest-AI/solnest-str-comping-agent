@@ -176,3 +176,15 @@ class ReportData(BaseModel):
     methodology: MethodologyData = Field(default_factory=MethodologyData)
     report_date: str = ""
     seasonal_data: list[float] = Field(default_factory=list)      # 12 monthly occupancy values
+
+    # The market spread behind seasonal_data, so the chart can shade a band
+    # rather than assert one line. Both are 12 values, Jan-Dec, percent.
+    # Empty when the curve did not come from AirROI market percentiles.
+    seasonal_p25: list[float] = Field(default_factory=list)
+    seasonal_p75: list[float] = Field(default_factory=list)
+
+    # THIS property's own monthly occupancy, overlaid on the band so an owner
+    # sees where they sit inside their market. Empty for a property with no
+    # track record — nothing is invented to fill the line. Entries may be None
+    # for months the listing was not open at all.
+    subject_monthly: list[float | None] = Field(default_factory=list)
