@@ -373,6 +373,13 @@ async def get_listing_metrics(
 
 # ── Public: high-level pipeline wrapper ──────────────────────────────
 
+# The estimate's comparable_listings block is the primary comp source. Only pay
+# for a separate /listings/comparables call when it comes back below this. The
+# report's sanity gate needs 6 comps after heavy filtering, so this is set well
+# above that rather than at "non-empty".
+MIN_COMPS_FROM_ESTIMATE = 15
+
+
 async def run_airroi_pipeline(
     prop: PropertyBasics,
     *,
@@ -395,46 +402,54 @@ async def run_airroi_pipeline(
     )
 
     async with _new_client() as client:
-        # Fire estimate + comparables concurrently
+        # /calculator/estimate ($0.20) ALREADY returns comparable_listings, and for
+        # the same params that block is byte-identical to what /listings/comparables
+        # ($0.10) returns — verified by sorting both payloads and diffing them. So
+        # buy the estimate first and only pay for the comparables call when the
+        # estimate's block comes back thin. Saves $0.10 on every healthy report and
+        # keeps the failover for the thin case.
         if has_coords:
-            estimate_coro = get_estimate(
+            estimate_data = await get_estimate(
                 lat=float(prop.latitude), lng=float(prop.longitude),
                 bedrooms=prop.bedrooms, baths=prop.bathrooms,
                 guests=prop.max_guests, currency=currency, client=client,
             )
-            comps_coro = get_comparables(
-                latitude=float(prop.latitude), longitude=float(prop.longitude),
-                bedrooms=prop.bedrooms, baths=prop.bathrooms,
-                guests=prop.max_guests, currency=currency, client=client,
-            )
         else:
-            estimate_coro = get_estimate(
-                address=prop.address,
-                bedrooms=prop.bedrooms, baths=prop.bathrooms,
-                guests=prop.max_guests, currency=currency, client=client,
-            )
-            comps_coro = get_comparables(
+            estimate_data = await get_estimate(
                 address=prop.address,
                 bedrooms=prop.bedrooms, baths=prop.bathrooms,
                 guests=prop.max_guests, currency=currency, client=client,
             )
 
-        estimate_data, comps_list = await asyncio.gather(
-            estimate_coro, comps_coro, return_exceptions=True,
-        )
+        est_comps = estimate_data.get("comparable_listings") or []
+        if len(est_comps) >= MIN_COMPS_FROM_ESTIMATE:
+            comps_list: list = []       # estimate block is enough
+        else:
+            print(
+                f"[airroi] estimate returned {len(est_comps)} comps "
+                f"(< {MIN_COMPS_FROM_ESTIMATE}) — paying for /listings/comparables",
+                file=sys.stderr,
+            )
+            loc_kw = (
+                {"latitude": float(prop.latitude), "longitude": float(prop.longitude)}
+                if has_coords else {"address": prop.address}
+            )
+            try:
+                comps_list = await get_comparables(
+                    bedrooms=prop.bedrooms, baths=prop.bathrooms,
+                    guests=prop.max_guests, currency=currency, client=client,
+                    **loc_kw,
+                )
+            except (AirROIError, httpx.HTTPError, asyncio.TimeoutError) as e:
+                print(f"[airroi] warning: comparables failover failed: {e}", file=sys.stderr)
+                comps_list = []
 
-    # Handle errors
-    if isinstance(estimate_data, Exception):
-        raise estimate_data
-    if isinstance(comps_list, Exception):
-        print(f"[airroi] warning: comparables fetch failed: {comps_list}", file=sys.stderr)
-        comps_list = []
-
-    # FAILOVER, not a pool-widener: /listings/comparables is the primary source
-    # and normally returns the full 25. The estimate's comparable_listings block
-    # is only there to cover the case where the comparables call failed or came
-    # back thin — verified working, do not remove. In the healthy path it adds
-    # nothing because both endpoints return the same relevance-ranked set.
+    # PRIORITY INVERTED 2026-09-20. The estimate's comparable_listings block is
+    # now the PRIMARY source because the estimate is already paid for, and
+    # /listings/comparables is the failover for a thin estimate. Both endpoints
+    # return the same relevance-ranked set (proven by byte-diff), so this costs
+    # nothing in fidelity and saves $0.10 per report. comps_list is empty on the
+    # healthy path; the loop below is a no-op then.
     merged: dict[int, dict] = {}
     for listing in comps_list:
         li = listing.get("listing_info") or {}

@@ -55,6 +55,7 @@ class PropertyBasics(BaseModel):
     hero_image_url: str = ""
     listing_url: Optional[str] = None               # external listing link (MLS, etc.)
     airbnb_url: Optional[str] = None
+    airroi_listing_id: Optional[int] = None         # set when resolved via AirROI /listings
     currency: str = "$"
     title: Optional[str] = None                     # Airbnb listing title
     rating: Optional[float] = None

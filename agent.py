@@ -285,6 +285,7 @@ async def _resolve_subject(args) -> PropertyBasics:
                 # inferred the subject's occupancy from comps even when we
                 # were holding its measured number.
                 prop.subject_performance = subject_performance_from_listing(data)
+                prop.airroi_listing_id = listing_id
 
                 print(f"[AirROI] Found: {prop.title or prop.short_address}")
                 print(f"         {prop.bedrooms}BR / {prop.bathrooms}BA / Sleeps {prop.max_guests}")
@@ -653,6 +654,38 @@ Examples:
             occ = estimate_data.get("occupancy") or 0
             print(f"[AirROI] Estimate: rev ${rev:,.0f} / ADR ${adr:.0f} / Occ {occ:.0%}")
             print(f"[AirROI] Comp candidates: {len(candidates_raw)}")
+
+            # CURRENCY FIX. Step 1's get_listing() call defaults to currency="usd"
+            # and cannot pass the right one, because the currency is derived from
+            # location_info.country_code IN that same response. So on a Canadian
+            # property the subject's money fields came back USD while the comps and
+            # the estimate came back CAD, and both were then labelled CA$.
+            # Measured on Sun Peaks: own_performance 127,618 USD sat next to
+            # revenue_estimate 188,668 CAD, a 1.3737x gap, and the report read as
+            # though the property earned 32% below its own potential.
+            # The subject is normally inside the comp pool, and that copy is in the
+            # SAME currency as everything else, so re-source the performance block
+            # from there. Costs nothing: the data is already in hand.
+            if prop.subject_performance is not None and prop.airroi_listing_id:
+                for cand in candidates_raw:
+                    li = cand.get("listing_info") or {}
+                    if str(li.get("listing_id") or "") == str(prop.airroi_listing_id):
+                        recast = subject_performance_from_listing(cand)
+                        if recast is not None:
+                            was = prop.subject_performance.annual_revenue
+                            prop.subject_performance = recast
+                            if abs(recast.annual_revenue - was) > 1:
+                                print(f"[AirROI] Subject performance re-sourced from the "
+                                      f"comp pool for currency consistency: "
+                                      f"{prop.currency}{was:,.0f} -> "
+                                      f"{prop.currency}{recast.annual_revenue:,.0f}")
+                        break
+                else:
+                    if airroi_currency != "usd":
+                        print("[AirROI] WARNING: subject not found in the comp pool; its "
+                              "performance figures are USD while the report is "
+                              f"{prop.currency}. Treat own_performance with caution.",
+                              file=sys.stderr)
         except AirROIError as e:
             print(f"\n[AirROI] Pipeline error: {e}")
             print("[AirROI] Check address/coordinates; try specifying --beds/--baths/--guests.")
