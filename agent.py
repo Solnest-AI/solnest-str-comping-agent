@@ -32,7 +32,8 @@ import httpx
 import config
 from schema import PropertyBasics, ReportData, RentalizerData
 from scrapers.airbnb import scrape_airbnb_listing
-from scrapers.airroi import run_airroi_pipeline, get_listing, get_listing_metrics, get_comparables, AirROIError
+from scrapers.airroi import (run_airroi_pipeline, get_listing, get_listing_metrics,
+                             get_comparables, lookup_market, get_market_occupancy, AirROIError)
 from scrapers.airbtics import get_market_overlay
 from scrapers.property_search import scrape_listing_url, search_for_property, search_hero_image
 from adapters.airroi_to_comp import (
@@ -1087,6 +1088,37 @@ Examples:
     elif seasonal_data:
         print("[Seasonal] Airbtics covered this market — skipping "
               f"{len(result['selected'])} per-comp metric calls (saved ~${0.10 * len(result['selected']):.2f})")
+
+    # No Airbtics curve. Before paying $0.60 for six per-comp metric calls, buy
+    # the whole-market curve for $0.11 (/markets/lookup $0.01 + occupancy $0.10).
+    # It is cheaper AND better sourced: the six comps are selected for quality
+    # and run above the market, which is the bias the occupancy anchor removes
+    # from the headline. Verified live on Gatlinburg: 12 monthly rows with
+    # p25-p90. Needs coordinates; falls through silently to the per-comp path.
+    market_occ: list[dict] = []
+    if (not seasonal_data and not args.skip_financials
+            and getattr(prop, "latitude", None) is not None
+            and getattr(prop, "longitude", None) is not None):
+        try:
+            mkt = await lookup_market(float(prop.latitude), float(prop.longitude))
+            market_occ = await get_market_occupancy(mkt)
+            covered = sum(1 for r in market_occ if isinstance(r, dict) and r.get("avg") is not None)
+            where = mkt.get("locality") or mkt.get("region") or "market"
+            print(f"[Seasonal] AirROI market curve for {where}: {covered}/12 months")
+            seasonal_data, seasonal_basis = derive_seasonal_data_with_basis(
+                rentalizer, comp_monthly_data=None,
+                airbtics_metrics=airbtics_metrics, market_occupancy=market_occ)
+            if seasonal_data and seasonal_basis == "market":
+                n = len(result["selected"])
+                print(f"[Seasonal] Market curve used — skipping {n} per-comp metric "
+                      f"calls (${0.10 * n:.2f} -> $0.11)")
+            else:
+                seasonal_data = []
+                print("[Seasonal] Market curve too thin — falling back to per-comp metrics")
+        except (AirROIError, httpx.HTTPError, asyncio.TimeoutError) as e:
+            print(f"[Seasonal] Market curve unavailable ({type(e).__name__}) — "
+                  "falling back to per-comp metrics", file=sys.stderr)
+            seasonal_data = []
 
     comp_monthly_data: list[list[float | None]] = []
     if not seasonal_data and not args.skip_financials and result["selected"]:

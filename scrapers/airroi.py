@@ -201,6 +201,87 @@ async def _get(
     return data
 
 
+async def _post(
+    endpoint: str,
+    body: dict,
+    client: Optional[httpx.AsyncClient] = None,
+) -> dict:
+    """POST to AirROI with auth header. Cached like _get: these cost money too.
+
+    The /markets/metrics/* family is POST-only and needs the market wrapped as
+    {"market": {...}} — sending the fields at the top level returns a 422 saying
+    "market must not be null", which reads like a missing-argument error rather
+    than a shape error.
+    """
+    config.ensure_airroi_configured()
+    headers = {"X-API-KEY": config.AIRROI_API_KEY, "Content-Type": "application/json"}
+    url = config.AIRROI_BASE_URL.rstrip("/") + endpoint
+
+    cached = _cache.get("airroi", endpoint, body)
+    if cached is not None:
+        return cached
+
+    async def _send(c: httpx.AsyncClient) -> dict:
+        resp = await c.post(url, json=body, headers=headers)
+        if resp.status_code >= 400:
+            try:
+                payload = resp.json()
+            except ValueError:
+                payload = {}
+            msg, detail = _extract_error(payload, resp.status_code)
+            raise AirROIError(resp.status_code, msg, detail)
+        return resp.json()
+
+    if client is None:
+        async with _new_client() as c:
+            data = await _send(c)
+    else:
+        data = await _send(client)
+
+    _cache.put("airroi", endpoint, body, data)
+    return data
+
+
+# ── Public: market-level metrics ─────────────────────────────────────
+
+async def lookup_market(
+    latitude: float,
+    longitude: float,
+    client: Optional[httpx.AsyncClient] = None,
+) -> dict:
+    """Resolve coordinates to AirROI's market identifiers. $0.01.
+
+    NOTE the parameter names: this endpoint wants `lat`/`lng`. Sending
+    `latitude`/`longitude` (which every OTHER endpoint uses) returns a 400
+    saying both params "must not be null".
+
+    Returns {country, region, locality, district}; country/region/locality are
+    all required by the /markets endpoints, district is the postal code.
+    """
+    return await _get("/markets/lookup", {"lat": latitude, "lng": longitude}, client=client)
+
+
+async def get_market_occupancy(
+    market: dict,
+    client: Optional[httpx.AsyncClient] = None,
+) -> list[dict]:
+    """Monthly market occupancy with percentiles. $0.10.
+
+    Replaces six per-listing /listings/metrics/all calls ($0.60) that existed
+    only to average a seasonality curve out of the selected comps. This is the
+    whole market rather than six listings chosen for quality, which is the same
+    correction the occupancy anchor makes to the headline.
+
+    Returns the `results` array: 12 rows of
+    {date: "YYYY-MM-01", avg, p25, p50, p75, p90}, occupancy as 0-1 fractions,
+    covering a TRAILING twelve months (not calendar Jan-Dec).
+    """
+    keep = {k: market.get(k) for k in ("country", "region", "locality", "district")}
+    keep = {k: v for k, v in keep.items() if v}
+    data = await _post("/markets/metrics/occupancy", {"market": keep}, client=client)
+    return (data or {}).get("results") or []
+
+
 def _location_params(
     *,
     latitude: Optional[float],

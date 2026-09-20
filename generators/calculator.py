@@ -255,6 +255,34 @@ def airbtics_to_seasonal(airbtics_metrics: list[dict]) -> list[float | None]:
     return out
 
 
+def market_occupancy_to_seasonal(results: list[dict]) -> list[float | None]:
+    """Convert AirROI /markets/metrics/occupancy rows to a 12-element calendar.
+
+    Rows carry `date` as "YYYY-MM-01" over a TRAILING twelve months, so they
+    must be mapped by calendar month, not by position. Occupancy arrives as a
+    0-1 fraction and is returned as a percentage to match every other seasonal
+    source. Uncovered months stay None; the caller decides, exactly as with
+    airbtics_to_seasonal.
+
+    `avg` is used rather than `p50`: the series it replaces was an average
+    across comps, and the chart is labelled "Occupancy %" for the market.
+    """
+    out: list[float | None] = [None] * 12
+    for row in results or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            mo = int(str(row.get("date") or "").split("-")[1]) - 1
+        except (ValueError, IndexError):
+            continue
+        if not (0 <= mo <= 11):
+            continue
+        v = row.get("avg")
+        if isinstance(v, (int, float)):
+            out[mo] = float(v) * 100 if float(v) <= 1 else float(v)
+    return out
+
+
 def _interpolate_gaps(series: list[float | None]) -> list[float] | None:
     """Fill isolated None months from their circular neighbours.
 
@@ -281,6 +309,7 @@ def derive_seasonal_data_with_basis(
     rentalizer: RentalizerData,
     comp_monthly_data: list[list[float | None]] | None = None,
     airbtics_metrics: list[dict] | None = None,
+    market_occupancy: list[dict] | None = None,
 ) -> tuple[list[float], str]:
     """Return (12 monthly occupancy values Jan-Dec, basis label).
 
@@ -310,7 +339,18 @@ def derive_seasonal_data_with_basis(
             if filled is not None:
                 return [min(v, SEASONAL_PEAK_CAP) for v in filled], "airbtics"
 
-    # Priority 2: per-comp AirROI monthly metrics (drops clipped values)
+    # Priority 2: AirROI market occupancy (one $0.10 call). Whole-market curve
+    # with percentiles, in place of averaging six comps that were selected for
+    # quality and sit above the market — the same bias the occupancy anchor
+    # removes from the headline. Same >=9 coverage bar as Airbtics.
+    if market_occupancy:
+        market_series = market_occupancy_to_seasonal(market_occupancy)
+        if sum(1 for v in market_series if v is not None) >= 9:
+            filled = _interpolate_gaps(market_series)
+            if filled is not None:
+                return [min(v, SEASONAL_PEAK_CAP) for v in filled], "market"
+
+    # Priority 3: per-comp AirROI monthly metrics (drops clipped values)
     if comp_monthly_data and any(any(v is not None for v in c) for c in comp_monthly_data):
         series = aggregate_seasonal_from_comps(comp_monthly_data)
         # Too many blank months to be a credible seasonal curve — fall through
@@ -340,12 +380,13 @@ def derive_seasonal_data(
     rentalizer: RentalizerData,
     comp_monthly_data: list[list[float | None]] | None = None,
     airbtics_metrics: list[dict] | None = None,
+    market_occupancy: list[dict] | None = None,
 ) -> list[float]:
     """Back-compat wrapper: the series only. Use the _with_basis form when the
     caller needs to know which source paid for the curve."""
     series, _ = derive_seasonal_data_with_basis(
         rentalizer, comp_monthly_data=comp_monthly_data,
-        airbtics_metrics=airbtics_metrics,
+        airbtics_metrics=airbtics_metrics, market_occupancy=market_occupancy,
     )
     return series
 
