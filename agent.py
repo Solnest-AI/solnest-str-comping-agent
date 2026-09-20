@@ -34,7 +34,6 @@ from schema import PropertyBasics, ReportData, RentalizerData
 from scrapers.airbnb import scrape_airbnb_listing
 from scrapers.airroi import (run_airroi_pipeline, get_listing, get_listing_metrics,
                              get_comparables, lookup_market, get_market_occupancy, AirROIError)
-from scrapers.airbtics import get_market_overlay
 from scrapers.property_search import scrape_listing_url, search_for_property, search_hero_image
 from adapters.airroi_to_comp import (
     map_batch_for_scorer, to_comp_property, subject_for_scorer,
@@ -44,7 +43,7 @@ from comp_scorer import rank_comps
 import comp_filters
 
 
-from generators.calculator import derive_calculator_defaults, derive_seasonal_data, derive_seasonal_data_with_basis, derive_season_labels, airbtics_to_seasonal, market_occupancy_band
+from generators.calculator import derive_calculator_defaults, derive_seasonal_data, derive_seasonal_data_with_basis, derive_season_labels, market_occupancy_band
 from generators.narratives import (
     generate_narratives, load_narratives_from_file, NarrativeFileError,
 )
@@ -697,28 +696,12 @@ Examples:
         implied_rev = rentalizer.adr * 365 * (rentalizer.occupancy_pct / 100)
         print(f"[Rentalizer] ADR: {prop.currency}{rentalizer.adr:.0f} / Occ: {rentalizer.occupancy_pct:.0f}% / Implied yr rev: {prop.currency}{implied_rev:,.0f}")
 
-    # Step 4: Airbtics overlay (optional)
-    print("\n--- Step 4: Airbtics market overlay (optional) ---")
-    # Pass coordinates so the precise coord lookup (Strategy 1) is reachable.
-    # Without them it was name-search-only, which is how "Destin" resolved to
-    # "Sandestin".
-    overlay = await get_market_overlay(
-        prop.market, latitude=prop.latitude, longitude=prop.longitude,
-    )
-    if overlay:
-        s = overlay.get("summary") or {}
-        print(f"[Airbtics] Market: {overlay['market'].get('name')}")
-        print(f"           Market avg occ: {s.get('occupancy')}% / ADR: ${s.get('average_daily_rate')} / {s.get('active_listings_count')} listings")
-        metrics = overlay.get("metrics") or []
-        if metrics and not rentalizer.monthly_occupancy:
-            # MUST map by the "month" key. Airbtics returns a TRAILING window
-            # (e.g. 2025-07 .. 2026-06), so slicing positionally and calling
-            # element 0 "January" rotates the whole seasonal curve by however
-            # many months into the year the window starts. Verified live:
-            # Gatlinburg's real July (83%) was being plotted as January.
-            rentalizer.monthly_occupancy = airbtics_to_seasonal(metrics)
-    else:
-        print(f"[Airbtics] No coverage for {prop.market!r} - skipping overlay.")
+    # Step 4 (Airbtics market overlay) REMOVED 2026-09-20. AirROI is now the
+    # single market-data source: two providers meant "the market" silently
+    # meant different things on different client reports, only the AirROI call
+    # carries the p25/p75 percentiles the chart shades as a band, and on a
+    # measured run Airbtics consumed 7.4s of an 11.7s report while supplying
+    # nothing the AirROI market call does not.
 
     # Step 5: Adapt comps + score
     print("\n--- Step 5: Adapter + scorer ---")
@@ -1073,23 +1056,7 @@ Examples:
     # derive_seasonal_data prioritises Airbtics over these. Fetching them first
     # and discarding them was 60% of the AirROI bill on every market Airbtics
     # covers. Try Airbtics first; only pay for per-comp metrics if it came up short.
-    airbtics_metrics = (overlay or {}).get("metrics") if overlay else None
-    seasonal_data, seasonal_basis = derive_seasonal_data_with_basis(
-        rentalizer, comp_monthly_data=None, airbtics_metrics=airbtics_metrics)
-
-    # ONLY an Airbtics-supplied curve justifies skipping the per-comp calls.
-    # A "subject" curve is one property's own history, which is not a market
-    # seasonality signal, and skipping on it both mislabels the source and
-    # suppresses the fallback that would have produced a real one.
-    if seasonal_data and seasonal_basis != "airbtics":
-        print(f"[Seasonal] Curve came from '{seasonal_basis}', not Airbtics — "
-              "still fetching per-comp metrics for a real market curve.")
-        seasonal_data = []
-    elif seasonal_data:
-        print("[Seasonal] Airbtics covered this market — skipping "
-              f"{len(result['selected'])} per-comp metric calls (saved ~${0.10 * len(result['selected']):.2f})")
-
-    # No Airbtics curve. Before paying $0.60 for six per-comp metric calls, buy
+    # Before paying $0.60 for six per-comp metric calls, buy
     # the whole-market curve for $0.11 (/markets/lookup $0.01 + occupancy $0.10).
     # It is cheaper AND better sourced: the six comps are selected for quality
     # and run above the market, which is the bias the occupancy anchor removes
@@ -1098,7 +1065,9 @@ Examples:
     market_occ: list[dict] = []
     seasonal_p25: list[float] = []
     seasonal_p75: list[float] = []
-    if (not seasonal_data and not args.skip_financials
+    seasonal_data: list[float] = []
+    seasonal_basis = ""
+    if (not args.skip_financials
             and getattr(prop, "latitude", None) is not None
             and getattr(prop, "longitude", None) is not None):
         try:
@@ -1109,7 +1078,7 @@ Examples:
             print(f"[Seasonal] AirROI market curve for {where}: {covered}/12 months")
             seasonal_data, seasonal_basis = derive_seasonal_data_with_basis(
                 rentalizer, comp_monthly_data=None,
-                airbtics_metrics=airbtics_metrics, market_occupancy=market_occ)
+                market_occupancy=market_occ)
             if seasonal_data and seasonal_basis == "market":
                 band = market_occupancy_band(market_occ)
                 seasonal_p25 = [v for v in band["p25"] if v is not None] and band["p25"] or []
@@ -1206,7 +1175,6 @@ Examples:
         seasonal_data = derive_seasonal_data(
             rentalizer,
             comp_monthly_data=comp_monthly_data,
-            airbtics_metrics=airbtics_metrics,
         )
 
     # Fallback: derive seasonal occupancy from AirROI's monthly revenue distributions
@@ -1230,9 +1198,10 @@ Examples:
         print("[Seasonal] Cannot deliver report without real seasonal data — exiting.")
         sys.exit(2)
 
-    source = ("Airbtics" if airbtics_metrics
-              else "AirROI per-comp average" if comp_monthly_data and any(any(v is not None for v in c) for c in comp_monthly_data)
-              else "AirROI revenue distribution")
+    source = {"market": "AirROI market curve (p50, with p25-p75 band)",
+              "comps": "AirROI per-comp average",
+              "subject": "this property's own monthly history"}.get(
+                  seasonal_basis, "AirROI revenue distribution")
     print(f"[Seasonal] Source: {source}")
     print(f"[Seasonal] Monthly occ: {[int(v) for v in seasonal_data]}")
 

@@ -93,7 +93,6 @@ cp branding.example.json branding.json    # then add your company
 |---|---|---|---|
 | `AIRROI_API_KEY` | **Required** | The comp data: listings, comparables, TTM performance, revenue estimates | https://www.airroi.com/api/developer/activate |
 | `FIRECRAWL_API_KEY` | Optional | Street-address and Zillow/Realtor input. Airbnb URLs work without it. | https://www.firecrawl.dev |
-| `AIRBTICS_API_KEY` | Optional | Market seasonality overlay. Without it, seasonality comes from AirROI's monthly distribution. | https://airbtics.com |
 | `GMAIL_ADDRESS` + `GMAIL_APP_PASSWORD` | Optional | `--email` delivery. Reports always save locally regardless. | https://myaccount.google.com/apppasswords |
 
 No Anthropic key. See the narrative handoff below.
@@ -190,7 +189,7 @@ str-comping-agent/
 ├── config.py              ← reads .env + branding.json
 ├── schema.py              ← typed data models
 │
-├── scrapers/              ← AirROI, Airbnb, Airbtics, property search
+├── scrapers/              ← AirROI, Airbnb, property search
 ├── adapters/              ← maps API payloads into the scorer's shape
 ├── validators/            ← sanity gates that block a bad report
 ├── generators/            ← calculator, narrative brief, narratives, methodology

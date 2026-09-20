@@ -20,8 +20,10 @@ second pass costs nothing and takes under a second, so always do it.
    setup instructions and exits; walk the user through `SETUP.md` rather than guessing.
 2. **`FIRECRAWL_API_KEY`** — optional, and only needed for a street address or a
    Zillow/Realtor link. An Airbnb URL resolves entirely through AirROI.
-3. **`AIRBTICS_API_KEY`** — optional. Adds a real market seasonality curve. Without it,
-   seasonality is derived from AirROI's monthly revenue distribution.
+3. **AirROI is the single market-data source.** Airbtics was removed 2026-09-20:
+   two providers meant "the market" meant different things on different client
+   reports, and only the AirROI market call carries the p25/p75 percentiles the
+   seasonality chart shades as a band.
 
 Never ask the user for a key value in chat. Point them at `python setup.py`.
 
@@ -100,8 +102,9 @@ Tell the user what actually happened, not just that it finished:
 
 - **How many comps survived filtering, and why any were dropped.** The run prints this.
   A report built on a heavily filtered pool is weaker and the user should know.
-- **The seasonality source.** Airbtics is the strongest; an AirROI revenue-distribution
-  fallback is weaker and worth naming.
+- **The seasonality source.** The AirROI market curve (p50 with a p25-p75 band) is
+  the normal path. A per-comp average or a revenue-distribution fallback is weaker
+  and worth naming.
 - **Anything the sanity gate flagged.**
 
 If Phase A blocks the run, do not try to force it through. It blocks because a comp is

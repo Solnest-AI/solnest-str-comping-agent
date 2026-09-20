@@ -42,7 +42,7 @@ what they unlock.
 |---|---|---|---|
 | `AIRROI_API_KEY` | **YES** | Everything. This is the comp data. | https://www.airroi.com/api/developer/activate |
 | `FIRECRAWL_API_KEY` | No | Address and Zillow/Realtor input. Airbnb URLs still work. | https://www.firecrawl.dev |
-| `AIRBTICS_API_KEY` | No | Nothing. Seasonality falls back to AirROI monthly data. | https://airbtics.com |
+
 | `GMAIL_ADDRESS` + `GMAIL_APP_PASSWORD` | No | `--email` delivery. Reports still save to `output/`. | https://myaccount.google.com/apppasswords |
 
 **There is no `ANTHROPIC_API_KEY` step.** If the user offers one, tell them it
@@ -206,7 +206,6 @@ Run `python agent.py --help` if a flag here disagrees with the code; the code wi
 | `scrapers/airroi.py` | Listings, comps, revenue estimates from AirROI |
 | `scrapers/property_search.py` | Firecrawl property scraper (address / listing URL) |
 | `scrapers/airbnb.py` | Airbnb listing scraper |
-| `scrapers/airbtics.py` | Optional market-level overlay |
 | `adapters/airroi_to_comp.py` | Maps AirROI payloads into the internal Comp model |
 | `comp_scorer.py` | Hard gates, scoring, ranking; picks the final comp set |
 | `generators/calculator.py` | Calculator defaults, seasonal data, season labels |

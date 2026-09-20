@@ -342,7 +342,6 @@ def _interpolate_gaps(series: list[float | None]) -> list[float] | None:
 def derive_seasonal_data_with_basis(
     rentalizer: RentalizerData,
     comp_monthly_data: list[list[float | None]] | None = None,
-    airbtics_metrics: list[dict] | None = None,
     market_occupancy: list[dict] | None = None,
 ) -> tuple[list[float], str]:
     """Return (12 monthly occupancy values Jan-Dec, basis label).
@@ -353,7 +352,7 @@ def derive_seasonal_data_with_basis(
     curve justifies skipping them, and only Airbtics may be named as the source.
 
     Priority order (most reliable first):
-      1. Airbtics monthly_metrics — clean, no clipping (when market is tracked)
+      1. AirROI market occupancy — whole market, with p25-p90 percentiles
       2. Per-comp AirROI monthly metrics, averaged with clipped values dropped
       3. Subject's own monthly data (already in rentalizer.monthly_occupancy)
 
@@ -361,22 +360,16 @@ def derive_seasonal_data_with_basis(
     list and lets the sanity gate block delivery. Reports must reflect actual
     market data, not generic seasonality assumptions.
     """
-    # Priority 1: Airbtics
-    if airbtics_metrics:
-        airbtics_series = airbtics_to_seasonal(airbtics_metrics)
-        covered = sum(1 for v in airbtics_series if v is not None)
-        if covered >= 9:
-            # Fill the occasional single-month gap from its neighbours rather
-            # than printing a zero. With more than 3 months missing we do not
-            # have a credible curve, so fall through to the next source.
-            filled = _interpolate_gaps(airbtics_series)
-            if filled is not None:
-                return [min(v, SEASONAL_PEAK_CAP) for v in filled], "airbtics"
-
-    # Priority 2: AirROI market occupancy (one $0.10 call). Whole-market curve
-    # with percentiles, in place of averaging six comps that were selected for
-    # quality and sit above the market — the same bias the occupancy anchor
-    # removes from the headline. Same >=9 coverage bar as Airbtics.
+    # Priority 1: AirROI market occupancy (one $0.10 call). AirROI is the SINGLE
+    # market-data source for this report (Ryan-stated 2026-09-20). Airbtics used
+    # to sit ahead of this and was removed: two providers meant "the market"
+    # silently meant different things on different client reports, and only the
+    # AirROI call carries the p25/p75 percentiles the chart shades as a band, so
+    # an Airbtics-sourced report lost the band without saying so.
+    #
+    # Fill the occasional single-month gap from its neighbours rather than
+    # printing a zero. With more than 3 months missing there is no credible
+    # curve, so fall through to the next source.
     if market_occupancy:
         market_series = market_occupancy_to_seasonal(market_occupancy)
         if sum(1 for v in market_series if v is not None) >= 9:
@@ -384,7 +377,7 @@ def derive_seasonal_data_with_basis(
             if filled is not None:
                 return [min(v, SEASONAL_PEAK_CAP) for v in filled], "market"
 
-    # Priority 3: per-comp AirROI monthly metrics (drops clipped values)
+    # Priority 2: per-comp AirROI monthly metrics (drops clipped values)
     if comp_monthly_data and any(any(v is not None for v in c) for c in comp_monthly_data):
         series = aggregate_seasonal_from_comps(comp_monthly_data)
         # Too many blank months to be a credible seasonal curve — fall through
@@ -413,14 +406,13 @@ def derive_seasonal_data_with_basis(
 def derive_seasonal_data(
     rentalizer: RentalizerData,
     comp_monthly_data: list[list[float | None]] | None = None,
-    airbtics_metrics: list[dict] | None = None,
     market_occupancy: list[dict] | None = None,
 ) -> list[float]:
     """Back-compat wrapper: the series only. Use the _with_basis form when the
     caller needs to know which source paid for the curve."""
     series, _ = derive_seasonal_data_with_basis(
         rentalizer, comp_monthly_data=comp_monthly_data,
-        airbtics_metrics=airbtics_metrics, market_occupancy=market_occupancy,
+        market_occupancy=market_occupancy,
     )
     return series
 

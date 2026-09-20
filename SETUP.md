@@ -30,7 +30,6 @@ one step at a time. You don't need to know Python.
 |---|---|---|---|
 | **AirROI** | **YES** | https://www.airroi.com/api/developer/activate | Free tier available |
 | Firecrawl | optional | https://www.firecrawl.dev | Free tier available |
-| Airbtics | optional | https://airbtics.com | Skip unless you have an account |
 | Gmail app password | optional | https://myaccount.google.com/apppasswords | Free |
 
 **There is no Anthropic key.** The report's written analysis is produced by
@@ -42,8 +41,6 @@ per-report API cost.
 - **Firecrawl.** Lets you pass a *street address* or a *Zillow/Realtor URL*.
   Without it, those inputs fail, but Airbnb URLs work fine because they resolve
   entirely through AirROI. Add it if you analyze off-market properties.
-- **Airbtics.** A market-level seasonality overlay. Without it, seasonality is
-  derived from AirROI's own monthly revenue distribution. Most people skip it.
 - **Gmail.** Only for `--email`. Reports always save to `output/` as HTML
   either way. Use an **app password**, never your account password.
 

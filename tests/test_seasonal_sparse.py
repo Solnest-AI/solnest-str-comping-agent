@@ -1,10 +1,17 @@
-"""Sparse-Airbtics seasonality: the crash, and the cost gate that hid it.
+"""Priority 3 must reject a series containing None, or it crashes the run.
 
-A market Airbtics tracks for fewer than 9 months was rejected by Priority 1 and
-then resurrected by Priority 3, because agent.py assigns
-rentalizer.monthly_occupancy = airbtics_to_seasonal(metrics) and that helper
-leaves uncovered months as None. min(None, CAP) raised TypeError and killed the
-run AFTER the AirROI calls were paid for.
+HISTORY. This guard was added after a real crash. agent.py used to assign
+rentalizer.monthly_occupancy = airbtics_to_seasonal(metrics) when the subject
+had no monthly data of its own, and that helper leaves uncovered months as None
+by design. A market tracked for fewer than 9 months was rejected by the Airbtics
+priority and then resurrected by Priority 3, where min(None, CAP) raised
+TypeError and killed the run AFTER the paid AirROI calls.
+
+Airbtics was removed from the pipeline entirely on 2026-09-20 (AirROI is now the
+single market-data source), so that specific route is gone. The guard stays and
+is still tested: any future caller that puts a partial series on
+rentalizer.monthly_occupancy would hit the same crash, and nothing in the type
+signature stops them.
 """
 import pytest
 
@@ -24,36 +31,33 @@ def _rent(monthly=None):
     return r
 
 
-def _metrics(months, occ=55.0):
-    return [{"month": f"2026-{m:02d}", "occupancy": occ} for m in months]
+def _partial(covered_months):
+    """A 12-slot series with only these calendar months populated."""
+    return [55.0 if (m + 1) in covered_months else None for m in range(12)]
 
 
-def test_sparse_airbtics_does_not_crash():
+def test_partial_subject_series_does_not_crash():
     """The regression. Five covered months used to raise TypeError."""
-    sparse = _metrics([5, 6, 7, 8, 9])
-    r = _rent(airbtics_to_seasonal(sparse))
-    series, basis = derive_seasonal_data_with_basis(r, airbtics_metrics=sparse)
+    series, basis = derive_seasonal_data_with_basis(_rent(_partial({5, 6, 7, 8, 9})))
     assert series == []          # nothing credible -> sanity gate blocks
     assert basis == ""
 
 
-def test_sparse_airbtics_never_fabricates_zero_months():
-    sparse = _metrics([5, 6, 7, 8, 9])
-    r = _rent(airbtics_to_seasonal(sparse))
-    series = derive_seasonal_data(r, airbtics_metrics=sparse)
+def test_partial_subject_series_never_fabricates_zero_months():
+    series = derive_seasonal_data(_rent(_partial({5, 6, 7, 8, 9})))
     assert 0.0 not in series     # a 0% month on a client chart reads as broken
 
 
-def test_full_airbtics_coverage_is_used_and_labelled():
-    full = _metrics(range(1, 13))
-    series, basis = derive_seasonal_data_with_basis(_rent(), airbtics_metrics=full)
-    assert len(series) == 12 and all(v > 0 for v in series)
-    assert basis == "airbtics"
+@pytest.mark.parametrize("covered", [0, 1, 4, 8, 11])
+def test_any_gap_at_all_rejects_the_subject_series(covered):
+    """Priority 3 demands a FULLY populated series. One missing month is enough
+    to reject it, because the cap comparison cannot handle a None."""
+    months = set(range(1, covered + 1))
+    series, basis = derive_seasonal_data_with_basis(_rent(_partial(months)))
+    assert series == [] and basis == ""
 
 
-def test_subject_own_curve_is_labelled_subject_not_airbtics():
-    """The cost gate keys off this. Mislabelling it as Airbtics both misreports
-    provenance and skips the per-comp calls that build a real market curve."""
+def test_complete_subject_series_is_accepted_and_labelled():
     series, basis = derive_seasonal_data_with_basis(_rent([40.0] * 12))
     assert basis == "subject"
     assert len(series) == 12
@@ -63,9 +67,11 @@ def test_backcompat_wrapper_still_returns_a_bare_list():
     assert isinstance(derive_seasonal_data(_rent([40.0] * 12)), list)
 
 
-@pytest.mark.parametrize("covered", [0, 1, 4, 8])
-def test_below_threshold_coverage_never_returns_a_curve(covered):
-    m = _metrics(range(1, covered + 1)) if covered else []
-    r = _rent(airbtics_to_seasonal(m))
-    series, basis = derive_seasonal_data_with_basis(r, airbtics_metrics=m)
-    assert series == [] and basis == ""
+def test_airbtics_helper_still_leaves_gaps_as_none():
+    """airbtics_to_seasonal is no longer wired into the pipeline, but it is kept
+    and tested: its None-for-missing-month contract is what the guard above
+    exists to survive, and re-introducing a provider must not quietly change it."""
+    sparse = [{"month": f"2026-{m:02d}", "occupancy": 55.0} for m in (5, 6, 7)]
+    out = airbtics_to_seasonal(sparse)
+    assert out.count(None) == 9
+    assert 0.0 not in out

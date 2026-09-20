@@ -74,11 +74,19 @@ def test_market_beats_the_per_comp_average():
     assert basis == "market"
 
 
-def test_airbtics_still_outranks_market():
-    full_airbtics = [{"month": f"2026-{m:02d}", "occupancy": 55.0} for m in range(1, 13)]
-    _, basis = derive_seasonal_data_with_basis(
-        _rent(), airbtics_metrics=full_airbtics, market_occupancy=_rows(range(1, 13), 0.4))
-    assert basis == "airbtics"
+def test_market_is_now_the_top_priority():
+    """Airbtics was removed 2026-09-20: AirROI is the single market-data source.
+    Two providers meant "the market" silently meant different things across
+    client reports, and only the AirROI call carries the p25/p75 percentiles the
+    chart shades as a band."""
+    import inspect
+    from generators import calculator
+    sig = inspect.signature(calculator.derive_seasonal_data_with_basis)
+    assert "airbtics_metrics" not in sig.parameters
+    r = _rent()
+    r.monthly_occupancy = [40.0] * 12
+    _, basis = derive_seasonal_data_with_basis(r, market_occupancy=_rows(range(1, 13), 0.4))
+    assert basis == "market"     # beats even a complete subject series
 
 
 @pytest.mark.parametrize("covered", [0, 3, 8])
