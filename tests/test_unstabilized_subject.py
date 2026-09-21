@@ -337,24 +337,36 @@ def test_rate_slider_discloses_that_card_adr_is_a_different_basis():
 def test_headline_potential_uses_p75_not_p90():
     """AirROI's percentiles are the spread of its MODEL'S PREDICTIONS, not of
     observed results. Measured against the 25 comps in the same response:
-    p25/p50/p75 land within 5% of what the pool actually did; p90 was 28% above
-    what the single best of 25 listings earned. p75 is the last percentile
-    still anchored to observed performance."""
-    import agent
+
+        percentile   pool actually did   AirROI predicted   gap
+        p25                 74,129             72,447        2%
+        p50                102,509            108,062        5%
+        p75                143,641            150,068        4%
+        p90                153,509            196,645       28%
+
+    p90 is where the tail leaves the data. p75 is the last percentile still
+    anchored to observed performance.
+    """
+    from agent import _build_rentalizer
     est = {
         "revenue": 123_852.41, "average_daily_rate": 860.53, "occupancy": 0.4254,
+        "currency": "CAD",
         "percentiles": {"revenue": {"avg": 123_852.41, "p25": 72_446.88,
                                     "p50": 108_061.87, "p75": 150_067.86,
                                     "p90": 196_645.17}},
     }
-    r = agent.build_rentalizer(est) if hasattr(agent, "build_rentalizer") else None
-    if r is None:
-        import re
-        src = open("agent.py").read()
-        assert 'rev_pct.get("p75")' in src
-        assert 'rev_pct.get("p90")' not in src, "p90 must not be the headline"
-        return
-    assert abs(r.revenue_potential - 150_067.86) < 1
+    r = _build_rentalizer(est, _prop(None))
+    assert abs(r.revenue_potential - 150_067.86) < 1.0, r.revenue_potential
+    assert r.revenue_potential < 196_645, "p90 is 17% above the best of 25 comps"
+
+
+def test_headline_potential_falls_back_when_percentiles_are_absent():
+    from agent import _build_rentalizer
+    r = _build_rentalizer(
+        {"revenue": 100_000.0, "average_daily_rate": 500.0, "occupancy": 0.5},
+        _prop(None),
+    )
+    assert r.revenue_potential > 100_000, "must still produce a ceiling"
 
 
 def test_brief_tells_the_writer_what_the_potential_actually_is():
