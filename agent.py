@@ -43,7 +43,9 @@ from comp_scorer import rank_comps
 import comp_filters
 
 
-from generators.calculator import derive_calculator_defaults, derive_seasonal_data, derive_seasonal_data_with_basis, derive_season_labels, market_occupancy_band
+from generators.calculator import (derive_calculator_defaults, derive_seasonal_data,
+                                   derive_seasonal_data_with_basis, derive_season_labels,
+                                   market_occupancy_band, market_months_missing)
 from generators.narratives import (
     generate_narratives, load_narratives_from_file, NarrativeFileError,
 )
@@ -428,13 +430,28 @@ def _build_rentalizer(estimate_data: dict, prop: PropertyBasics) -> RentalizerDa
 
     annual_rev = float(estimate_data.get("revenue") or 0)
 
-    # Revenue potential: use p90 percentile if available
+    # Revenue potential: p75, NOT p90.
+    #
+    # AirROI's `percentiles` block is the spread of its MODEL'S PREDICTIONS for
+    # this property profile, not the spread of observed results. Measured on Sun
+    # Peaks against the 25 comparable listings returned in the same response:
+    #
+    #     percentile   pool actually did   AirROI predicted   gap
+    #     p25                 74,129             72,447        2%
+    #     p50                102,509            108,062        5%
+    #     p75                143,641            150,068        4%
+    #     p90                153,509            196,645       28%
+    #
+    # p25 through p75 track the real pool. p90 is where the model's tail leaves
+    # the data behind: it claimed a ceiling 28% above what the single best of 25
+    # listings actually earned. p75 is the last percentile still anchored to
+    # observed performance, so it is the last one we can defend to a client.
     rev_potential = 0.0
     percentiles = estimate_data.get("percentiles") or {}
     if isinstance(percentiles, dict):
         rev_pct = percentiles.get("revenue") or {}
-        if isinstance(rev_pct, dict) and rev_pct.get("p90"):
-            rev_potential = float(rev_pct["p90"])
+        if isinstance(rev_pct, dict) and rev_pct.get("p75"):
+            rev_potential = float(rev_pct["p75"])
 
     if not rev_potential:
         rev_potential = annual_rev * 1.3 if annual_rev else 0.0
@@ -1072,6 +1089,7 @@ Examples:
     # and run above the market, which is the bias the occupancy anchor removes
     # from the headline. Verified live on Gatlinburg: 12 monthly rows with
     # p25-p90. Needs coordinates; falls through silently to the per-comp path.
+    missing_months = 0
     market_occ: list[dict] = []
     seasonal_p25: list[float] = []
     seasonal_p75: list[float] = []
@@ -1083,9 +1101,15 @@ Examples:
         try:
             mkt = await lookup_market(float(prop.latitude), float(prop.longitude))
             market_occ = await get_market_occupancy(mkt)
-            covered = sum(1 for r in market_occ if isinstance(r, dict) and r.get("avg") is not None)
+            # Count months with REAL data. A no-data month still arrives as a
+            # row, with every percentile identical, so counting rows reported
+            # 12/12 for a market that only reported 9.
+            missing_months = market_months_missing(market_occ)
+            covered = max(0, len(market_occ) - missing_months)
             where = mkt.get("locality") or mkt.get("region") or "market"
-            print(f"[Seasonal] AirROI market curve for {where}: {covered}/12 months")
+            print(f"[Seasonal] AirROI market curve for {where}: {covered}/12 months"
+                  + (f" ({missing_months} with no market data, filled from "
+                     f"adjacent months)" if missing_months else ""))
             seasonal_data, seasonal_basis = derive_seasonal_data_with_basis(
                 rentalizer, comp_monthly_data=None,
                 market_occupancy=market_occ)
@@ -1277,6 +1301,7 @@ Examples:
     methodology = build_methodology(
         prop, comps, peak_label, shoulder_label, calculator=calculator,
         comp_funnel=comp_funnel,
+        market_months_missing=missing_months,
     )
 
     print("\n--- Step 10: Rendering HTML report (to staging) ---")

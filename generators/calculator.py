@@ -39,13 +39,21 @@ MIN_SUBJECT_MONTHS_FOR_STEP_UP = 2
 # p75/p90, almost always 0.0. Three of Sun Peaks' twelve months look like
 # this. Averaging them in drags the market baseline down by a third.
 def market_has_data(row: dict) -> bool:
-    """False when a market-occupancy row is AirROI's no-data sentinel."""
+    """False only when a row is positively identifiable as the no-data sentinel.
+
+    The sentinel is IDENTICAL percentiles, not MISSING ones. An earlier version
+    of this required all five keys to be present and rejected any partial row,
+    which silently blanked every legitimately sparse market. When fewer than two
+    numeric percentiles are present there is nothing to compare, so the row is
+    passed through and the ordinary `is not None` handling downstream decides.
+    """
     if not isinstance(row, dict):
         return False
-    vals = [row.get(k) for k in ("avg", "p25", "p50", "p75", "p90")]
-    if any(not isinstance(v, (int, float)) for v in vals):
-        return False
-    return len({float(v) for v in vals}) > 1
+    nums = [float(v) for v in (row.get(k) for k in ("avg", "p25", "p50", "p75", "p90"))
+            if isinstance(v, (int, float))]
+    if len(nums) < 2:
+        return True
+    return len(set(nums)) > 1
 
 
 def _market_level(results: list[dict] | None, key: str) -> float | None:
@@ -396,6 +404,13 @@ def market_occupancy_to_seasonal(results: list[dict]) -> list[float | None]:
     for row in results or []:
         if not isinstance(row, dict):
             continue
+        # A no-data month arrives as a real row of zeros, not as an absent one.
+        # Left in, it draws a 0% shoulder season that an owner reads as "nobody
+        # books here in October". Treated as the gap it is, _interpolate_gaps
+        # fills it from its neighbours, which is what the gap handling below was
+        # always for.
+        if not market_has_data(row):
+            continue
         try:
             mo = int(str(row.get("date") or "").split("-")[1]) - 1
         except (ValueError, IndexError):
@@ -425,6 +440,8 @@ def market_occupancy_band(results: list[dict]) -> dict[str, list[float | None]]:
     for row in results or []:
         if not isinstance(row, dict):
             continue
+        if not market_has_data(row):
+            continue
         try:
             mo = int(str(row.get("date") or "").split("-")[1]) - 1
         except (ValueError, IndexError):
@@ -435,7 +452,19 @@ def market_occupancy_band(results: list[dict]) -> dict[str, list[float | None]]:
             v = row.get(key)
             if isinstance(v, (int, float)):
                 out[key][mo] = float(v) * 100 if float(v) <= 1 else float(v)
+    # Interpolate the band over the same gaps the median line fills, or the
+    # shading collapses to the axis for those months while the line above it
+    # runs at a sensible level.
+    for key in ("p25", "p50", "p75"):
+        filled = _interpolate_gaps(out[key])
+        if filled is not None:
+            out[key] = list(filled)
     return out
+
+
+def market_months_missing(results: list[dict] | None) -> int:
+    """How many of the twelve months the market reported nothing for."""
+    return sum(1 for r in (results or []) if not market_has_data(r))
 
 
 def _interpolate_gaps(series: list[float | None]) -> list[float] | None:

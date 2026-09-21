@@ -93,6 +93,7 @@ def build_methodology(
     shoulder_label: str = "",
     calculator: CalculatorDefaults | None = None,
     comp_funnel: dict | None = None,
+    market_months_missing: int = 0,
 ) -> MethodologyData:
     tol = _bed_tolerance(prop.bedrooms)
     bed_low = max(0, prop.bedrooms - tol)
@@ -154,6 +155,17 @@ def build_methodology(
     if funnel_line:
         criteria.append(funnel_line)
 
+    # AirROI reports a month with no market activity as a row of zeros. Those
+    # points are filled from their neighbours so the chart does not draw a false
+    # 0% shoulder season, which means they are modelled and must say so.
+    interpolation_note = []
+    if market_months_missing:
+        interpolation_note.append(
+            f"<strong>Interpolated months:</strong> {market_months_missing} of 12 "
+            f"months had no reported market activity; those points on the "
+            f"seasonality chart are filled from the adjacent months, not measured"
+        )
+
     return MethodologyData(
         comp_criteria=criteria,
         data_sources=[
@@ -163,6 +175,7 @@ def build_methodology(
              f"every listing in the market, not the six shown"),
             "<strong>Airbnb:</strong> Live listing data and guest reviews",
             "<strong>Comp Analysis:</strong> 6-category weighted comparable scoring",
+            *interpolation_note,
         ],
         assumptions=[
             _occupancy_assumption(prop, calculator),

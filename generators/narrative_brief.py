@@ -367,8 +367,13 @@ def build_narrative_brief(
         },
         "revenue_estimate": {
             "_note": (
-                "AirROI's estimate for the subject. revenue_potential is "
-                "fee-inclusive; adr is fee-exclusive; occupancy_pct is adjusted."
+                "AirROI's estimate for the subject. revenue_potential is the "
+                "75th percentile of AirROI's prediction range for a property of "
+                "this profile in this market, fee-inclusive. It is an upper "
+                "estimate, not a forecast and not a measured result: describe it "
+                "as what a strong operator could reach, never as what this "
+                "property earns or will earn. adr is fee-exclusive; "
+                "occupancy_pct is adjusted."
             ),
             "revenue_potential": _round(rentalizer.revenue_potential, 0),
             "adr": _round(rentalizer.adr, 0),

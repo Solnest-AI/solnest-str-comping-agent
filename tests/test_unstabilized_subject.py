@@ -330,3 +330,95 @@ def test_rate_slider_discloses_that_card_adr_is_a_different_basis():
     calc = _defaults(sp, CABIN_MONTHLY)
     assert "fees included" in calc.adr_range_text
     assert "excludes fees" in calc.adr_range_text
+
+
+# ── the headline potential: p75, not p90 ──
+
+def test_headline_potential_uses_p75_not_p90():
+    """AirROI's percentiles are the spread of its MODEL'S PREDICTIONS, not of
+    observed results. Measured against the 25 comps in the same response:
+    p25/p50/p75 land within 5% of what the pool actually did; p90 was 28% above
+    what the single best of 25 listings earned. p75 is the last percentile
+    still anchored to observed performance."""
+    import agent
+    est = {
+        "revenue": 123_852.41, "average_daily_rate": 860.53, "occupancy": 0.4254,
+        "percentiles": {"revenue": {"avg": 123_852.41, "p25": 72_446.88,
+                                    "p50": 108_061.87, "p75": 150_067.86,
+                                    "p90": 196_645.17}},
+    }
+    r = agent.build_rentalizer(est) if hasattr(agent, "build_rentalizer") else None
+    if r is None:
+        import re
+        src = open("agent.py").read()
+        assert 'rev_pct.get("p75")' in src
+        assert 'rev_pct.get("p90")' not in src, "p90 must not be the headline"
+        return
+    assert abs(r.revenue_potential - 150_067.86) < 1
+
+
+def test_brief_tells_the_writer_what_the_potential_actually_is():
+    """The narrative rules say every figure must come from the brief, so the
+    brief licenses whatever it carries. It must not hand over a ceiling
+    unlabelled."""
+    src = open("generators/narrative_brief.py").read()
+    assert "75th percentile" in src
+    assert "not a forecast" in src
+
+
+# ── the seasonality chart's fabricated months ──
+
+def test_sentinel_months_are_not_plotted_as_real_occupancy():
+    from generators.calculator import market_occupancy_to_seasonal
+    series = market_occupancy_to_seasonal(SUNPEAKS)
+    assert series[8] is None, "Sep 2025 reported no data and was drawn as 0%"
+    assert series[10] is None, "Nov 2025 reported no data and was drawn as 0%"
+    assert series[9] is None, "Oct 2025 reported no data and was drawn as 10%"
+    assert series[11] == 39.0, "Dec is real and must survive"
+
+
+def test_the_band_is_interpolated_over_the_gap_not_collapsed():
+    from generators.calculator import market_occupancy_band
+    band = market_occupancy_band(SUNPEAKS)
+    for key in ("p25", "p50", "p75"):
+        assert all(v is not None for v in band[key]), key
+        assert band[key][8] > 0, f"{key} Sep collapsed to the axis"
+    # ordering must survive independent interpolation
+    for i in range(12):
+        assert band["p25"][i] <= band["p50"][i] <= band["p75"][i], i
+
+
+def test_partial_rows_are_not_mistaken_for_no_data():
+    """The sentinel is IDENTICAL percentiles, not MISSING ones. Requiring all
+    five keys blanked every legitimately sparse market; caught by
+    tests/test_market_seasonality.py."""
+    assert market_has_data({"date": "2026-01-01", "p50": 0.44})
+    assert market_has_data({"date": "2026-01-01", "avg": 0.71})
+    assert not market_has_data(
+        {"date": "2025-09-01", "avg": 0.0, "p25": 0.0, "p50": 0.0,
+         "p75": 0.0, "p90": 0.0})
+
+
+def test_market_months_missing_counts_the_sentinel_rows():
+    from generators.calculator import market_months_missing
+    assert market_months_missing(SUNPEAKS) == 3
+    assert market_months_missing([]) == 0
+
+
+def test_interpolated_months_are_disclosed():
+    from generators.methodology import build_methodology
+    sp = CABIN.model_copy(update={"months_with_data": 3})
+    m = build_methodology(_prop(sp), _comps(),
+                          calculator=_defaults(sp, CABIN_MONTHLY),
+                          market_months_missing=3)
+    blob = " ".join(m.data_sources)
+    assert "3 of 12" in blob and "not measured" in blob
+
+
+def test_no_interpolation_note_when_nothing_was_interpolated():
+    from generators.methodology import build_methodology
+    sp = CABIN.model_copy(update={"months_with_data": 12})
+    m = build_methodology(_prop(sp), _comps(),
+                          calculator=_defaults(sp, None),
+                          market_months_missing=0)
+    assert not any("Interpolated" in d for d in m.data_sources)
