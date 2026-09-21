@@ -62,12 +62,37 @@ def _occupancy_assumption(
     )
 
 
+def _comp_funnel_line(funnel: dict | None) -> str:
+    """One line describing how many candidates became the delivered six."""
+    if not funnel:
+        return ""
+    total = funnel.get("candidates") or 0
+    selected = funnel.get("selected") or 0
+    if not total or not selected:
+        return ""
+    parts: list[str] = []
+    if funnel.get("subject_removed"):
+        parts.append("the subject itself removed")
+    if funnel.get("filtered_out"):
+        n = funnel["filtered_out"]
+        parts.append(f"{n} dropped for missing a required feature or location fit")
+    if funnel.get("hard_fails"):
+        n = funnel["hard_fails"]
+        parts.append(f"{n} failed the activity and history gates")
+    tail = f" ({'; '.join(parts)})" if parts else ""
+    widened = (" A wider second search was needed to reach six, so some come "
+               "from beyond the radius above." if funnel.get("widened") else "")
+    return (f"{total} candidate listings considered, {selected} selected{tail}."
+            f"{widened}")
+
+
 def build_methodology(
     prop: PropertyBasics,
     comps: list[CompProperty],
     peak_label: str = "",
     shoulder_label: str = "",
     calculator: CalculatorDefaults | None = None,
+    comp_funnel: dict | None = None,
 ) -> MethodologyData:
     tol = _bed_tolerance(prop.bedrooms)
     bed_low = max(0, prop.bedrooms - tol)
@@ -121,6 +146,13 @@ def build_methodology(
         "<strong>Amenity Premium:</strong> Differentiating features vs the comp set",
         "<strong>Location Premium:</strong> Proximity and setting",
     ]
+
+    # How the six were arrived at, not just what they had to satisfy. A reader
+    # who can see 25 went in and 6 came out can judge how selective the set is;
+    # criteria alone read as if six were all that existed.
+    funnel_line = _comp_funnel_line(comp_funnel)
+    if funnel_line:
+        criteria.append(funnel_line)
 
     return MethodologyData(
         comp_criteria=criteria,

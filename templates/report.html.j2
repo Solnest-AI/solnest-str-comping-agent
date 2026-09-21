@@ -836,7 +836,7 @@
             </div>
           </div>
           <div class="text-xs" style="color:var(--sol-muted);">
-            Industry range: {{ calculator.occ_range_text }}
+            Scenario range: {{ calculator.occ_range_text }}
           </div>
         </div>
 
@@ -991,6 +991,12 @@
             These listings represent <strong>top-performing premium homes</strong> in {{ property.market }}. They are the best available performance anchors,
             but the subject's caliber is above typical inventory — treat results as a benchmark range, with execution quality as the primary driver.
           </p>
+          <p class="text-xs leading-relaxed mt-2" style="color:var(--sol-muted);">
+            <strong>Annual Revenue</strong> is each listing's measured trailing-12-month result, fees included.
+            <strong>Modelled Potential</strong> is a calculated ceiling, not an observed result.
+            <strong>ADR</strong> excludes cleaning and guest fees, so it is a different basis from the
+            calculator's rate above. Occupancy is against each listing's own open nights.
+          </p>
         </div>
         <span class="airroi-pill">✓ AirROI Verified</span>
       </div>
@@ -1018,7 +1024,7 @@
               {% endfor %}
             </div>
             <div class="metric-grid">
-              <div class="metric"><div class="k">Revenue Potential</div><div class="v">{{ comp.revenue_potential | format_currency_k(property.currency) }}</div></div>
+              <div class="metric"><div class="k">Modelled Potential</div><div class="v">{{ comp.revenue_potential | format_currency_k(property.currency) }}</div></div>
               <div class="metric"><div class="k">Annual Revenue</div><div class="v">{{ comp.annual_revenue | format_currency_k(property.currency) }}</div></div>
               <div class="metric"><div class="k">Occupancy</div><div class="v">{{ comp.occupancy_pct | int }}%</div></div>
               <div class="metric"><div class="k">ADR</div><div class="v">{{ comp.adr | format_currency(property.currency) }}</div></div>

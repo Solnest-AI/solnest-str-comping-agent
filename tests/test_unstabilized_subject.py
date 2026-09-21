@@ -279,3 +279,54 @@ def test_methodology_market_typical_basis_is_described():
     assumption = m.assumptions[0].lower()
     assert "median occupancy" in assumption
     assert "six comparables shown" not in assumption
+
+
+# ── disclosure fixes taken from reading Codex's hand-written report ──
+
+def test_comp_funnel_line_reports_the_whole_funnel():
+    from generators.methodology import _comp_funnel_line
+    line = _comp_funnel_line({
+        "candidates": 25, "subject_removed": 1, "filtered_out": 1,
+        "hard_fails": 4, "selected": 6,
+    })
+    assert "25 candidate listings considered, 6 selected" in line
+    assert "the subject itself removed" in line
+    assert "1 dropped" in line
+    assert "4 failed the activity and history gates" in line
+
+
+def test_comp_funnel_line_says_when_the_radius_was_widened():
+    from generators.methodology import _comp_funnel_line
+    line = _comp_funnel_line({
+        "candidates": 12, "subject_removed": 1, "filtered_out": 0,
+        "hard_fails": 3, "selected": 6, "widened": True,
+    })
+    assert "wider second search" in line, (
+        "a widened set no longer matches the radius the criteria claim"
+    )
+
+
+def test_comp_funnel_line_is_empty_when_there_is_nothing_to_say():
+    from generators.methodology import _comp_funnel_line
+    assert _comp_funnel_line(None) == ""
+    assert _comp_funnel_line({}) == ""
+    assert _comp_funnel_line({"candidates": 0, "selected": 6}) == ""
+
+
+def test_slider_text_separates_our_bounds_from_observed_results():
+    """'Industry range: 10-90% for premium properties' claimed industry data
+    for a number that was the anchor padded out. No source was consulted."""
+    sp = CABIN.model_copy(update={"months_with_data": 3})
+    calc = _defaults(sp, CABIN_MONTHLY)
+    assert "industry" not in calc.occ_range_text.lower()
+    assert "adjustable" in calc.occ_range_text
+    assert "comps observed" in calc.occ_range_text
+
+
+def test_rate_slider_discloses_that_card_adr_is_a_different_basis():
+    """The slider is revenue per booked night (fees IN); the card ADR excludes
+    fees. Showing both without saying so invites the reader to compare them."""
+    sp = CABIN.model_copy(update={"months_with_data": 3})
+    calc = _defaults(sp, CABIN_MONTHLY)
+    assert "fees included" in calc.adr_range_text
+    assert "excludes fees" in calc.adr_range_text

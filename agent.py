@@ -742,6 +742,8 @@ Examples:
                 continue
         filtered.append(c)
     candidates_raw = filtered
+    _funnel_candidates = before
+    _funnel_subject_removed = before - len(candidates_raw)
     if len(candidates_raw) < before:
         print(f"[Scorer] Filtered subject's own listing out of comp pool ({before} -> {len(candidates_raw)})")
 
@@ -777,6 +779,7 @@ Examples:
         print(f"[Filters] Subject requires: {', '.join(required_features)}")
 
     before_filters = len(candidates_raw)
+    _funnel_before_filters = before_filters
     candidates_raw, filter_report = comp_filters.apply_comp_filters(
         candidates_raw, drop_on_water=drop_on_water,
         required_features=required_features,
@@ -911,6 +914,13 @@ Examples:
 
         result["selected"] = live_selected
 
+    comp_funnel = {
+        "candidates":      _funnel_candidates,
+        "subject_removed": _funnel_subject_removed,
+        "filtered_out":    max(0, _funnel_before_filters - len(mapped)),
+        "hard_fails":      len(result["hard_fails"]),
+        "selected":        len(result["selected"]),
+    }
     print(f"[Scorer] Candidates: {len(mapped)} / Hard fails: {len(result['hard_fails'])} / Passing: {len(result['ranked'])}")
     print(f"[Scorer] Score range: {result['score_range']}")
 
@@ -999,6 +1009,11 @@ Examples:
 
         if len(result["selected"]) < 6:
             print(f"[Widening] Still only {len(result['selected'])} comps after widening — proceeding with what we have")
+        # The widening pass pulls from a second, larger query, so the funnel
+        # above no longer describes where the delivered set came from. Say so
+        # rather than printing a tally that does not add up.
+        comp_funnel["widened"] = True
+        comp_funnel["selected"] = len(result["selected"])
 
     comps = [to_comp_property(c) for c in result["selected"]]
 
@@ -1261,6 +1276,7 @@ Examples:
     # Step 10: Methodology + final report
     methodology = build_methodology(
         prop, comps, peak_label, shoulder_label, calculator=calculator,
+        comp_funnel=comp_funnel,
     )
 
     print("\n--- Step 10: Rendering HTML report (to staging) ---")

@@ -264,10 +264,18 @@ def derive_calculator_defaults(
     days_min = max(100, _round_down(min(min(comp_days), days_default), 5))
     days_default = max(days_min, min(365, days_default))
 
-    occ_range_text = f"{occ_min}-{occ_max}% for premium {prop.market} properties"
+    # Say what the sliders' bounds ARE (an adjustable range we chose) and what
+    # the comps actually DID (an observation), separately. "Industry range: 10-90%
+    # for premium properties" implied both were market data and neither was: the
+    # bounds are the anchor padded out, and no industry source was consulted.
+    occ_range_text = (
+        f"{occ_min}-{occ_max}% adjustable; the six comps observed "
+        f"{int(round(min(occ_values)))}-{int(round(max(occ_values)))}%"
+    )
     adr_range_text = (
         f"{prop.currency}{int(min(adr_values)):,} - "
-        f"{prop.currency}{int(max(adr_values)):,} based on market data"
+        f"{prop.currency}{int(max(adr_values)):,} per booked night across the six "
+        f"comps, fees included; the ADR on each card excludes fees"
     )
 
     return CalculatorDefaults(
