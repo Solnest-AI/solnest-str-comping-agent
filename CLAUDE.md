@@ -236,6 +236,35 @@ produces a confidently wrong report:
   never substring. "Pool" is a substring of "Pool table" and "Pool view";
   "fire" is a substring of "Fire extinguisher".
 
+These four came from the 2026-09-20 pass. They cost real time to find:
+
+- **`percentiles` on `/calculator/estimate` is the spread of AirROI's MODEL
+  PREDICTIONS, not of observed results.** Measured against the 25 comparables
+  in the same response: p25/p50/p75 land within 5% of what the pool actually
+  did, p90 was 28% above what the single best of 25 listings earned. The
+  headline uses **p75**. Never p90, and never describe any of them as measured.
+- **A month with no market activity comes back as a row of zeros, not as an
+  absent row.** `/markets/metrics/occupancy` returns the SAME value for
+  avg/p25/p50/p75/p90 when it has nothing. Three of Sun Peaks' twelve months
+  look like that. `generators/calculator.market_has_data()` is the detector.
+  The sentinel is IDENTICAL percentiles, not MISSING ones: a row carrying only
+  `p50` is a sparse market, not a dead one, and rejecting it blanks the chart.
+- **`ttm_occupancy` is computed over the full 365-day window whether or not the
+  listing existed for it.** A listing live three months reports roughly a
+  quarter of its real pace, with the pre-launch period counted as blocked
+  inventory. `SubjectPerformance.is_stabilized` gates this; `has_history` is a
+  much lower bar and only decides whether to DISPLAY the trailing numbers.
+  Never anchor a projection to an unstabilized subject.
+- **`ttm_revpar` and `ttm_adjusted_revpar` reconcile to neither `revenue/365`
+  nor `revenue/nights_listed`** (measured ratios 0.80-0.97 across the Sun Peaks
+  pool). Their definition is not one this code can state, so nothing uses them.
+  `CompProperty.revenue_per_listed_night` is computed locally instead.
+
+Market endpoints accept only `usd` or `native` for `currency` and 422 on
+`cad`; `/price-recommendation/*` accepts `cad` fine. The full OpenAPI spec is
+at `https://www.airroi.com/openapi.json` (24 endpoints); the docs site does not
+link it and `/api/openapi.json` 404s.
+
 ---
 
 ## Troubleshooting
