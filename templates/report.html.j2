@@ -992,8 +992,10 @@
             but the subject's caliber is above typical inventory — treat results as a benchmark range, with execution quality as the primary driver.
           </p>
           <p class="text-xs leading-relaxed mt-2" style="color:var(--sol-muted);">
-            <strong>Annual Revenue</strong> is each listing's measured trailing-12-month result, fees included.
-            <strong>Modelled Potential</strong> is a calculated ceiling, not an observed result.
+            Every figure on these cards is measured, not modelled.
+            <strong>Annual Revenue</strong> is the trailing-12-month result, fees included.
+            <strong>Rev / Listed Night</strong> is that revenue divided by the nights the listing was open,
+            which is how to compare a home open 187 nights against one open 365.
             <strong>ADR</strong> excludes cleaning and guest fees, so it is a different basis from the
             calculator's rate above. Occupancy is against each listing's own open nights.
           </p>
@@ -1024,7 +1026,7 @@
               {% endfor %}
             </div>
             <div class="metric-grid">
-              <div class="metric"><div class="k">Modelled Potential</div><div class="v">{{ comp.revenue_potential | format_currency_k(property.currency) }}</div></div>
+              <div class="metric"><div class="k">Rev / Listed Night</div><div class="v">{{ comp.revenue_per_listed_night | format_currency(property.currency) }}</div></div>
               <div class="metric"><div class="k">Annual Revenue</div><div class="v">{{ comp.annual_revenue | format_currency_k(property.currency) }}</div></div>
               <div class="metric"><div class="k">Occupancy</div><div class="v">{{ comp.occupancy_pct | int }}%</div></div>
               <div class="metric"><div class="k">ADR</div><div class="v">{{ comp.adr | format_currency(property.currency) }}</div></div>

@@ -434,3 +434,45 @@ def test_no_interpolation_note_when_nothing_was_interpolated():
                           calculator=_defaults(sp, None),
                           market_months_missing=0)
     assert not any("Interpolated" in d for d in m.data_sources)
+
+
+# ── comp cards publish measured numbers only ──
+
+def test_revenue_per_listed_night_normalises_open_inventory():
+    """MORRISEY (187 open nights) and West Pine (365) finish the year within
+    12% of each other. Only per-listed-night shows why."""
+    from schema import CompProperty
+    def c(rev, listed):
+        return CompProperty(name="x", sleeps=10, bedrooms=4, bathrooms=3.0,
+                            annual_revenue=rev, nights_listed=listed)
+    morrisey = c(148_357, 187)
+    westpine = c(168_684, 365)
+    assert round(morrisey.revenue_per_listed_night) == 793
+    assert round(westpine.revenue_per_listed_night) == 462
+    assert abs(westpine.annual_revenue - morrisey.annual_revenue) / morrisey.annual_revenue < 0.15
+    assert morrisey.revenue_per_listed_night > westpine.revenue_per_listed_night * 1.5
+
+
+def test_revenue_per_listed_night_survives_zero_inventory():
+    from schema import CompProperty
+    c = CompProperty(name="x", sleeps=10, bedrooms=4, bathrooms=3.0,
+                     annual_revenue=100_000, nights_listed=0)
+    assert c.revenue_per_listed_night == 0.0
+
+
+def test_the_card_no_longer_publishes_a_modelled_ceiling():
+    """4 of 6 Sun Peaks cards printed annual_revenue x 1.02 under a label that
+    read as a finding. The field is still computed for the scorer; it is just
+    not shown."""
+    tpl = open("templates/report.html.j2").read()
+    assert "comp.revenue_potential" not in tpl
+    assert "Modelled Potential" not in tpl
+    assert "comp.revenue_per_listed_night" in tpl
+
+
+def test_revenue_potential_is_still_computed_for_the_scorer():
+    """Removing it from the card must not remove the efficiency signal."""
+    import comp_scorer
+    src = open("comp_scorer.py").read()
+    assert "comp_revenue_potential" in src
+    assert hasattr(comp_scorer, "score_comp") or "revenue_potential" in src

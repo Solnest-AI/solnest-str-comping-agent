@@ -144,6 +144,12 @@ class CompProperty(BaseModel):
     review_count: int = 0
     feature_badges: list[str] = Field(default_factory=list)       # ["Ski-in/Out", "Views"]
     badge_emojis: list[str] = Field(default_factory=list)         # ["🏔️", "👁️"]
+    # Still computed, and still used by comp_scorer's efficiency signal, but
+    # NOT printed on a comp card any more. On the Sun Peaks set 4 of 6
+    # resolved to the comp's own annual_revenue x 1.02: a comp at or above
+    # the pool's p75 gets its own occupancy as its ceiling, and the floor
+    # rounds the rest up. Publishing that as "potential" presented
+    # arithmetic as a finding.
     revenue_potential: float = 0                                  # fee-inclusive ceiling
     annual_revenue: float = 0                                     # fee-inclusive (ttm_revenue)
     occupancy_pct: float = 0                                      # ADJUSTED: booked / open nights
@@ -167,6 +173,25 @@ class CompProperty(BaseModel):
     longitude: Optional[float] = None
     rescued: bool = False                                         # admitted via rescue pass
     airbnb_url: str = ""
+
+    @property
+    def revenue_per_listed_night(self) -> float:
+        """Fee-inclusive revenue per night the listing was OPEN for booking.
+
+        The only way to compare listings whose open inventory differs. MORRISEY
+        earns CA$793 per listed night across 187 nights; West Pine earns CA$462
+        across 365. They finish the year within 12% of each other and the card
+        could not show why without this.
+
+        Computed here rather than read from AirROI's `ttm_revpar` /
+        `ttm_adjusted_revpar`, which reconcile to neither revenue/365 nor
+        revenue/listed: measured ratios ran 0.80-0.97 across the Sun Peaks pool,
+        so their definition is not one this code can state. Both inputs below
+        are fields this codebase pins down exactly.
+        """
+        if not self.nights_listed:
+            return 0.0
+        return self.annual_revenue / self.nights_listed
 
 
 class CalculatorDefaults(BaseModel):
