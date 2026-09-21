@@ -240,3 +240,42 @@ def test_beats_market_median_needs_real_overlap():
     one = [None] * 12
     one[6] = 90.0
     assert not _beats_market_median(one, SUNPEAKS), "one month is not evidence"
+
+
+# ── the methodology section must not contradict the report above it ──
+
+def test_methodology_never_claims_airbtics():
+    """Airbtics was removed from the pipeline. The report kept citing it as a
+    live data source, which is a false statement to a client."""
+    from generators.methodology import build_methodology
+    sp = CABIN.model_copy(update={"months_with_data": 3})
+    m = build_methodology(_prop(sp), _comps(), calculator=_defaults(sp, CABIN_MONTHLY))
+    blob = " ".join(m.data_sources).lower()
+    assert "airbtics" not in blob
+    assert "tourism trends" not in blob, "names research nobody performs"
+
+
+def test_methodology_occupancy_assumption_matches_the_actual_basis():
+    """It used to fall through to 'median of the six comparables shown' for any
+    basis it did not know, contradicting the disclosure three sections above."""
+    from generators.methodology import build_methodology
+    sp = CABIN.model_copy(update={"months_with_data": 3})
+    calc = _defaults(sp, CABIN_MONTHLY)
+    assert calc.occ_basis == "market_strong"
+    m = build_methodology(_prop(sp), _comps(), calculator=calc)
+    assumption = m.assumptions[0].lower()
+    assert "upper-quartile" in assumption
+    assert "six comparables shown" not in assumption
+
+
+def test_methodology_market_typical_basis_is_described():
+    from generators.methodology import build_methodology
+    sp = CABIN.model_copy(update={"months_with_data": 3})
+    weak = [None] * 12
+    weak[5], weak[6], weak[7] = 8.0, 9.0, 7.0
+    calc = _defaults(sp, weak)
+    assert calc.occ_basis == "market_typical"
+    m = build_methodology(_prop(sp), _comps(), calculator=calc)
+    assumption = m.assumptions[0].lower()
+    assert "median occupancy" in assumption
+    assert "six comparables shown" not in assumption

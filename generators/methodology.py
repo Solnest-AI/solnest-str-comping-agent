@@ -35,6 +35,21 @@ def _occupancy_assumption(
             f"({sp.occupancy_pct:.0f}% of {sp.nights_listed} open nights), "
             f"not inferred from the comparables"
         )
+    if basis == "market_strong":
+        months = getattr(sp, "months_with_data", None) if sp is not None else None
+        covered = f"the {months} months" if months else "the months"
+        return (
+            f"Occupancy anchored to this market's UPPER-QUARTILE occupancy. The "
+            f"subject has not been listed a full year, so its trailing-12-month "
+            f"figure covers a period it was not on the market; across {covered} "
+            f"it has operated it ran above the market median every month"
+        )
+    if basis == "market_typical":
+        return (
+            "Occupancy anchored to this market's median occupancy. The subject "
+            "has not been listed a full year, so its trailing-12-month figure "
+            "covers a period it was not on the market and is not used here"
+        )
     if basis == "market_pool":
         return (
             "Occupancy anchored to the median of every comparable listing in "
@@ -111,9 +126,10 @@ def build_methodology(
         comp_criteria=criteria,
         data_sources=[
             "<strong>AirROI:</strong> Property-level STR revenue, ADR, and occupancy",
-            "<strong>Airbtics:</strong> Market-level overlay where coverage exists",
+            (f"<strong>AirROI market curve:</strong> whole-market occupancy for "
+             f"{escape(prop.market)}, median with 25th-75th percentile band — "
+             f"every listing in the market, not the six shown"),
             "<strong>Airbnb:</strong> Live listing data and guest reviews",
-            f"<strong>Market Research:</strong> {escape(prop.market)} tourism trends",
             "<strong>Comp Analysis:</strong> 6-category weighted comparable scoring",
         ],
         assumptions=[
