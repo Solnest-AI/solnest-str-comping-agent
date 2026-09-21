@@ -1036,18 +1036,13 @@ Examples:
         if occ is not None and occ > 0:
             pool_occupancies.append(float(occ))
 
-    calculator = derive_calculator_defaults(
-        comps, rentalizer, prop, pool_occupancies=pool_occupancies,
-    )
-    _basis_label = {
-        "subject":     "the subject's own trailing 12 months",
-        "market_pool": f"market pool median of {len(pool_occupancies)} listings",
-        "comp_set":    "comp-set median (no pool or subject history available)",
-    }
-    print(f"[Calculator] Occ: {calculator.occ_min}-{calculator.occ_max}% (default {calculator.occ_default}%)")
-    print(f"[Calculator]   occupancy basis: {_basis_label.get(calculator.occ_basis, calculator.occ_basis)}")
-    print(f"[Calculator] ADR: {prop.currency}{calculator.adr_min:,} - {prop.currency}{calculator.adr_max:,} (default {prop.currency}{calculator.adr_default:,})")
-    print(f"[Calculator]   rate basis: {_basis_label.get(calculator.adr_basis, calculator.adr_basis)}")
+    # The derive call itself now happens AFTER Step 8. It needs the market
+    # occupancy curve and the subject's own monthly line to decide whether the
+    # subject's trailing year is real, and both are bought down there. Deriving
+    # here and re-deriving later would render one set of numbers and disclose
+    # the other.
+    print(f"[Calculator] Market pool: {len(pool_occupancies)} listings "
+          f"(deferred until the market curve is in)")
 
     # Step 8: Seasonal data — pull per-comp monthly metrics from AirROI
     print("\n--- Step 8: Seasonal occupancy from market data ---")
@@ -1098,8 +1093,13 @@ Examples:
     # bought when the property actually has a track record: for a pre-purchase
     # comp there is nothing to plot and nothing is invented to fill it.
     # One /listings/metrics/all call, $0.10.
+    # Gated on subject_performance, NOT on seasonal_data: this call is also
+    # what tells us how many months the listing has actually been live, which
+    # decides whether the calculator may anchor to its trailing year at all.
+    # Skipping it in markets with a thin curve left exactly the properties
+    # most likely to be young with no way to detect that they were.
     subject_monthly: list[float | None] = []
-    if (seasonal_data and prop.subject_performance is not None
+    if (prop.subject_performance is not None
             and prop.airroi_listing_id and not args.skip_financials):
         try:
             rows = await get_listing_metrics(
@@ -1121,8 +1121,13 @@ Examples:
                 if isinstance(v, (int, float)):
                     subject_monthly[mo] = float(v) * 100 if float(v) <= 1 else float(v)
             open_months = sum(1 for v in subject_monthly if v is not None)
+            prop.subject_performance.months_with_data = open_months
             print(f"[Seasonal] Subject's own line: {open_months}/12 months with data "
                   f"(months with no data = listing was not open)")
+            if not prop.subject_performance.is_stabilized:
+                print(f"[Seasonal] Subject is NOT stabilized ({open_months}/12 months) — "
+                      f"its trailing-12-month figures cover a period it was not listed "
+                      f"for, so the projection will anchor to the market instead")
         except (AirROIError, httpx.HTTPError, asyncio.TimeoutError) as e:
             print(f"[Seasonal] Subject monthly unavailable ({type(e).__name__}) — "
                   "chart will show the market band only", file=sys.stderr)
@@ -1197,6 +1202,27 @@ Examples:
         print("[Seasonal] ERROR: no usable monthly data from Airbtics or AirROI.")
         print("[Seasonal] Cannot deliver report without real seasonal data — exiting.")
         sys.exit(2)
+
+    # Step 7 (deferred): calculator defaults, now that the market curve and the
+    # subject's own monthly line are both in hand.
+    calculator = derive_calculator_defaults(
+        comps, rentalizer, prop,
+        pool_occupancies=pool_occupancies,
+        market_occupancy=market_occ,
+        subject_monthly=subject_monthly,
+    )
+    _basis_label = {
+        "subject":        "the subject's own trailing 12 months",
+        "market_typical": "market median occupancy (subject has no full year of history)",
+        "market_strong":  "market UPPER QUARTILE (subject beat the market median in every month it ran)",
+        "market_pool":    f"market pool median of {len(pool_occupancies)} listings",
+        "comp_set":       "comp-set median (no pool or subject history available)",
+    }
+    print(f"[Calculator] Occ: {calculator.occ_min}-{calculator.occ_max}% (default {calculator.occ_default}%)")
+    print(f"[Calculator]   occupancy basis: {_basis_label.get(calculator.occ_basis, calculator.occ_basis)}")
+    print(f"[Calculator] ADR: {prop.currency}{calculator.adr_min:,} - {prop.currency}{calculator.adr_max:,} (default {prop.currency}{calculator.adr_default:,})")
+    print(f"[Calculator]   rate basis: {_basis_label.get(calculator.adr_basis, calculator.adr_basis)}")
+    print(f"[Calculator] Nights listed default: {calculator.days_default}")
 
     source = {"market": "AirROI market curve (p50, with p25-p75 band)",
               "comps": "AirROI per-comp average",

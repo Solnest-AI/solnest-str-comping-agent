@@ -25,11 +25,82 @@ MIN_POOL_FOR_ANCHOR = 8
 # $25 -> median 1.04%, 100% within 5%. Finer steps buy almost nothing more.
 ADR_STEP = 25
 
+# A market curve needs enough reporting months to be a baseline at all.
+MIN_MARKET_MONTHS = 6
+# And the subject needs enough of its own months before its measured
+# performance is allowed to move that baseline up a quartile.
+MIN_SUBJECT_MONTHS_FOR_STEP_UP = 2
+
+
+# ── Market-level occupancy, with AirROI's no-data months removed ────
+
+# When a market has no listings reporting for a month, AirROI does not omit
+# the row and does not null it: it returns the SAME number for avg/p25/p50/
+# p75/p90, almost always 0.0. Three of Sun Peaks' twelve months look like
+# this. Averaging them in drags the market baseline down by a third.
+def market_has_data(row: dict) -> bool:
+    """False when a market-occupancy row is AirROI's no-data sentinel."""
+    if not isinstance(row, dict):
+        return False
+    vals = [row.get(k) for k in ("avg", "p25", "p50", "p75", "p90")]
+    if any(not isinstance(v, (int, float)) for v in vals):
+        return False
+    return len({float(v) for v in vals}) > 1
+
+
+def _market_level(results: list[dict] | None, key: str) -> float | None:
+    """Mean of one percentile across the months the market actually reported.
+
+    Returned as a PERCENT, matching CompProperty.occupancy_pct. AirROI sends
+    market occupancy as a 0-1 fraction and comp occupancy as a percent, and
+    mixing the two silently produces a 100x error.
+    """
+    rows = [r for r in (results or []) if market_has_data(r)]
+    if len(rows) < MIN_MARKET_MONTHS:
+        return None
+    vals = [float(r[key]) for r in rows if isinstance(r.get(key), (int, float))]
+    if not vals:
+        return None
+    mean = statistics.mean(vals)
+    return mean * 100 if mean <= 1 else mean
+
+
+def _beats_market_median(
+    subject_monthly: list[float | None] | None,
+    results: list[dict] | None,
+) -> bool:
+    """True when the subject out-ran the market median in the months it ran.
+
+    Compares like calendar months only. A young listing's summer says nothing
+    about the market's winter, so months the property was dark are excluded
+    rather than scored as zero.
+    """
+    if not subject_monthly or not results:
+        return False
+    mkt: dict[int, float] = {}
+    for r in results or []:
+        if not market_has_data(r):
+            continue
+        try:
+            mo = int(str(r.get("date") or "").split("-")[1]) - 1
+        except (ValueError, IndexError):
+            continue
+        if 0 <= mo <= 11 and isinstance(r.get("p50"), (int, float)):
+            v = float(r["p50"])
+            mkt[mo] = v * 100 if v <= 1 else v
+    pairs = [(float(sv), mkt[i]) for i, sv in enumerate(subject_monthly)
+             if sv is not None and i in mkt]
+    if len(pairs) < MIN_SUBJECT_MONTHS_FOR_STEP_UP:
+        return False
+    return statistics.mean(p[0] for p in pairs) > statistics.mean(p[1] for p in pairs)
+
 
 def _occupancy_anchor(
     comps: list[CompProperty],
     prop: PropertyBasics,
     pool_occupancies: list[float] | None,
+    market_occupancy: list[dict] | None = None,
+    subject_monthly: list[float | None] | None = None,
 ) -> tuple[float, str]:
     """Pick the occupancy the headline projection is built on.
 
@@ -46,10 +117,33 @@ def _occupancy_anchor(
     around the market's 81st percentile (63.8% occupancy against a market
     median of 40.8%). Anchoring a projection to them projects the top of the
     market onto an average property.
+
+    The subject branch requires is_stabilized, not has_history. A listing
+    live for three months has a real result and a fake trailing year, and
+    AirROI reports the fake one. When it is not stabilized the order becomes
+    market p50, stepped to market p75 if the property beat the median in the
+    months it actually ran. That keeps the scenario a market scenario while
+    still crediting a property that has demonstrably out-performed.
     """
     sp = getattr(prop, "subject_performance", None)
-    if sp is not None and sp.has_history and sp.occupancy_pct > 0:
+    if sp is not None and sp.is_stabilized and sp.occupancy_pct > 0:
         return float(sp.occupancy_pct), "subject"
+
+    # The subject has history but not a full year of it, so its trailing
+    # occupancy is arithmetic over months it did not exist. Fall through to
+    # the market, which is the honest baseline for "what does this do in a
+    # normal year", and let the property's own real months move it.
+    p50 = _market_level(market_occupancy, "p50")
+    p75 = _market_level(market_occupancy, "p75")
+    if p50 is not None:
+        if p75 is not None and _beats_market_median(subject_monthly, market_occupancy):
+            # It beat the market median in every month it actually operated,
+            # so the market's upper quartile is the defensible starting point.
+            # NOT its own raw figure: three summer months in a ski market are
+            # not a year, and projecting them across one is the mirror image
+            # of the bug this branch exists to fix.
+            return float(p75), "market_strong"
+        return float(p50), "market_typical"
 
     if pool_occupancies:
         usable = [float(o) for o in pool_occupancies if o is not None and o > 0]
@@ -89,6 +183,8 @@ def derive_calculator_defaults(
     rentalizer: RentalizerData,
     prop: PropertyBasics,
     pool_occupancies: list[float] | None = None,
+    market_occupancy: list[dict] | None = None,
+    subject_monthly: list[float | None] | None = None,
 ) -> CalculatorDefaults:
     """Calculate slider min/max/default from comp data and Rentalizer output.
 
@@ -96,6 +192,12 @@ def derive_calculator_defaults(
     the market query returned, not just the six that made the report. Pass it
     whenever it is available: see _occupancy_anchor for why the six selected
     comps are the wrong thing to anchor a projection to.
+
+    `market_occupancy` is the raw /markets/metrics/occupancy rows and
+    `subject_monthly` the subject's own 12-month occupancy line. Both are
+    already bought for the seasonality chart; passing them here is what lets
+    an unstabilized listing fall back to a market scenario instead of
+    projecting a pre-launch blackout.
     """
     if not comps:
         # Fallback to Rentalizer data only
@@ -122,7 +224,10 @@ def derive_calculator_defaults(
         for c in comps
     ]
 
-    occ_anchor, occ_basis = _occupancy_anchor(comps, prop, pool_occupancies)
+    occ_anchor, occ_basis = _occupancy_anchor(
+        comps, prop, pool_occupancies,
+        market_occupancy=market_occupancy, subject_monthly=subject_monthly,
+    )
     adr_anchor, adr_basis = _rate_anchor(comps, prop, adr_values)
 
     # Bounds must CONTAIN the anchor. Deriving them from the comps alone and
@@ -144,10 +249,18 @@ def derive_calculator_defaults(
     # 365-night projection just because the comps run year-round.
     sp = getattr(prop, "subject_performance", None)
     comp_days = [c.nights_listed for c in comps]
-    if sp is not None and sp.has_history and sp.nights_listed > 0:
+    if sp is not None and sp.is_stabilized and sp.nights_listed > 0:
         days_default = int(sp.nights_listed)
     else:
+        # Open inventory is only the host's choice when the listing existed
+        # all year. AirROI counts a pre-launch period as blocked, so the
+        # cabin's "245 open nights" is 365 minus the 120 days before it went
+        # live. Taking the larger of that and the comp median keeps a host who
+        # genuinely blocks half the year at their own number while refusing to
+        # bill a launch date as a lifestyle decision.
         days_default = int(round(statistics.median(comp_days)))
+        if sp is not None and sp.nights_listed > days_default:
+            days_default = int(sp.nights_listed)
     days_min = max(100, _round_down(min(min(comp_days), days_default), 5))
     days_default = max(days_min, min(365, days_default))
 

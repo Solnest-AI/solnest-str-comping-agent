@@ -5,6 +5,12 @@ from pydantic import BaseModel, Field
 from typing import Optional
 
 
+# A trailing-twelve-month figure is only a year's worth of evidence when the
+# listing was live for most of that year. See SubjectPerformance.is_stabilized.
+MIN_MONTHS_FOR_STABILIZED = 9
+MAX_L90D_SHARE_FOR_STABILIZED = 0.75
+
+
 class SubjectPerformance(BaseModel):
     """The subject property's OWN trailing-12-month numbers.
 
@@ -30,11 +36,59 @@ class SubjectPerformance(BaseModel):
     revpar: Optional[float] = None
     l90d_occupancy_pct: Optional[float] = None
     l90d_nights_booked: Optional[int] = None
+    # How many of the trailing 12 months the listing actually reported data
+    # for. Filled from /listings/metrics/all when we buy it; None when we
+    # did not. See is_stabilized for why this matters more than it sounds.
+    months_with_data: Optional[int] = None
 
     @property
     def has_history(self) -> bool:
-        """True when there is enough real history to anchor an estimate."""
+        """True when the listing has ANY measured result to report.
+
+        Deliberately a low bar: it gates whether we *display* the property's
+        trailing numbers, and a three-month-old listing's real bookings are
+        still real. Use is_stabilized to decide whether to *project* from
+        them.
+        """
         return self.nights_booked > 0 and self.annual_revenue > 0
+
+    @property
+    def is_stabilized(self) -> bool:
+        """True when the trailing twelve months describe a full operating year.
+
+        AirROI computes ttm_occupancy over the whole 365-day window whether or
+        not the listing existed for it, counting the pre-launch period as
+        blocked inventory. A listing that went live three months ago therefore
+        reports a trailing occupancy of roughly a quarter of its real pace, and
+        anchoring a projection to that number tells a healthy property it is
+        failing.
+
+        Measured on "Sleeps 12 Log Cabin" (Sun Peaks, live since June 2026):
+        AirROI reported 20% trailing occupancy over 245 "open" nights. Its
+        three actual months ran 53.3%, 38.7% and 61.3%, against a market p50 of
+        25.3% and a p75 of 43.7% in the same months. The report called a
+        top-quartile performer a 20%-occupancy dog.
+
+        Two detectors, strongest first:
+
+        * Month count, when we bought /listings/metrics/all. Unambiguous.
+        * Otherwise the share of the year's bookings that landed in the last
+          90 days. A stabilized listing cannot put most of its year in one
+          quarter; the cabin put 47 of 49 nights (96%) there. The threshold is
+          deliberately loose because a genuinely seasonal ski property polled
+          in March can legitimately run high.
+        """
+        if not self.has_history:
+            return False
+        if self.months_with_data is not None:
+            return self.months_with_data >= MIN_MONTHS_FOR_STABILIZED
+        if self.l90d_nights_booked is not None and self.nights_booked > 0:
+            share = float(self.l90d_nights_booked) / float(self.nights_booked)
+            return share <= MAX_L90D_SHARE_FOR_STABILIZED
+        # No signal either way. Treat as stabilized: the old behaviour, and
+        # refusing to project from a listing we cannot fault is worse than
+        # occasionally projecting from a young one.
+        return True
 
     @property
     def revenue_per_booked_night(self) -> float:
@@ -132,7 +186,11 @@ class CalculatorDefaults(BaseModel):
     adr_range_text: str = ""
     # Where each default came from, so the report can disclose its basis
     # instead of presenting every number as if it were derived the same way.
-    # "subject" = the property's own trailing 12 months (strongest),
+    # "subject" = the property's own trailing 12 months (strongest, and only
+    #   used when that year is stabilized: see SubjectPerformance.is_stabilized),
+    # "market_typical" = market median, for a listing too young to project from,
+    # "market_strong" = market upper quartile, same case but the property beat
+    #   the market median in every month it has actually operated,
     # "market_pool" = median of every comparable listing AirROI returned,
     # "comp_set" = median of the six displayed comps (weakest: those six are
     # selected for quality, so they sit well above the market median).

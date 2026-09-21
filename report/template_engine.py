@@ -67,6 +67,24 @@ def render_report(data: ReportData) -> str:
             f"12 months ({sp.occupancy_pct:.0f}% of {sp.nights_listed} open "
             f"nights), not an estimate from the comparables."
         )
+    elif calc.occ_basis == "market_strong" and sp is not None:
+        months = sp.months_with_data
+        covered = f"the {months} months" if months else "the months"
+        occ_basis_text = (
+            f"This listing has not been on the market a full year, so its "
+            f"trailing-12-month occupancy is measured partly over a period it "
+            f"was not listed for and understates it. The scenario above is "
+            f"built on this market's UPPER-QUARTILE occupancy instead, because "
+            f"across {covered} the property has actually operated it ran above "
+            f"the market median every month."
+        )
+    elif calc.occ_basis == "market_typical":
+        occ_basis_text = (
+            "This listing has not been on the market a full year, so its "
+            "trailing-12-month occupancy covers a period it was not listed "
+            "for. The scenario above uses this market's median occupancy "
+            "instead of that figure. Its own measured result is shown below."
+        )
     elif calc.occ_basis == "market_pool":
         occ_basis_text = (
             "Occupancy is the median across every comparable listing in this "
