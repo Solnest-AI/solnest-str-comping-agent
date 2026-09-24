@@ -337,6 +337,7 @@ def _build_prompt(
         )
     else:
         subject_facts = "\n".join([
+            f"- NOTE: {_own['_note']}",
             f"- Trailing 12 months revenue: ${_own['annual_revenue']:,.0f} (fees included)",
             f"- Trailing 12 months adjusted occupancy: {_own['occupancy_pct']:.0f}%",
             f"- Nights booked: {_own['nights_booked']} of {_own['nights_listed']} open nights",
@@ -770,7 +771,7 @@ def template_narratives(
         ),
         guest_profile=(
             f"Target guest profile: groups sized to the {prop.max_guests}-guest "
-            f"capacity — family and multi-couple travel, plus the holiday and "
+            f"capacity: family and multi-couple travel, plus the holiday and "
             f"event demand that {prop.market} draws."
         ),
         amenity_upside=amenity_upside,

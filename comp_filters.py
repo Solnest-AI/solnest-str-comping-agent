@@ -568,3 +568,73 @@ def apply_comp_filters(
 
     report.kept = len(kept)
     return kept, report
+
+
+# ── Public: the whole pre-scoring selection, exclusions included ─────────
+
+def apply_keyword_exclusions(
+    comps: Iterable,
+    exclude_terms: Sequence[str],
+) -> tuple[list, list[str]]:
+    """Drop comps whose listing NAME contains any of `exclude_terms`.
+
+    Case-insensitive substring match, so `--exclude "oversized"` and a full
+    listing name both work. Returns (kept, names_dropped) in input order.
+    """
+    terms = [t.strip().lower() for t in exclude_terms if t and t.strip()]
+    if not terms:
+        return list(comps), []
+    kept: list = []
+    dropped: list[str] = []
+    for comp in comps:
+        name, _, _ = extract_listing_fields(comp)
+        if any(t in name.lower() for t in terms):
+            dropped.append(name)
+            continue
+        kept.append(comp)
+    return kept, dropped
+
+
+@dataclass
+class PoolSelection:
+    """What `select_comp_pool` decided, so the caller can print it."""
+
+    kept: list
+    report: FilterReport            # the STRICT pass, even when later relaxed
+    excluded: list[str]             # names the operator's --exclude removed
+    relaxed: bool = False           # filters backed off to keep the pool usable
+
+
+def select_comp_pool(
+    comps: Iterable,
+    *,
+    drop_on_water: bool = False,
+    required_features: Sequence[str] = (),
+    exclude_terms: Sequence[str] = (),
+    min_comps: int = 6,
+) -> PoolSelection:
+    """Filters, then the operator's exclusions, then relax the FILTERS only.
+
+    The relaxation exists because a filter that empties the pool is worse than
+    no filter. It used to re-read the unfiltered pool with nothing applied, so
+    a comp the operator had just removed with --exclude came straight back and
+    the run printed "Relaxing filters to keep the report usable". An operator's
+    explicit exclusion is never a filter to relax: an oversized comp dropped by
+    hand is still oversized when the pool is thin.
+
+    Relaxation only fires when the filters actually dropped something and the
+    pool was not already thin before them; backing off a filter that removed
+    nothing changes nothing and should not be announced.
+    """
+    pool = list(comps)
+    filtered, report = apply_comp_filters(
+        pool, drop_on_water=drop_on_water, required_features=required_features,
+    )
+    kept, excluded = apply_keyword_exclusions(filtered, exclude_terms)
+
+    relaxed = False
+    if len(kept) < min_comps and report.dropped > 0 and len(pool) >= min_comps:
+        relaxed = True
+        kept, _ = apply_keyword_exclusions(pool, exclude_terms)
+
+    return PoolSelection(kept=kept, report=report, excluded=excluded, relaxed=relaxed)

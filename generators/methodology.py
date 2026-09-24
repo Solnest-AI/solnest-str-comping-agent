@@ -171,7 +171,7 @@ def build_methodology(
         data_sources=[
             "<strong>AirROI:</strong> Property-level STR revenue, ADR, and occupancy",
             (f"<strong>AirROI market curve:</strong> whole-market occupancy for "
-             f"{escape(prop.market)}, median with 25th-75th percentile band — "
+             f"{escape(prop.market)}, median with 25th-75th percentile band, "
              f"every listing in the market, not the six shown"),
             "<strong>Airbnb:</strong> Live listing data and guest reviews",
             "<strong>Comp Analysis:</strong> 6-category weighted comparable scoring",

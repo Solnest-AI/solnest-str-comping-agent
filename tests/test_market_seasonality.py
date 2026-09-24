@@ -105,3 +105,23 @@ def test_malformed_rows_are_skipped_not_fatal():
     out = market_occupancy_to_seasonal(rows)
     assert out[4] == 60.0
     assert out[3] is None
+
+
+def test_per_comp_fallback_interpolates_missing_months_instead_of_charting_zero():
+    """f507cdb stopped the MARKET curve drawing a 0% month for AirROI's no-data
+    rows. The per-comp fallback (the path every address subject runs on) still
+    filled a month no comp reported with 0.0 and charted it."""
+    comps = [[50.0] * 9 + [None, None, None] for _ in range(6)]     # Oct-Dec blank
+    series, basis = derive_seasonal_data_with_basis(
+        _rent(), comp_monthly_data=comps, market_occupancy=[])
+    assert basis == "comps"
+    assert series[9:] == [50.0, 50.0, 50.0], series
+    assert min(series) > 0
+
+
+def test_per_comp_fallback_still_refuses_more_than_three_blank_months():
+    comps = [[50.0] * 8 + [None] * 4 for _ in range(6)]
+    series, basis = derive_seasonal_data_with_basis(
+        _rent(), comp_monthly_data=comps, market_occupancy=[])
+    assert basis == ""
+    assert series == []

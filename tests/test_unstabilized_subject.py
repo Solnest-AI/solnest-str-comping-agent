@@ -476,3 +476,71 @@ def test_revenue_potential_is_still_computed_for_the_scorer():
     src = open("comp_scorer.py").read()
     assert "comp_revenue_potential" in src
     assert hasattr(comp_scorer, "score_comp") or "revenue_potential" in src
+
+
+# ── "every month" must mean every month ──
+
+def test_step_up_requires_beating_the_median_in_every_month_it_ran():
+    """The report prints 'ran above the market median every month'. Two big
+    months and one collapse used to average past the bar (90/90/5 against a
+    market p50 of 27/26/23 returned True)."""
+    mixed = [None] * 12
+    mixed[5], mixed[6], mixed[7] = 90.0, 90.0, 5.0
+    assert not _beats_market_median(mixed, SUNPEAKS)
+
+
+def test_step_up_still_fires_when_every_month_beats_the_median():
+    assert _beats_market_median(CABIN_MONTHLY, SUNPEAKS)
+
+
+def test_step_up_is_not_awarded_for_a_tie():
+    tied = [None] * 12
+    tied[5], tied[6], tied[7] = 27.0, 26.0, 23.0    # exactly the Sun Peaks p50s
+    assert not _beats_market_median(tied, SUNPEAKS)
+
+
+# ── the narrative brief must not contradict the calculator either ──
+
+def _brief(sp, monthly=CABIN_MONTHLY):
+    from generators.narrative_brief import build_narrative_brief
+    return build_narrative_brief(_prop(sp), _rent(), _comps(), _defaults(sp, monthly))
+
+
+def test_brief_does_not_place_an_unstabilized_subject_below_the_comp_median():
+    """The brief on disk after the calculator fix still said
+    occupancy_pct 20.0, position_vs_comp_median 'below', 'MEASURED, not
+    estimated'. Rule 8 then licenses under-performer copy. That is the story
+    the headline no longer tells."""
+    sp = CABIN.model_copy(update={"months_with_data": 3})
+    own = _brief(sp)["subject"]["own_performance"]
+    assert own is not None, "the real bookings are still shown"
+    assert own["is_stabilized"] is False
+    assert own["months_with_data"] == 3
+    assert own["position_vs_comp_median"] is None
+
+
+def test_brief_says_why_the_trailing_figures_are_not_a_year():
+    sp = CABIN.model_copy(update={"months_with_data": 3})
+    note = _brief(sp)["subject"]["own_performance"]["_note"].lower()
+    assert "full year" in note
+    assert "under-performing" in note
+
+
+def test_brief_still_positions_a_stabilized_subject():
+    sp = CABIN.model_copy(update={"months_with_data": 12, "occupancy_pct": 20.0})
+    own = _brief(sp, monthly=None)["subject"]["own_performance"]
+    assert own["is_stabilized"] is True
+    assert own["position_vs_comp_median"] == "below"    # comps run 50%
+
+
+def test_brief_rules_tell_the_writer_what_is_stabilized_means():
+    from generators.narrative_brief import NARRATIVE_RULES
+    assert any("is_stabilized" in r for r in NARRATIVE_RULES)
+
+
+def test_brief_carries_the_calculator_basis():
+    """The headline discloses its basis; the writer needs the same word."""
+    sp = CABIN.model_copy(update={"months_with_data": 3})
+    calc = _brief(sp)["calculator_defaults"]
+    assert calc["occupancy_pct"]["basis"] == "market_strong"
+    assert calc["adr"]["basis"] == "subject"

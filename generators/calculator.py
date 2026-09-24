@@ -77,11 +77,16 @@ def _beats_market_median(
     subject_monthly: list[float | None] | None,
     results: list[dict] | None,
 ) -> bool:
-    """True when the subject out-ran the market median in the months it ran.
+    """True when the subject out-ran the market median in EVERY month it ran.
 
     Compares like calendar months only. A young listing's summer says nothing
     about the market's winter, so months the property was dark are excluded
     rather than scored as zero.
+
+    Every month, not on average. The report, the methodology and the template
+    disclosure all print "ran above the market median every month", and an
+    earlier version compared means: 90 / 90 / 5 against a market p50 of
+    27 / 26 / 23 stepped the anchor up to p75 and printed that sentence.
     """
     if not subject_monthly or not results:
         return False
@@ -100,7 +105,7 @@ def _beats_market_median(
              if sv is not None and i in mkt]
     if len(pairs) < MIN_SUBJECT_MONTHS_FOR_STEP_UP:
         return False
-    return statistics.mean(p[0] for p in pairs) > statistics.mean(p[1] for p in pairs)
+    return all(subject > market for subject, market in pairs)
 
 
 def _occupancy_anchor(
@@ -527,13 +532,18 @@ def derive_seasonal_data_with_basis(
             if filled is not None:
                 return [min(v, SEASONAL_PEAK_CAP) for v in filled], "market"
 
-    # Priority 2: per-comp AirROI monthly metrics (drops clipped values)
+    # Priority 2: per-comp AirROI monthly metrics (drops clipped values).
+    # A month no comp reported is a gap, not a 0% month: fill it from its
+    # neighbours exactly as the market curve does above. This path used to
+    # write 0.0 there and chart it, the same false-zero the market path was
+    # fixed for, and it is the path every address subject runs on.
     if comp_monthly_data and any(any(v is not None for v in c) for c in comp_monthly_data):
         series = aggregate_seasonal_from_comps(comp_monthly_data)
         # Too many blank months to be a credible seasonal curve — fall through
         # and ultimately let the sanity gate block rather than ship a guess.
-        if sum(1 for v in series if v is None) <= 3:
-            return [v if v is not None else 0.0 for v in series], "comps"
+        filled = _interpolate_gaps(series)
+        if filled is not None:
+            return filled, "comps"
 
     # Priority 3: subject's own monthly data (capped, since it's only one data point).
     #
@@ -611,6 +621,6 @@ def derive_season_labels(
     shoulder = [i for i in range(12) if i not in peak]
     peak_share = sum(series[i] for i in peak) / sum(series)
     return (
-        f"Peak Season ({_contiguous_label(peak)}) — {peak_share:.0%} of annual revenue",
+        f"Peak Season ({_contiguous_label(peak)}): {peak_share:.0%} of annual revenue",
         f"Shoulder Season ({_contiguous_label(shoulder)})",
     )

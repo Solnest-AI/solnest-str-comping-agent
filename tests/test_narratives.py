@@ -628,3 +628,18 @@ def test_unrated_comp_is_never_presented_as_a_zero(case, tmp_path):
     brief = build_narrative_brief(prop, rentalizer, comps, calculator)
     assert brief["comp_set"]["comps"][0]["rating"] is None
     assert "too few reviews" in " ".join(brief["rules"])
+
+
+def test_api_prompt_says_a_young_listing_is_not_a_full_year(case):
+    """Same facts as the brief, so the two narrative paths cannot drift. The
+    brief was fixed to stop ranking an unstabilized subject against the comp
+    median; the API prompt reads the same dict and must say the same thing."""
+    from schema import SubjectPerformance
+    prop, rentalizer, comps, calculator = case
+    young = prop.model_copy(update={"subject_performance": SubjectPerformance(
+        annual_revenue=48_183, occupancy_pct=20.0, adr=834.4,
+        nights_booked=49, nights_listed=245, months_with_data=3,
+    )})
+    prompt = N._build_prompt(young, rentalizer, comps, calculator, "", "")
+    assert "NOT a full year" in prompt
+    assert "POSITION vs comp median: unknown" in prompt

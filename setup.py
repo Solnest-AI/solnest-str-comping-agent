@@ -24,28 +24,23 @@ KEYS = [
         "AirROI",
         True,
         "https://www.airroi.com/api/developer/activate",
-        "Sign up, activate the developer API, copy the key.",
+        "Sign up, activate the developer API, copy the key. The ONLY required key.",
     ),
     (
         "FIRECRAWL_API_KEY",
         "Firecrawl",
-        True,
+        False,
         "https://www.firecrawl.dev",
-        "Sign up → Dashboard → API Keys. Free tier works for testing.",
+        "Optional. Only needed for a street address or a Zillow/Realtor link; "
+        "Airbnb URLs work without it. Press Enter to skip.",
     ),
     (
         "ANTHROPIC_API_KEY",
-        "Anthropic (Claude) — OPTIONAL, only for headless/API use",
-        True,
-        "https://console.anthropic.com",
-        "Console → API Keys → Create Key. Pay-as-you-go, very cheap per report.",
-    ),
-    (
-        "AIRBTICS_API_KEY",
-        "Airbtics",
+        "Anthropic (Claude)",
         False,
-        "https://airbtics.com",
-        "Optional market overlay. Press Enter to skip.",
+        "https://console.anthropic.com",
+        "NOT needed. The report copy is written by Claude Code through the "
+        "narrative handoff (see CLAUDE.md). Press Enter to skip.",
     ),
     (
         "GMAIL_ADDRESS",
@@ -136,12 +131,11 @@ def main() -> int:
     for env_key, label, required, where, hint in KEYS:
         current = existing.get(env_key, "")
         # Treat placeholder values as empty
-        if current in {"your-airroi-api-key", "fc-...", "sk-airbtics-live-...", "sk-ant-..."}:
+        if current in {"your-airroi-api-key", "fc-...", "sk-ant-..."}:
             current = ""
         values[env_key] = prompt(label, required, where, hint, current)
 
     # Make sure non-prompted defaults stay
-    values.setdefault("AIRBTICS_BASE_URL", "https://crap0y5bx5.execute-api.us-east-2.amazonaws.com/prod")
     values.setdefault("OUTPUT_DIR", "./output")
 
     write_env(values)

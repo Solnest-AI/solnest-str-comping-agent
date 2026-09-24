@@ -315,7 +315,15 @@ async def scrape_airbnb_listing(url: str) -> PropertyBasics:
         resp = await client.get(url)
         resp.raise_for_status()
         html = resp.text
+    return parse_airbnb_html(html, url)
 
+
+def parse_airbnb_html(html: str, url: str) -> PropertyBasics:
+    """Turn a fetched Airbnb listing page into PropertyBasics. Pure: no network.
+
+    Split from the fetch so the strategies below can be tested against a page
+    on disk. Raises ValueError if critical data cannot be extracted.
+    """
     # Try multiple extraction strategies
     title = ""
     image_url = ""
@@ -374,11 +382,15 @@ async def scrape_airbnb_listing(url: str) -> PropertyBasics:
     # property config. Format is consistent:
     #   "<PropertyType> in <City> · ★<rating> · <N> bedroom · <N> bed · <N> bath"
     # All numbers are present and non-truncated. Always parse this when present.
+    property_type = ""
     if og_title:
         # Property type + city: "Cabin in Peachland" / "Condo in Sun Peaks Mountain"
         type_city = re.match(r"([A-Za-z\- ]+?)\s+in\s+([^·]+?)\s*·", og_title)
-        _ = type_city.group(1).strip() if type_city else ""
         if type_city:
+            # Airbnb's own type label ("Farm stay", "Cabin", "Condo"). This used
+            # to be parsed and discarded, so the subject fell to the schema
+            # default and the scorer read that default's adjective as a claim.
+            property_type = type_city.group(1).strip()
             # Airbnb's own city label — the most reliable locality on the page.
             og_city = type_city.group(2).strip()
             if not location_text:
@@ -410,9 +422,17 @@ async def scrape_airbnb_listing(url: str) -> PropertyBasics:
 
     title = title or og_title
 
-    # Strategy 3b: Max guests is NOT in og:title — parse the page body for it.
-    # Airbnb shows "X guests" prominently; the most common occurrence is the
-    # listing's actual capacity.
+    # Strategy 3b: Max guests is NOT in og:title. First trust the host's own
+    # copy: "Sleeps 13" in the title or og:description is the listing's claim
+    # about itself. The page-body frequency guess below landed on the BED
+    # count on a live page ("8 beds" appeared 12 times, "13 guests" twice).
+    if not max_guests:
+        for text in (og_title, meta.get("description", ""), title, description):
+            sleeps = re.search(r"\bsleeps\s+(\d{1,2})\b", text or "", re.I)
+            if sleeps and 1 <= int(sleeps.group(1)) <= 30:
+                max_guests = int(sleeps.group(1))
+                break
+    # Then the page body: the most common "X guests" occurrence.
     if not max_guests:
         guest_matches = re.findall(r"(\d+)\s*guests?\b", html, re.I)
         if guest_matches:
@@ -489,6 +509,7 @@ async def scrape_airbnb_listing(url: str) -> PropertyBasics:
         bedrooms=bedrooms,
         bathrooms=bathrooms,
         max_guests=max_guests,
+        property_type=property_type or "Property",
         hero_image_url=image_url,
         airbnb_url=url,
         title=title,

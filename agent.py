@@ -797,34 +797,30 @@ Examples:
 
     before_filters = len(candidates_raw)
     _funnel_before_filters = before_filters
-    candidates_raw, filter_report = comp_filters.apply_comp_filters(
-        candidates_raw, drop_on_water=drop_on_water,
-        required_features=required_features,
+    exclude_terms = (
+        [t.strip() for t in args.exclude.split(",") if t.strip()]
+        if args.exclude else []
     )
-    for line in filter_report.lines():
+    # Filters, then the operator's --exclude, then relax the FILTERS only if
+    # the pool went thin. The exclusions survive the relaxation: an earlier
+    # version re-read the unfiltered pool and quietly re-admitted the very
+    # comps the operator had just removed by hand. See
+    # comp_filters.select_comp_pool and tests/test_comp_pool_selection.py.
+    selection = comp_filters.select_comp_pool(
+        _unfiltered_candidates, drop_on_water=drop_on_water,
+        required_features=required_features, exclude_terms=exclude_terms,
+    )
+    for line in selection.report.lines():
         print(f"[Filters] {line}")
-
-    # Keyword exclusions the operator asked for by hand.
-    if args.exclude:
-        terms = [t.strip().lower() for t in args.exclude.split(",") if t.strip()]
-        if terms:
-            kept = []
-            for c in candidates_raw:
-                nm = ((c.get("listing_info") or {}).get("listing_name") or "").lower()
-                if any(t in nm for t in terms):
-                    print(f"[Filters] Excluded by keyword: {nm[:50]}")
-                    continue
-                kept.append(c)
-            candidates_raw = kept
-
-    # A filter that empties the pool is worse than no filter. Back off rather
-    # than fail the run, and say so out loud.
-    if len(candidates_raw) < 6 and before_filters >= 6:
-        print(f"[Filters] Only {len(candidates_raw)} comps survived filtering "
-              f"(from {before_filters}). Relaxing filters to keep the report usable.")
-        candidates_raw, _ = comp_filters.apply_comp_filters(
-            _unfiltered_candidates, drop_on_water=False, required_features=[],
-        )
+    for name in selection.excluded:
+        print(f"[Filters] Excluded by keyword: {name[:50]}")
+    if selection.relaxed:
+        # A filter that empties the pool is worse than no filter. Back off
+        # rather than fail the run, and say so out loud.
+        print(f"[Filters] Only {selection.report.kept - len(selection.excluded)} comps "
+              f"survived filtering (from {before_filters}). Relaxing filters to "
+              f"keep the report usable; --exclude still applies.")
+    candidates_raw = selection.kept
 
     mapped = map_batch_for_scorer(candidates_raw)
     subject_for_scoring = subject_for_scorer(prop, estimate_data if not args.skip_financials else {})

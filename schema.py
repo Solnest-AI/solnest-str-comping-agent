@@ -105,7 +105,11 @@ class PropertyBasics(BaseModel):
     bedrooms: int
     bathrooms: float                                # supports 3.5
     max_guests: int
-    property_type: str = "Luxury Chalet"
+    # Never a marketing adjective. The old default was "Luxury Chalet", and
+    # comp_scorer reads the subject's type into its luxury signal, so every
+    # subject that arrived without a type was scored as a luxury listing and
+    # comps priced under 55% of the model ADR were hard-failed.
+    property_type: str = "Property"
     hero_image_url: str = ""
     listing_url: Optional[str] = None               # external listing link (MLS, etc.)
     airbnb_url: Optional[str] = None

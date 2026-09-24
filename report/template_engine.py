@@ -1,5 +1,6 @@
 """Jinja2 template rendering for the HTML report."""
 
+import statistics
 from pathlib import Path
 from datetime import date
 
@@ -99,6 +100,7 @@ def render_report(data: ReportData) -> str:
         )
 
     return template.render(
+        comp_summary=_comp_summary(data),
         subject_performance=sp,
         occ_basis_text=occ_basis_text,
         branding=config.BRANDING,
@@ -117,6 +119,34 @@ def render_report(data: ReportData) -> str:
         initial_occ_nights=initial_occ_nights,
         initial_revpar=initial_revpar,
     )
+
+
+def _comp_summary(data: ReportData) -> dict | None:
+    """Facts for the comp-section blurb, computed rather than asserted.
+
+    The blurb used to say the subject's "caliber is above typical inventory"
+    on every report, including subjects below the comp median.
+    """
+    comps = [c for c in data.comps if c.annual_revenue > 0]
+    if not comps:
+        return None
+    cur = data.property.currency
+    revs = sorted(c.annual_revenue for c in comps)
+    beds = sorted({c.bedrooms for c in comps})
+    sleeps = sorted({c.sleeps for c in comps})
+
+    def span(vals, unit):
+        return (f"{vals[0]} {unit}" if len(vals) == 1
+                else f"{vals[0]}-{vals[-1]} {unit}")
+
+    return {
+        "count": len(comps),
+        "bedrooms": span(beds, "bedrooms"),
+        "sleeps": span(sleeps, "guests"),
+        "median_revenue": format_currency(round(statistics.median(revs)), cur),
+        "low_revenue": format_currency(revs[0], cur),
+        "high_revenue": format_currency(revs[-1], cur),
+    }
 
 
 def _slugify(text: str, max_len: int = 60) -> str:

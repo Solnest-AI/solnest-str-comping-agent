@@ -595,6 +595,10 @@
     .stat-number {
       font-variant-numeric: tabular-nums;
     }
+    /* The revenue headline overflowed a 390px viewport (measured 2026-09-20). */
+    @media (max-width: 640px) {
+      .stat-number.text-6xl { font-size: 2rem; line-height: 1.15; white-space: nowrap; }
+    }
 
     @media print {
       body { background: white; }
@@ -819,7 +823,7 @@
         <!-- Occupancy Slider -->
         <div class="glass-card-dark rounded-2xl p-6">
           <label class="block text-sm font-bold uppercase tracking-wider mb-3" style="color:var(--sol-forest);">
-            Annual Occupancy Rate
+            Occupancy of Listed Nights
           </label>
           <div class="flex items-center gap-4 mb-3">
             <input
@@ -905,11 +909,11 @@
         {% if subject_performance %}
         <div class="mt-6 pt-6" style="border-top:1px solid rgba(255,255,255,.25);">
           <div class="text-xs font-bold uppercase tracking-[.2em] text-white/70 mb-3">
-            This Property's Last 12 Months (Actual)
+            AirROI Reported Trailing Performance
           </div>
           <div class="metric-grid">
             <div class="metric">
-              <div class="k">Revenue Earned</div>
+              <div class="k">Reported Gross Revenue</div>
               <div class="v">{{ property.currency }}{{ '{:,.0f}'.format(subject_performance.annual_revenue) }}</div>
             </div>
             <div class="metric">
@@ -962,6 +966,13 @@
       <div class="chart-container">
         <canvas id="seasonalChart"></canvas>
       </div>
+      {% if seasonal_p25 and seasonal_p75 %}
+      <p class="text-xs leading-relaxed mt-3" style="color:var(--sol-muted);">
+        AirROI whole-market occupancy for {{ property.market }}. Shading shows the 25th-75th percentiles.
+        {% if subject_monthly %}This property's own months are drawn on top; months with no data for it are left blank, not zero.{% endif %}
+        The band covers every listing in the market, not only the six comparables below.
+      </p>
+      {% endif %}
 
       <div class="mt-8 grid md:grid-cols-2 gap-6">
         <div class="highlight-box">
@@ -988,8 +999,10 @@
             Comparable Properties (Airbnb) + AirROI Performance Snapshot
           </h2>
           <p class="text-sm leading-relaxed" style="color:#57534e;">
-            These listings represent <strong>top-performing premium homes</strong> in {{ property.market }}. They are the best available performance anchors,
-            but the subject's caliber is above typical inventory — treat results as a benchmark range, with execution quality as the primary driver.
+            {% if comp_summary %}These {{ comp_summary.count }} listings are selected performance benchmarks in {{ property.market }}
+            ({{ comp_summary.bedrooms }}, sleeping {{ comp_summary.sleeps }}). Their median trailing annual revenue is
+            <strong>{{ comp_summary.median_revenue }}</strong>; the range is {{ comp_summary.low_revenue }} to {{ comp_summary.high_revenue }}.
+            They are chosen for quality, so treat them as a benchmark range rather than a typical result.{% endif %}
           </p>
           <p class="text-xs leading-relaxed mt-2" style="color:var(--sol-muted);">
             Every figure on these cards is measured, not modelled.
@@ -1028,7 +1041,7 @@
             <div class="metric-grid">
               <div class="metric"><div class="k">Rev / Listed Night</div><div class="v">{{ comp.revenue_per_listed_night | format_currency(property.currency) }}</div></div>
               <div class="metric"><div class="k">Annual Revenue</div><div class="v">{{ comp.annual_revenue | format_currency_k(property.currency) }}</div></div>
-              <div class="metric"><div class="k">Occupancy</div><div class="v">{{ comp.occupancy_pct | int }}%</div></div>
+              <div class="metric"><div class="k">Occupancy</div><div class="v">{{ '%.1f'|format(comp.occupancy_pct) }}%</div></div>
               <div class="metric"><div class="k">ADR</div><div class="v">{{ comp.adr | format_currency(property.currency) }}</div></div>
               <div class="metric" style="grid-column: 1 / span 2;"><div class="k">Nights Booked (12 mo)</div><div class="v">{{ comp.nights_booked }}<span style="font-size:.7em;opacity:.6;"> / {{ comp.nights_listed }} listed</span></div></div>
             </div>

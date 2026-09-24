@@ -207,11 +207,11 @@ def _report(sp):
 
 def test_report_renders_with_and_without_subject_history():
     with_sp = render_report(_report(SUBJECT))
-    assert "This Property's Last 12 Months" in with_sp
+    assert "AirROI Reported Trailing Performance" in with_sp
     assert "129,134" in with_sp
 
     without = render_report(_report(None))
-    assert "This Property's Last 12 Months" not in without
+    assert "AirROI Reported Trailing Performance" not in without
 
 
 def test_report_discloses_which_basis_the_headline_used():

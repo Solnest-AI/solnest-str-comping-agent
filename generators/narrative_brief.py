@@ -168,6 +168,13 @@ NARRATIVE_RULES: list[str] = [
     "When `subject.own_performance` is null the property has no track record. "
     "Write about market opportunity and never imply it currently earns or "
     "books anything.",
+    "When own_performance.is_stabilized is false the listing has not been on "
+    "the market a full year: its occupancy_pct and nights_listed cover months "
+    "it did not exist and position_vs_comp_median is null on purpose. Never "
+    "compare those two figures to the comp set, never call the property "
+    "under-performing, and never present them as a year's result. Say the "
+    "listing is young and that the projection is anchored to the market "
+    "(see calculator_defaults.occupancy_pct.basis).",
     "Write for a property owner weighing ROI: professional, data-informed, "
     "confident, not hyperbolic. No markdown, no headings, plain sentences.",
 ]
@@ -271,16 +278,42 @@ def _own_performance(prop, occ_summary: Optional[dict]) -> Optional[dict]:
     if sp is None or not sp.has_history:
         return None
 
+    # A listing live for three months reports a trailing-12 occupancy that is
+    # arithmetic over nine months it did not exist. The calculator already
+    # refuses to anchor to it (see SubjectPerformance.is_stabilized); the
+    # brief must refuse to rank it, or the writer is handed "20%, below the
+    # comp median, MEASURED" and licensed to call a top-quartile property an
+    # under-performer. That is the sentence the calculator fix took out of
+    # the headline.
+    stabilized = sp.is_stabilized
     position = None
-    if occ_summary and occ_summary.get("median") is not None:
+    if stabilized and occ_summary and occ_summary.get("median") is not None:
         gap = sp.occupancy_pct - float(occ_summary["median"])
         position = "above" if gap >= 5 else ("below" if gap <= -5 else "in_line")
 
-    return {
-        "_note": (
+    if stabilized:
+        note = (
             "MEASURED, not estimated. annual_revenue is fee-INCLUSIVE; adr is "
             "fee-EXCLUSIVE; occupancy_pct is adjusted (booked / open nights)."
-        ),
+        )
+    else:
+        months = sp.months_with_data
+        covered = (f"only {months} of the trailing 12 months" if months
+                   else "less than a full year")
+        note = (
+            f"MEASURED, but NOT a full year: this listing reported {covered}, "
+            "so occupancy_pct and nights_listed are computed over months it was "
+            "not on the market and understate it. Do not compare them to the "
+            "comp set, do not call the property under-performing on their "
+            "basis, and do not present them as a full-year result. The real "
+            "bookings (nights_booked, annual_revenue, adr) are still real. "
+            "annual_revenue is fee-INCLUSIVE; adr is fee-EXCLUSIVE."
+        )
+
+    return {
+        "_note": note,
+        "is_stabilized": stabilized,
+        "months_with_data": sp.months_with_data,
         "annual_revenue": _round(sp.annual_revenue, 0),
         "occupancy_pct": _round(sp.occupancy_pct),
         "nights_booked": sp.nights_booked,
@@ -405,15 +438,28 @@ def build_narrative_brief(
             "comps": [_comp_row(i, c) for i, c in enumerate(comps or [], 1)],
         },
         "calculator_defaults": {
+            "_note": (
+                "basis says where each default came from, and the report "
+                "discloses it beside the headline. 'subject' = the property's "
+                "own stabilized year; 'market_typical' = market median "
+                "occupancy because the listing is too young to project from; "
+                "'market_strong' = market upper quartile, same case but it beat "
+                "the market median in every month it ran; 'market_pool' = "
+                "median of every comparable AirROI returned; 'comp_set' = "
+                "median of the six shown. Never describe a market-based "
+                "default as this property's own result."
+            ),
             "occupancy_pct": {
                 "min": calculator.occ_min,
                 "max": calculator.occ_max,
                 "default": calculator.occ_default,
+                "basis": calculator.occ_basis,
             },
             "adr": {
                 "min": calculator.adr_min,
                 "max": calculator.adr_max,
                 "default": calculator.adr_default,
+                "basis": calculator.adr_basis,
             },
             "days": {
                 "min": calculator.days_min,
