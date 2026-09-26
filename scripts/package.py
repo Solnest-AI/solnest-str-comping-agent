@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import zipfile
+from fnmatch import fnmatch
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -50,6 +51,21 @@ NEVER_SHIP_GLOBS = (
     "*.pyo",
     ".DS_Store",
 )
+# Owner-only dev material. Tracked so the repo keeps its history, but it is not
+# the product: every Claude Code session opened in a user's copy would load the
+# dev skills (which reference an MCP users don't have, and AirDNA, which the
+# product no longer uses), and read internal notes with owner paths. Matched as
+# repo-relative path prefixes, fnmatch syntax. Found 2026-09-26 in a clean-room
+# install of the summit zip.
+DEV_ONLY = (
+    "HANDOFF.md",
+    "_pre-sync-backup-*",
+    ".claude/skills/gitnexus",
+    ".claude/skills/generated",
+    "docs/superpowers",
+    "scripts/calibrate_against_ledger.py",
+    "solneststays-full.png",
+)
 
 
 def tracked_files() -> list[Path]:
@@ -73,6 +89,9 @@ def tracked_files() -> list[Path]:
 
 def is_safe(rel: Path) -> bool:
     if any(part in NEVER_SHIP for part in rel.parts):
+        return False
+    posix = rel.as_posix()
+    if any(fnmatch(posix, p) or fnmatch(posix, p + "/*") for p in DEV_ONLY):
         return False
     return not any(rel.match(g) or rel.name == g for g in NEVER_SHIP_GLOBS)
 
