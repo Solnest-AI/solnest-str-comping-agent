@@ -41,7 +41,7 @@ files into `output/`:
 - `<slug>.report-data.json` — the whole assembled report, cached
 - `<slug>.narrative-brief.json` — the facts you need to write the copy
 
-Pass 1 spends real money on the user's AirROI key (roughly $0.40 a report) and takes
+Pass 1 spends real money on the user's AirROI key (about $0.50 a report, up to about $1.10 in a thin market) and takes
 about 30 seconds. **Run it once per property.** If a `report-data.json` already exists
 and the user just wants better wording, skip straight to pass 2.
 
