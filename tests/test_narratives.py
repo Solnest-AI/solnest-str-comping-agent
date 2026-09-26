@@ -275,7 +275,9 @@ def test_brief_carries_the_comp_table_and_calculator(case, tmp_path):
         assert row["name"] == comp.name
         assert row["bedrooms"] == comp.bedrooms
         assert row["sleeps"] == comp.sleeps
-        assert row["adr"] == pytest.approx(comp.adr, abs=0.51)
+        # The rate actually paid, not ttm_avg_rate (see test_paid_rate_everywhere).
+        assert "adr" not in row
+        assert row["nightly_rate"] == pytest.approx(comp.nightly_rate, abs=0.51)
         assert row["occupancy_pct"] == pytest.approx(comp.occupancy_pct, abs=0.06)
         assert row["annual_revenue"] == pytest.approx(comp.annual_revenue, abs=0.51)
         # rating None must survive as null: it means "too few reviews", not zero.
@@ -561,7 +563,7 @@ def test_api_failure_falls_back_to_template_copy(case, monkeypatch, tmp_path):
     out = _run(N.generate_narratives(
         prop, rentalizer, comps, calculator, output_dir=tmp_path,
     ))
-    assert out.positioning_summary.startswith("This property sits in a premium tier")
+    assert out.positioning_summary == N.template_narratives(prop, comps).positioning_summary
     # A key was configured, so this is not the keyless handoff path: no brief.
     assert not narrative_brief_path(tmp_path, prop).exists()
 

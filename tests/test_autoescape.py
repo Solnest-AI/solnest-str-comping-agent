@@ -58,7 +58,9 @@ def test_methodology_escapes_its_own_interpolations():
         name="X", market='Aspen<script>alert(1)</script>', bedrooms=2,
         bathrooms=1.0, max_guests=4, address="1 Main St", short_address="Aspen",
     )
-    m = build_methodology(prop, [], "", "", calculator=None)
+    # The market name is interpolated only when the market curve was used,
+    # so exercise that branch.
+    m = build_methodology(prop, [], "", "", calculator=None, seasonal_basis="market")
     joined = " ".join(m.data_sources)
     assert "<script>" not in joined, "market name reached a |safe list unescaped"
     assert "&lt;script&gt;" in joined

@@ -555,7 +555,9 @@ def score_comp(
     hard_fail_reason = ""
 
     text = comp_searchable_text(comp)
-    comp_adr = comp.get("adr_raw", 0) or _parse_adr(comp.get("adr", "0"))
+    # The rate the comp was actually paid, never AirROI's ttm_avg_rate (off by
+    # -13.8% to +18.9% on 30 comps, 2026-09-25). None skips the price checks.
+    comp_adr = _parse_adr(comp.get("nightly_rate")) or None
     comp_bedrooms = _parse_int(comp.get("bedrooms"))
     comp_sleeps = _parse_int(comp.get("sleeps")) or _parse_int(comp.get("max_guests"))
     comp_occ = _parse_pct(comp.get("occupancy_pct"))
@@ -650,7 +652,6 @@ def score_comp(
         comp["score_breakdown"] = []
         comp["hard_fail"] = True
         comp["hard_fail_reason"] = hard_fail_reason
-        comp["adr_raw"] = comp_adr
         return comp
 
     # ── Category scoring ───────────────────────────────────────────────────
@@ -678,6 +679,13 @@ def score_comp(
 
     # Category 4: Amenity match
     pts, lines = _score_amenity_match(text, subject_signals, comp.get("amenities_raw"))
+    # A premium feature the subject LACKS (hot tub, pool) lets the comp earn
+    # what the subject cannot. The caller sets extra_features only when too
+    # few comps without it existed to drop these (comp_filters.select_comp_pool),
+    # so this is what keeps the ones without ranked first.
+    for feature in comp.get("extra_features") or []:
+        pts -= 3
+        lines.append(f"-3 Has a {feature.replace('_', ' ')} the subject lacks")
     category_scores["amenity"] = pts
     breakdown.extend(lines)
 
@@ -713,7 +721,9 @@ def score_comp(
     comp["score_breakdown"] = breakdown
     comp["hard_fail"] = False
     comp["hard_fail_reason"] = ""
-    comp["adr_raw"] = comp_adr
+    # adr_raw is left as AirROI's ttm_avg_rate. It used to be written back
+    # here, which was harmless while comp_adr WAS that field; comp_adr is now
+    # the rate paid and must not overwrite the raw value.
 
     return comp
 
@@ -831,9 +841,10 @@ def rank_comps(subject: dict, comps: list, top_n: int = 6) -> dict:
 
     # Deterministic ordering. Score ties were previously resolved by input
     # order, so 18 of 20 input shuffles changed the delivered comp set.
-    # Tie-break: closer ADR to subject, then closer distance, then more reviews.
+    # Tie-break: closer rate paid to subject, then closer distance, then more
+    # reviews. The rate paid, not adr_raw (ttm_avg_rate, off by up to 19%).
     def _tiebreak(c):
-        adr_gap = abs((c.get("adr_raw") or 0) - (subject_adr or 0)) / max(subject_adr or 1, 1)
+        adr_gap = abs((c.get("nightly_rate") or 0) - (subject_adr or 0)) / max(subject_adr or 1, 1)
         dist = c.get("distance_km")
         return (
             -c["score"],
@@ -878,7 +889,7 @@ def rank_comps(subject: dict, comps: list, top_n: int = 6) -> dict:
 
         averages = {
             "nights_booked":     _avg("nights_booked"),
-            "adr":               _avg("adr_raw"),
+            "nightly_rate":      _avg("nightly_rate"),   # rate paid, not ttm_avg_rate
             "occupancy_pct":     _avg("occupancy_pct", lambda x: float(str(x).replace("%", ""))),
             "revenue_potential": _avg("revenue_potential_raw", float),
             "annual_revenue":    _avg("annual_revenue_raw", float),

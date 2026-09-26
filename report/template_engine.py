@@ -1,6 +1,7 @@
 """Jinja2 template rendering for the HTML report."""
 
 import statistics
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from datetime import date
 
@@ -32,6 +33,98 @@ def format_bath(value: float) -> str:
 
 # ── Rendering ─────────────────────────────────────────────────────────────
 
+def _whole_dollars(value: float) -> int:
+    return int(Decimal(str(value)).quantize(Decimal("1"), ROUND_HALF_UP))
+
+
+def _per_night(total: int, nights: int) -> Decimal:
+    """total / nights rounded half-up to the cent, as a calculator shows it."""
+    return (Decimal(total) / nights).quantize(Decimal("0.01"), ROUND_HALF_UP)
+
+
+def revenue_breakdown(comp) -> dict | None:
+    """The comp card's revenue figures, built so they check out on a calculator.
+
+    AirROI's ttm_avg_rate is never used: it is not the rate guests paid
+    (off by -13.8% to +18.9% across 30 comps, 2026-09-25), so nights x ADR
+    could not reproduce revenue. The rate is stated as a division instead,
+    because a rate rounded to the dollar times nights missed by up to $120
+    and even to the cent missed by up to $1.
+
+    "split" when monthly room revenue is known and no larger than revenue:
+    room + fees = total exactly (fees is the remainder, 0/30 negative in the
+    test), nightly = room / nights.
+    "per_night" otherwise: total / nights, fees included.
+    None without nights or revenue.
+    """
+    nights = comp.nights_booked
+    if nights <= 0 or comp.annual_revenue <= 0:
+        return None
+    total = _whole_dollars(comp.annual_revenue)
+    room = comp.room_revenue
+    if room is not None and 0 < room <= comp.annual_revenue:
+        room_d = _whole_dollars(room)
+        return {"mode": "split", "nights": nights, "total": total,
+                "room": room_d, "fees": total - room_d,
+                "nightly": _per_night(room_d, nights)}
+    return {"mode": "per_night", "nights": nights, "total": total,
+            "per_night": _per_night(total, nights)}
+
+
+def occupancy_basis_text(calc, sp) -> str:
+    """Say where the headline's occupancy came from.
+
+    The bases are not equally strong and a report that presents them
+    identically is hiding the difference: the comp-set median sits near the
+    market's 81st percentile and over-projected by +72% across 125
+    backtested listings.
+    """
+    if calc.occ_basis == "subject" and sp is not None:
+        return (
+            f"Occupancy is this property's own measured result over the last "
+            f"12 months ({sp.occupancy_pct:.0f}% of {sp.nights_listed} open "
+            f"nights), not an estimate from the comparables."
+        )
+    if calc.occ_basis == "market_strong" and sp is not None:
+        months = sp.months_with_data
+        covered = f"the {months} months" if months else "the months"
+        return (
+            f"This listing has not been on the market a full year, so its "
+            f"trailing-12-month occupancy is measured partly over a period it "
+            f"was not listed for and understates it. The scenario above is "
+            f"built on this market's UPPER-QUARTILE occupancy instead, because "
+            f"across {covered} the property has actually operated it ran above "
+            f"the market median every month."
+        )
+    if calc.occ_basis == "market_typical" and (sp is None or not sp.has_history):
+        # An address subject reaches this basis once it has coordinates, and
+        # the young-listing wording below told a never-listed house it had a
+        # measured result "shown below" (Gatlinburg, 2026-09-25).
+        return (
+            "This property has no Airbnb history in AirROI, so the scenario "
+            "above uses this market's median occupancy, measured across every "
+            "listing in the market."
+        )
+    if calc.occ_basis == "market_typical":
+        return (
+            "This listing has not been on the market a full year, so its "
+            "trailing-12-month occupancy covers a period it was not listed "
+            "for. The scenario above uses this market's median occupancy "
+            "instead of that figure. Its own measured result is shown below."
+        )
+    if calc.occ_basis == "market_pool":
+        return (
+            "Occupancy is the median across every comparable listing in this "
+            "market, not the median of the six shown below. Those six are "
+            "selected for quality and run well above the market median."
+        )
+    return (
+        "Occupancy is the median of the six comparables shown below. "
+        "Those six are selected for quality, so treat this as a "
+        "well-run-operator figure rather than a market average."
+    )
+
+
 def render_report(data: ReportData) -> str:
     """Render the Jinja2 template with all report data. Returns HTML string."""
     env = jinja2.Environment(
@@ -46,6 +139,7 @@ def render_report(data: ReportData) -> str:
     env.filters["format_currency"] = format_currency
     env.filters["format_currency_k"] = format_currency_k
     env.filters["format_bath"] = format_bath
+    env.globals["revenue_breakdown"] = revenue_breakdown
 
     template = env.get_template("report.html.j2")
 
@@ -57,47 +151,8 @@ def render_report(data: ReportData) -> str:
     initial_revenue = initial_occ_nights * calc.adr_default
     initial_revpar = round(initial_revenue / calc.days_default) if calc.days_default else 0
 
-    # Say where the headline's occupancy came from. The three bases are not
-    # equally strong and a report that presents them identically is hiding
-    # the difference: the comp-set median sits near the market's 81st
-    # percentile and over-projected by +72% across 125 backtested listings.
     sp = getattr(data.property, "subject_performance", None)
-    if calc.occ_basis == "subject" and sp is not None:
-        occ_basis_text = (
-            f"Occupancy is this property's own measured result over the last "
-            f"12 months ({sp.occupancy_pct:.0f}% of {sp.nights_listed} open "
-            f"nights), not an estimate from the comparables."
-        )
-    elif calc.occ_basis == "market_strong" and sp is not None:
-        months = sp.months_with_data
-        covered = f"the {months} months" if months else "the months"
-        occ_basis_text = (
-            f"This listing has not been on the market a full year, so its "
-            f"trailing-12-month occupancy is measured partly over a period it "
-            f"was not listed for and understates it. The scenario above is "
-            f"built on this market's UPPER-QUARTILE occupancy instead, because "
-            f"across {covered} the property has actually operated it ran above "
-            f"the market median every month."
-        )
-    elif calc.occ_basis == "market_typical":
-        occ_basis_text = (
-            "This listing has not been on the market a full year, so its "
-            "trailing-12-month occupancy covers a period it was not listed "
-            "for. The scenario above uses this market's median occupancy "
-            "instead of that figure. Its own measured result is shown below."
-        )
-    elif calc.occ_basis == "market_pool":
-        occ_basis_text = (
-            "Occupancy is the median across every comparable listing in this "
-            "market, not the median of the six shown below. Those six are "
-            "selected for quality and run well above the market median."
-        )
-    else:
-        occ_basis_text = (
-            "Occupancy is the median of the six comparables shown below. "
-            "Those six are selected for quality, so treat this as a "
-            "well-run-operator figure rather than a market average."
-        )
+    occ_basis_text = occupancy_basis_text(calc, sp)
 
     return template.render(
         comp_summary=_comp_summary(data),

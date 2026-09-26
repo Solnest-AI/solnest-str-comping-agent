@@ -171,7 +171,9 @@ def test_map_for_scorer_produces_all_required_fields():
     assert out["adr_raw"] == 425.50
     assert out["annual_revenue"] == 100000        # fee-INCLUSIVE
     assert out["annual_revenue_raw"] == 100000
-    assert out["room_revenue"] == pytest.approx(425.50 * NIGHTS_BOOKED)  # fee-EXCLUSIVE
+    # Room revenue is ttm_revpar x ttm_total_days, not ttm_avg_rate x nights:
+    # ttm_avg_rate missed the rate paid by -13.8% to +18.9% (2026-09-25).
+    assert out["room_revenue"] == pytest.approx(262.40 * 365)  # fee-EXCLUSIVE
 
     # Night accounting — three distinct quantities, never conflated
     assert out["nights_booked"] == NIGHTS_BOOKED

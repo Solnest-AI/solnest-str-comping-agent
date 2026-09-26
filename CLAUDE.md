@@ -228,8 +228,13 @@ produces a confidently wrong report:
   `nights_listed` instead, and there is deliberately no field named
   `days_available`.
 - `occupancy_pct` is **adjusted** occupancy: booked ÷ open nights.
-- `annual_revenue` is **fee-inclusive**; `adr` is **fee-exclusive**. Never
-  divide one by the other to reconstruct nights. You will be off by ~19%.
+- `annual_revenue` is **fee-inclusive**. Never divide it by `adr` to
+  reconstruct nights.
+- **`adr` (`ttm_avg_rate`) is not the rate guests paid.** Measured 2026-09-25
+  on 30 comps against `/listings/metrics/all` monthly sums: off by -13.8% to
+  +18.9%, 9 of 30 beyond 5%. Never multiply it by nights and never show it as
+  a rate. Room revenue is `ttm_revpar x ttm_total_days` (see below); the rate
+  paid is room revenue / `nights_booked`.
 - `CompProperty.rating` is `Optional`. `None` means too few reviews to rate;
   AirROI sends `0.0` for that case and the adapter converts it.
 - Amenities are Title Case display strings matched by **exact set membership**,
@@ -255,10 +260,15 @@ These four came from the 2026-09-20 pass. They cost real time to find:
   inventory. `SubjectPerformance.is_stabilized` gates this; `has_history` is a
   much lower bar and only decides whether to DISPLAY the trailing numbers.
   Never anchor a projection to an unstabilized subject.
-- **`ttm_revpar` and `ttm_adjusted_revpar` reconcile to neither `revenue/365`
-  nor `revenue/nights_listed`** (measured ratios 0.80-0.97 across the Sun Peaks
-  pool). Their definition is not one this code can state, so nothing uses them.
-  `CompProperty.revenue_per_listed_night` is computed locally instead.
+- **`ttm_revpar` is ROOM revenue (fees excluded) / `ttm_total_days`**, rounded
+  to 0.1. Corrected 2026-09-25: this note used to say it reconciled to nothing,
+  because it was compared with fee-inclusive revenue; its 0.80-0.97 ratio is
+  the room share. `ttm_revpar x ttm_total_days` matched the monthly room
+  revenue within $18 on 30/30 comps (median $1; 0.05 x 365 = $18.25 is the
+  rounding), so the comp cards split revenue into room + fees for free
+  instead of buying six `/listings/metrics/all` calls ($0.60).
+  `ttm_adjusted_revpar x open nights` matches too. `revenue_per_listed_night`
+  stays fee-inclusive and is still computed locally.
 
 Market endpoints accept only `usd` or `native` for `currency` and 422 on
 `cad`; `/price-recommendation/*` accepts `cad` fine. The full OpenAPI spec is

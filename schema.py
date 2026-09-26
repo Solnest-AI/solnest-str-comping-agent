@@ -6,8 +6,15 @@ from typing import Optional
 
 
 # A trailing-twelve-month figure is only a year's worth of evidence when the
-# listing was live for most of that year. See SubjectPerformance.is_stabilized.
-MIN_MONTHS_FOR_STABILIZED = 9
+# listing was live for ALL of that year. See SubjectPerformance.is_stabilized.
+# Was 9: "The Clubhouse Scottsdale" (2026-09-26) had 9 monthly rows and was
+# projected from a 25.2% that counted 3 pre-launch months as open, unsold
+# nights (live-months rate about 34%). AirROI returns a row for every month it
+# has a listing on record, 0% months included; across 49 cached pulls every
+# short series was missing its FIRST months. Whether those are pre-launch or
+# just untracked is not knowable from the data, but the trailing figures count
+# them either way, so fewer than 12 rows is not a year.
+MIN_MONTHS_FOR_STABILIZED = 12
 MAX_L90D_SHARE_FOR_STABILIZED = 0.75
 
 
@@ -30,16 +37,25 @@ class SubjectPerformance(BaseModel):
     annual_revenue: float = 0                # ttm_revenue, fee-INCLUSIVE
     occupancy_pct: float = 0                 # adjusted: booked / open nights
     occupancy_raw_pct: Optional[float] = None  # booked / 365
-    adr: float = 0                           # room rate, fees EXCLUDED
+    adr: float = 0                           # AirROI ttm_avg_rate: NOT the rate paid
     nights_booked: int = 0
     nights_listed: int = 0                   # open inventory (total - blocked)
     revpar: Optional[float] = None
+    room_revenue: Optional[float] = None     # ttm_revpar x ttm_total_days, fees EXCLUDED
     l90d_occupancy_pct: Optional[float] = None
     l90d_nights_booked: Optional[int] = None
     # How many of the trailing 12 months the listing actually reported data
     # for. Filled from /listings/metrics/all when we buy it; None when we
     # did not. See is_stabilized for why this matters more than it sounds.
     months_with_data: Optional[int] = None
+
+    @property
+    def nightly_rate(self) -> Optional[float]:
+        """The rate this property was actually paid per booked night, fees
+        excluded. See CompProperty.nightly_rate."""
+        if not self.room_revenue or self.nights_booked <= 0:
+            return None
+        return self.room_revenue / self.nights_booked
 
     @property
     def has_history(self) -> bool:
@@ -121,6 +137,9 @@ class PropertyBasics(BaseModel):
     sqft: Optional[int] = None
     is_superhost: bool = False
     amenities: list[str] = Field(default_factory=list)
+    # Premium features the subject's own listing shows it does NOT have
+    # (comp_filters.detect_lacking_features). Empty when unknown.
+    lacking_features: list[str] = Field(default_factory=list)
     description: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
@@ -157,7 +176,13 @@ class CompProperty(BaseModel):
     revenue_potential: float = 0                                  # fee-inclusive ceiling
     annual_revenue: float = 0                                     # fee-inclusive (ttm_revenue)
     occupancy_pct: float = 0                                      # ADJUSTED: booked / open nights
-    adr: float = 0                                                # room rate, fees EXCLUDED
+    adr: float = 0                                                # AirROI ttm_avg_rate: NOT the rate paid (see room_revenue)
+    # Room revenue only (fees excluded) over the same nights as nights_booked:
+    # ttm_revpar x ttm_total_days, which matched the /listings/metrics/all
+    # monthly sums within $18 on 30/30 comps (2026-09-25). ttm_avg_rate missed
+    # the rate actually paid by -13.8% to +18.9% on the same 30, so a card
+    # that multiplies it by nights cannot add up. None when unavailable.
+    room_revenue: Optional[float] = None
     # Night accounting. nights_booked + unsold == nights_listed (approx).
     # There is deliberately no field called "days_available": AirROI's
     # ttm_available_days means UNSOLD nights and reading it as availability
@@ -177,6 +202,19 @@ class CompProperty(BaseModel):
     longitude: Optional[float] = None
     rescued: bool = False                                         # admitted via rescue pass
     airbnb_url: str = ""
+
+    @property
+    def nightly_rate(self) -> Optional[float]:
+        """The rate guests actually paid per booked night, fees excluded.
+
+        Room revenue / nights booked. This, not `adr`, is what every price
+        comparison uses: ttm_avg_rate missed it by -13.8% to +18.9% across
+        30 comps (2026-09-25). None when room revenue is unavailable, so a
+        caller skips the comparison instead of falling back to the bad field.
+        """
+        if not self.room_revenue or self.nights_booked <= 0:
+            return None
+        return self.room_revenue / self.nights_booked
 
     @property
     def revenue_per_listed_night(self) -> float:

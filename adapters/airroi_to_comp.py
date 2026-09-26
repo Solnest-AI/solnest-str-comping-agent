@@ -243,7 +243,11 @@ def _derive_revenue_potential(
 ) -> Optional[float]:
     """Revenue ceiling on the SAME fee-inclusive basis as ttm_revenue.
 
-    Ceiling = (adr x open nights x achievable occupancy) + cleaning fees.
+    Ceiling = (rate x open nights x achievable occupancy) + cleaning fees.
+
+    `adr` here must be the rate actually paid (nightly_rate), not
+    ttm_avg_rate: fed the field, a comp's ceiling moved with a number that
+    missed the rate paid by up to 19%, and so did its efficiency score.
 
     `occ_ceiling` is the occupancy a strong operator in THIS market actually
     reaches (p75 of the comp pool, see market_occupancy_ceiling). It is not a
@@ -336,8 +340,20 @@ def map_for_scorer(airroi_listing: dict) -> dict:
     m["total_days"]    = total
     m["blocked_days"]  = blocked
 
-    # Room revenue (fee-EXCLUSIVE) — the basis that pairs with adr
-    m["room_revenue"] = (adr or 0.0) * m["nights_booked"]
+    # Room revenue (fee-EXCLUSIVE) = ttm_revpar x ttm_total_days. Measured
+    # 2026-09-25 against /listings/metrics/all monthly sums on 30 comps: within
+    # $18 on 30/30 (median $1), which is ttm_revpar's 0.1 rounding x 365.
+    # NOT adr x nights: ttm_avg_rate missed the rate actually paid by -13.8%
+    # to +18.9% on the same 30. None when revpar is absent or zero, so the
+    # card falls back to revenue per booked night instead of a guess.
+    revpar_raw = pm.get("ttm_revpar")
+    m["room_revenue"] = (float(revpar_raw) * total
+                         if revpar_raw and float(revpar_raw) > 0 else None)
+    # The rate guests actually paid. Every price comparison uses this, never
+    # adr: the scorer skips its price checks when this is None rather than
+    # fall back to the field it replaces.
+    m["nightly_rate"] = (m["room_revenue"] / m["nights_booked"]
+                         if m["room_revenue"] and m["nights_booked"] > 0 else None)
 
     # Occupancy: prefer ADJUSTED (booked / open inventory). Raw ttm_occupancy
     # divides by 365 and so understates any listing that was blocked off.
@@ -363,7 +379,7 @@ def map_for_scorer(airroi_listing: dict) -> dict:
     m["min_nights"] = (airroi_listing.get("booking_settings") or {}).get("min_nights")
 
     rev_potential = _derive_revenue_potential(
-        annual_rev, adr, m["nights_listed"],
+        annual_rev, m["nightly_rate"], m["nights_listed"],
         cleaning_fee=m["cleaning_fee"], avg_los=m["avg_length_of_stay"],
     )
     m["revenue_potential_raw"] = rev_potential
@@ -432,7 +448,7 @@ def map_batch_for_scorer(airroi_listings: list[dict]) -> list[dict]:
         own = (m.get("occupancy_pct") or 0) / 100.0
         occ_for_potential = min(OCC_CEILING_CAP, max(ceiling, own))
         pot = _derive_revenue_potential(
-            m.get("annual_revenue"), m.get("adr"), m.get("nights_listed") or 0,
+            m.get("annual_revenue"), m.get("nightly_rate"), m.get("nights_listed") or 0,
             cleaning_fee=m.get("cleaning_fee"), avg_los=m.get("avg_length_of_stay"),
             occ_ceiling=occ_for_potential,
         )
@@ -487,6 +503,8 @@ def to_comp_property(scored_comp: dict) -> CompProperty:
         adr=_safe_float(scored_comp.get("adr_raw") or scored_comp.get("adr")),
         nights_booked=_safe_int(scored_comp.get("nights_booked"), 0),
         nights_listed=_safe_int(scored_comp.get("nights_listed"), 365),
+        room_revenue=(_safe_float(scored_comp["room_revenue"])
+                      if scored_comp.get("room_revenue") else None),
         revpar=_safe_float(scored_comp.get("revpar")),
         l90d_occupancy_pct=(_safe_float(scored_comp["l90d_occupancy_pct"])
                             if scored_comp.get("l90d_occupancy_pct") is not None else None),
@@ -557,6 +575,7 @@ def subject_performance_from_listing(
         nights_listed=_safe_int(m.get("nights_listed")),
         revpar=(_safe_float(m.get("revpar"))
                 if m.get("revpar") is not None else None),
+        room_revenue=m.get("room_revenue"),
         l90d_occupancy_pct=(_safe_float(m.get("l90d_occupancy_pct"))
                             if m.get("l90d_occupancy_pct") is not None else None),
         l90d_nights_booked=(_safe_int(m.get("l90d_nights_booked"))
@@ -571,10 +590,22 @@ def subject_for_scorer(
     estimate_data: dict,
 ) -> dict:
     """Build a subject-property dict in the shape comp_scorer.rank_comps
-    expects for `subject`."""
-    adr = estimate_data.get("average_daily_rate")
-    if adr is not None:
-        adr = float(adr)
+    expects for `subject`.
+
+    The subject's rate is what it was actually paid per booked night when it
+    has a stabilized year, matching the comps' basis (nightly_rate). Otherwise
+    AirROI's modelled estimate ADR, the only price there is for a property
+    with no track record. Which basis that estimate is on is unverified: on
+    the seven cached estimates it sat between the pool's ttm_avg_rate and
+    paid-rate medians.
+    """
+    sp = prop.subject_performance
+    if sp is not None and sp.is_stabilized and sp.nightly_rate:
+        adr = sp.nightly_rate
+    else:
+        adr = estimate_data.get("average_daily_rate")
+        if adr is not None:
+            adr = float(adr)
 
     amenities = list(prop.amenities or [])
 

@@ -41,6 +41,11 @@ PROPERTY_SCHEMA = {
         "hero_image_url": {"type": "string",  "description": "URL of the main/hero property photo"},
         "market":         {"type": "string",  "description": "City or town name where the property is located"},
         "price":          {"type": "number",  "description": "Listing price or estimated value in local currency"},
+        "features":       {"type": "array", "items": {"type": "string"},
+                           "description": ("Every feature or amenity the property HAS, copied from the "
+                                           "listing's features, amenities and details sections (e.g. "
+                                           "'Screened-in porch', 'Hot tub', 'Community pool'). Omit "
+                                           "anything the listing marks as none or not included.")},
     },
 }
 
@@ -219,11 +224,160 @@ def _coerce_float(v) -> Optional[float]:
         return None
 
 
-def _parse_firecrawl_result(raw: dict, source_url: str) -> dict:
+# ── Hero photo selection ─────────────────────────────────────────────
+#
+# Firecrawl's LLM extraction is asked for "the main property photo" and is not
+# deterministic: the same Zillow listing gave a Google Static Maps tile on one
+# run and a 576px living-room shot on another (1131 Tanrac Trl, 2026-09-25).
+# The page's og:image is deterministic, and on the big listing portals it IS
+# the listing's primary photo. It comes back in the metadata of the same
+# Firecrawl response, so preferring it costs nothing.
+
+# Portals whose og:image is the listing's primary photo. Zillow and
+# Realtor.com verified live 2026-09-25; Redfin and realtor.ca are the other
+# portals the sanity gate already trusts. On agent and brokerage sites
+# og:image is often a site-wide banner (seen: sierrastatic "hero_caspian"),
+# so theirs is never used.
+_PORTAL_PHOTO_HOSTS = (
+    "photos.zillowstatic.com",
+    "rdcpix.com",
+    "cdn-redfin.com",
+    "cdn.realtor.ca",
+)
+
+# Anything matching these is not a photo of the property.
+_NOT_A_PHOTO = (
+    "/maps/api/staticmap", "maps.gstatic.com", "api.mapbox.com",
+    "/static/images/", "logo", "favicon", "/icons/", "share_thumbnail",
+    "sprite", "placeholder", "no-photo", "nophoto", "thmb_",
+)
+_NOT_A_PHOTO_EXT = (".svg", ".gif", ".ico")
+
+_STREET_VIEW = "/maps/api/streetview"
+
+# Zillow serves every gallery photo at several sizes under one hash.
+# cc_ft_1536 is the size Zillow itself uses for og:image.
+_ZILLOW_PHOTO = re.compile(
+    r"^(https://photos\.zillowstatic\.com/fp/[0-9a-f]+)-[A-Za-z0-9_]+\.(?:jpe?g|webp)$"
+)
+
+
+def _host(url: str) -> str:
+    return url.split("://", 1)[-1].split("/", 1)[0].lower()
+
+
+def _is_photo_url(url: str) -> bool:
+    if not url.startswith(("https://", "http://")):
+        return False
+    low = url.lower()
+    path = low.split("?", 1)[0]
+    if path.endswith(_NOT_A_PHOTO_EXT):
+        return False
+    return not any(marker in low for marker in _NOT_A_PHOTO)
+
+
+# Realtor.com encodes the size in the name: ...od-w640_h480.jpg. w1536_h1152
+# resolved on the Gatlinburg listing (w640 through w2048 all did).
+_RDC_PHOTO = re.compile(
+    r"^(https://[a-z0-9.]*rdcpix\.com/.+?)-w\d+_h\d+\.(?:jpe?g|webp)$"
+)
+
+
+def full_size_photo(url: str) -> str:
+    """A 1536px-wide variant of a Zillow or Realtor.com photo; other URLs
+    unchanged. Callers confirm the variant resolves (confirm_hero_variant)."""
+    m = _ZILLOW_PHOTO.match(url)
+    if m:
+        return f"{m.group(1)}-cc_ft_1536.jpg"
+    m = _RDC_PHOTO.match(url)
+    if m:
+        return f"{m.group(1)}-w1536_h1152.jpg"
+    return url
+
+
+def pick_hero_image(extracted: Optional[str], metadata: Optional[dict] = None) -> str:
+    """Choose the subject's hero photo, or "" when nothing is a real photo.
+
+    Order: a listing portal's own og:image, then the LLM-extracted URL, then
+    Street View as a last resort (a real photo of the house, just a poor one).
+    Maps, logos and site-wide images are never returned. Zillow photos are
+    requested at full size.
+    """
+    return full_size_photo(_pick_hero_source(extracted, metadata))
+
+
+def _pick_hero_source(extracted: Optional[str], metadata: Optional[dict] = None) -> str:
+    """pick_hero_image before the size upgrade."""
+    meta = metadata or {}
+    og = (meta.get("ogImage") or meta.get("og:image") or "").strip()
+    extracted = (extracted or "").strip()
+
+    ordered: list[str] = []
+    if og and any(h in _host(og) for h in _PORTAL_PHOTO_HOSTS):
+        ordered.append(og)
+    ordered.append(extracted)
+
+    photos = [u for u in ordered if u and _is_photo_url(u)]
+    photos.sort(key=lambda u: _STREET_VIEW in u.lower())  # stable: Street View last
+    return photos[0] if photos else ""
+
+
+async def _image_resolves(url: str) -> bool:
+    """True when the URL answers 200 with an image content type."""
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.head(url)
+    except httpx.HTTPError:
+        return False
+    return (resp.status_code == 200
+            and resp.headers.get("content-type", "").startswith("image/"))
+
+
+async def confirm_hero_variant(chosen: str, original: str) -> str:
+    """Keep an upsized variant only if it actually resolves.
+
+    The upsize is inferred from Zillow's URL scheme (verified on one listing,
+    five sizes). If a listing lacks that size, Phase A's liveness check would
+    block the whole report over a cosmetic upgrade; fall back instead.
+    """
+    if not chosen or chosen == original:
+        return chosen
+    return chosen if await _image_resolves(chosen) else original
+
+
+async def resolved_hero(extracted: Optional[str], metadata: Optional[dict] = None) -> str:
+    """pick_hero_image, keeping the size upgrade only when it resolves."""
+    source = _pick_hero_source(extracted, metadata)
+    return await confirm_hero_variant(full_size_photo(source), source)
+
+
+# A features list sometimes carries the listing's own "none" answers
+# ("Pool: None", "Spa: Not listed"). Read as text they say "pool" and "spa",
+# which would make the subject REQUIRE the very feature it lacks.
+_NONE_FEATURE = re.compile(r"\b(?:none|not\s+(?:listed|included|available)|n/?a|no)\b", re.I)
+
+
+def _clean_features(raw) -> list[str]:
+    """Scraped feature strings the property actually has."""
+    out: list[str] = []
+    for item in raw if isinstance(raw, list) else []:
+        text = str(item or "").strip()
+        if text and not _NONE_FEATURE.search(text):
+            out.append(text)
+    return out
+
+
+def _parse_firecrawl_result(
+    raw: dict, source_url: str, metadata: Optional[dict] = None,
+) -> dict:
     """Normalize a Firecrawl JSON extraction result into the standard
-    property dict shape that agent.py expects (same keys as old MLS scraper)."""
+    property dict shape that agent.py expects (same keys as old MLS scraper).
+
+    `metadata` is the page metadata from the same Firecrawl response; its
+    og:image outranks the extracted hero on listing portals.
+    """
     return {
-        "hero_image_url": raw.get("hero_image_url") or "",
+        "hero_image_url": pick_hero_image(raw.get("hero_image_url"), metadata),
         "bedrooms":       _coerce_int(raw.get("bedrooms")),
         "bathrooms":      _coerce_float(raw.get("bathrooms")),
         "sqft":           _coerce_int(raw.get("sqft")),
@@ -235,6 +389,7 @@ def _parse_firecrawl_result(raw: dict, source_url: str) -> dict:
         "description":    raw.get("description") or "",
         "market":         raw.get("market") or "",
         "price":          _coerce_float(raw.get("price")),
+        "features":       _clean_features(raw.get("features")),
     }
 
 
@@ -292,7 +447,8 @@ async def scrape_listing_url(url: str, expect_locality: str = "") -> Optional[di
                 "Extract the property listing details from this real estate page. "
                 "Find the street address, number of bedrooms, bathrooms, square footage, "
                 "property type, description, the main/hero property photo URL, "
-                "the city/town name, and the listing price if shown. "
+                "the city/town name, the listing price if shown, and every feature "
+                "the property has from its features and details sections. "
                 "For the hero image, find the largest/main property photo URL (not a logo or icon)."
             ),
             "schema": PROPERTY_SCHEMA,
@@ -301,12 +457,15 @@ async def scrape_listing_url(url: str, expect_locality: str = "") -> Optional[di
     }
 
     data = await _firecrawl_post("/scrape", body)
-    json_data = (data.get("data") or {}).get("json")
+    payload = data.get("data") or {}
+    json_data = payload.get("json")
     if not json_data or not isinstance(json_data, dict):
         print(f"[Search] No structured data extracted from {url[:60]}", file=sys.stderr)
         return None
 
-    result = _parse_firecrawl_result(json_data, url)
+    metadata = payload.get("metadata")
+    result = _parse_firecrawl_result(json_data, url, metadata)
+    result["hero_image_url"] = await resolved_hero(json_data.get("hero_image_url"), metadata)
 
     # Require at least a hero image or bedrooms to consider this a real result
     if not result["hero_image_url"] and not result["bedrooms"]:
@@ -350,7 +509,8 @@ async def search_for_property(address: str) -> Optional[dict]:
                     "Extract the property listing details from this page. "
                     "Find the street address, bedrooms, bathrooms, square footage, "
                     "property type, description, the main property photo URL, "
-                    "the city/town name, and price."
+                    "the city/town name, price, and every feature the property has "
+                    "from its features and details sections."
                 ),
                 "schema": PROPERTY_SCHEMA,
             },
@@ -384,7 +544,7 @@ async def search_for_property(address: str) -> Optional[dict]:
         score = 0
         if json_data.get("bedrooms"):
             score += 3
-        if json_data.get("hero_image_url"):
+        if pick_hero_image(json_data.get("hero_image_url"), r.get("metadata")):
             score += 3
         if json_data.get("bathrooms"):
             score += 2
@@ -413,7 +573,7 @@ async def search_for_property(address: str) -> Optional[dict]:
 
         if score > best_score:
             best_score = score
-            best = {"json": json_data, "url": r_url}
+            best = {"json": json_data, "url": r_url, "metadata": r.get("metadata")}
 
     if best is not None and want_city:
         # Hard reject: never return a property from a town nobody asked about.
@@ -450,7 +610,9 @@ async def search_for_property(address: str) -> Optional[dict]:
                 return scraped
         return None
 
-    result = _parse_firecrawl_result(best["json"], best["url"])
+    result = _parse_firecrawl_result(best["json"], best["url"], best["metadata"])
+    result["hero_image_url"] = await resolved_hero(
+        best["json"].get("hero_image_url"), best["metadata"])
 
     print(f"[Search] Best match: {best['url'][:60]}")
     print(f"         {result.get('title', '')[:50]} / "
@@ -489,8 +651,8 @@ async def search_hero_image(address: str) -> Optional[str]:
     data = await _firecrawl_post("/search", body)
     for r in (data.get("data") or []):
         json_data = r.get("json") or {}
-        img = json_data.get("hero_image_url")
-        if img and img.startswith("http"):
+        img = await resolved_hero(json_data.get("hero_image_url"), r.get("metadata"))
+        if img:
             print(f"[Search] Found hero image: {img[:80]}")
             return img
 

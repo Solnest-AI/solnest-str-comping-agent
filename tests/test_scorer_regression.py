@@ -62,6 +62,10 @@ def _financials(booked: int, blocked: int, adr: float) -> dict:
         "occupancy_pct": round(booked / listed * 100, 2),
         "adr": adr,
         "adr_raw": adr,
+        # The scorer prices comps on the rate actually paid. In this synthetic
+        # fixture adr IS the room rate (revpar = adr x booked / 365), so the
+        # rate paid equals it. On live data they differ by up to 19%.
+        "nightly_rate": adr,
         "annual_revenue": round(adr * booked * FEE_FACTOR, 2),
         "revpar": round(adr * (booked / 365), 2),
     }
@@ -299,6 +303,7 @@ def test_luxury_floor_disqualifies_low_adr_comp():
     cheap_comp = dict(COMP_A)
     cheap_comp["adr"] = 200
     cheap_comp["adr_raw"] = 200
+    cheap_comp["nightly_rate"] = 200
     scored = _score(cheap_comp)
     assert scored["hard_fail"], "Expected luxury floor to disqualify $200 comp against $850 subject"
     assert "luxury" in scored["hard_fail_reason"].lower()
@@ -345,6 +350,7 @@ def test_financial_penalty_fires():
     weak_fin = dict(COMP_A)
     weak_fin["adr"] = 1300          # ADR diff 53% → 0 ADR points (above 35% gate)
     weak_fin["adr_raw"] = 1300
+    weak_fin["nightly_rate"] = 1300
     weak_fin["revpar"] = 100        # 100/850 = 0.12 < 0.15 → -1
     weak_fin["annual_revenue"] = 15000
     weak_fin["revenue_potential"] = 200000  # efficiency 7.5% → -1

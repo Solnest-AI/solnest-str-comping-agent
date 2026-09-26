@@ -54,6 +54,7 @@ _TRUSTED_HERO_HOSTS = (
     "ssl.cdn-redfin.com",
     "photos.zillowstatic.com",  # Zillow
     "zillowstatic.com",
+    "rdcpix.com",             # Realtor.com (ap.rdcpix.com, verified 2026-09-25)
     "maps.googleapis.com",    # Google Street View (Firecrawl fallback)
     "ssl.hwcdn.net",          # Homes.com CDN
     "static.wixstatic.com",   # Wix-hosted sites
@@ -152,9 +153,12 @@ def _check_revenue_sanity(comp: CompProperty) -> Optional[str]:
     Returns a failure string only when the relationship is impossible on the
     AirROI contract, which means we have corrupted the mapping somewhere.
     """
-    if comp.adr <= 0 or comp.nights_booked <= 0 or comp.annual_revenue <= 0:
+    if comp.nights_booked <= 0 or comp.annual_revenue <= 0:
         return None  # handled by the field check
-    room_revenue = comp.adr * comp.nights_booked
+    # Measured room revenue when we have it. adr x nights is only a fallback:
+    # ttm_avg_rate missed the rate paid by up to 19%, which is noise this gate
+    # should not be judging.
+    room_revenue = comp.room_revenue or (comp.adr * comp.nights_booked)
     if room_revenue <= 0:
         return None
     ratio = comp.annual_revenue / room_revenue
@@ -167,6 +171,28 @@ def _check_revenue_sanity(comp: CompProperty) -> Optional[str]:
                 f"{_REVENUE_RATIO_MAX:.0%} of ADR×booked nights (${room_revenue:,.0f}) — "
                 f"mapping error suspected")
     return None
+
+
+def check_subject_hero(url: str) -> list[str]:
+    """The subject hero must exist, come from a trusted host, and be a photo.
+
+    maps.googleapis.com is trusted for Street View, which is a photo of the
+    house. The same host also serves Static Maps tiles, and one shipped as an
+    address subject's hero (Gatlinburg, 2026-09-25), so maps are refused here
+    even though the host is trusted.
+    """
+    if not url:
+        return ["Subject hero_image_url is empty"]
+    host = url.split("://", 1)[-1].split("/", 1)[0].lower()
+    if not any(t in host for t in _TRUSTED_HERO_HOSTS):
+        return [
+            f"Subject hero from untrusted source: {host} "
+            f"(expected {', '.join(_TRUSTED_HERO_HOSTS)})"
+        ]
+    if "/maps/api/staticmap" in url.lower():
+        return ["Subject hero is a map tile, not a photo of the property "
+                "(pass --hero-url with a real photo)"]
+    return []
 
 
 def validate_calculator_defaults(calc) -> list[str]:
@@ -221,17 +247,9 @@ async def run_phase_a(data: ReportData) -> list[str]:
         if msg:
             failures.append(msg)
 
-    # 4. Subject hero — required, must be from a trusted host
+    # 4. Subject hero — required, must be a photo from a trusted host
     prop = data.property
-    if not prop.hero_image_url:
-        failures.append("Subject hero_image_url is empty")
-    else:
-        host = prop.hero_image_url.split("://", 1)[-1].split("/", 1)[0].lower()
-        if not any(t in host for t in _TRUSTED_HERO_HOSTS):
-            failures.append(
-                f"Subject hero from untrusted source: {host} "
-                f"(expected {', '.join(_TRUSTED_HERO_HOSTS)})"
-            )
+    failures.extend(check_subject_hero(prop.hero_image_url))
 
     # 5. Currency consistency (light — the template locks it in via property.currency)
     if not prop.currency:

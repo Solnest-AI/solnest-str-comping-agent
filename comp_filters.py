@@ -226,8 +226,12 @@ _FEATURE_ALIASES: dict[str, str] = {
 # there is no boundary between "whirl" and "pool".
 _FEATURE_TEXT_PATTERNS: dict[str, tuple[str, ...]] = {
     "pool": (
+        # Billiards is the other live trap: "play pool in the game room",
+        # "a game of pool", "competition with pool 🎱" (all Gatlinburg comps,
+        # 2026-09-25). Guarded by fixed-width lookbehinds and the emoji.
+        r"(?<!play\s)(?<!playing\s)(?<!game\sof\s)(?<!shoot\s)(?<!shooting\s)"
         r"\bpools?\b(?!\s*(?:table|tables|view|views|hall|halls|room|rooms|"
-        r"noodle|noodles|cue|cues|stick|sticks))",
+        r"noodle|noodles|cue|cues|stick|sticks|🎱))",
         r"\bswimming\s+pool\b", r"\bplunge\s+pool\b", r"\blap\s+pool\b",
     ),
     "hot_tub": (
@@ -495,6 +499,39 @@ def comp_has_feature(comp, feature: str) -> bool:
     return has_feature(name, description, amenities, feature)
 
 
+def listing_mentions_feature(
+    name: Optional[str],
+    description: Optional[str],
+    amenities=None,
+    feature: str = "pool",
+) -> bool:
+    """`has_feature` WITHOUT the authoritative-silence rule: True when either
+    the amenity list or the listing's own text says it has `feature`.
+
+    That rule exists for REQUIRING a feature, where loose text ("minutes walk
+    to the pool") produced false matches. It is the wrong rule for deciding a
+    comp carries something the subject lacks: "Upscale Cabin w/ Views! HOT
+    TUB" ticked 62 amenities without "Pool" while its description says
+    "+ Outdoor pool (Pool is closed during winter season October - March)",
+    and it was kept as a pool-free comp for a house with no pool.
+    """
+    feature = normalize_feature(feature)
+    vocab = {v.lower() for v in _vocab_for(feature)}
+    if _amenity_set(amenities) & vocab:
+        return True
+    text = strip_html(
+        f"{name or ''} . {description or ''} . "
+        + " . ".join(a for a in (amenities or []) if isinstance(a, str))
+    )
+    return _text_matches(text, _text_patterns_for(feature))
+
+
+def comp_mentions_feature(comp, feature: str) -> bool:
+    """`listing_mentions_feature` for a nested AirROI comp or a flat mapped dict."""
+    name, description, amenities = extract_listing_fields(comp)
+    return listing_mentions_feature(name, description, amenities, feature)
+
+
 def detect_required_features(
     name: Optional[str],
     description: Optional[str],
@@ -504,6 +541,50 @@ def detect_required_features(
     """Which of `candidates` the SUBJECT has, i.e. what comps must also have."""
     return [f for f in (normalize_feature(c) for c in candidates)
             if has_feature(name, description, amenities, f)]
+
+
+# What counts as "something to read" before absence can mean "lacks". A
+# one-line blurb saying nothing about a hot tub is not evidence the house has
+# none; a full listing description or a scraped features list is.
+_MIN_DESCRIPTION_CHARS = 200
+_MIN_SCRAPED_FEATURES = 5
+
+
+def subject_features_readable(description: Optional[str], amenities=None) -> bool:
+    """Is there enough about the subject to trust that an unmentioned
+    feature is absent? An AirROI-shaped amenity list always is."""
+    if amenity_list_is_authoritative(amenities):
+        return True
+    scraped = [a for a in (amenities or []) if isinstance(a, str) and a.strip()]
+    if len(scraped) >= _MIN_SCRAPED_FEATURES:
+        return True
+    return len(strip_html(description or "")) >= _MIN_DESCRIPTION_CHARS
+
+
+def detect_lacking_features(
+    name: Optional[str],
+    description: Optional[str],
+    amenities=None,
+    candidates: Sequence[str] = DEFAULT_REQUIRED_CANDIDATES,
+    exclude: Sequence[str] = (),
+) -> list[str]:
+    """Which of `candidates` the SUBJECT does not have, i.e. what comps should
+    not carry. The mirror of detect_required_features, decided by the same
+    negation-guarded `has_feature`.
+
+    Returns [] when there is nothing to read (see subject_features_readable):
+    unknown is not "lacks". Features in `exclude` (what the operator passed
+    to --require) are never reported as lacking.
+
+    Found on 1131 Tanrac Trl, Gatlinburg: all 6 comps had a hot tub, 5 a pool,
+    and the house's listing names neither.
+    """
+    if not subject_features_readable(description, amenities):
+        return []
+    skip = {normalize_feature(e) for e in exclude}
+    # "Lacks" only when neither the amenity list nor the text mentions it.
+    return [f for f in (normalize_feature(c) for c in candidates)
+            if f not in skip and not listing_mentions_feature(name, description, amenities, f)]
 
 
 # ── Public: apply the gates to a pool ─────────────────────────────────────
@@ -603,6 +684,11 @@ class PoolSelection:
     report: FilterReport            # the STRICT pass, even when later relaxed
     excluded: list[str]             # names the operator's --exclude removed
     relaxed: bool = False           # filters backed off to keep the pool usable
+    # Comps dropped for carrying a feature the subject lacks: (name, features).
+    lacking_dropped: list = field(default_factory=list)
+    # Lacking features too few comps were without to filter on; comps keep
+    # them and the scorer marks them down (extra_features in score_comp).
+    lacking_relaxed: list = field(default_factory=list)
 
 
 def select_comp_pool(
@@ -610,8 +696,10 @@ def select_comp_pool(
     *,
     drop_on_water: bool = False,
     required_features: Sequence[str] = (),
+    lacking_features: Sequence[str] = (),
     exclude_terms: Sequence[str] = (),
     min_comps: int = 6,
+    min_without_extras: int = 10,
 ) -> PoolSelection:
     """Filters, then the operator's exclusions, then relax the FILTERS only.
 
@@ -637,4 +725,34 @@ def select_comp_pool(
         relaxed = True
         kept, _ = apply_keyword_exclusions(pool, exclude_terms)
 
-    return PoolSelection(kept=kept, report=report, excluded=excluded, relaxed=relaxed)
+    # Features the subject LACKS: drop comps carrying one, but only when at
+    # least `min_without_extras` remain. That is deliberately more than six:
+    # the scorer then hard-fails some and the liveness probe others, and a
+    # pool cut to exactly six would block the report. Short of it, keep them
+    # all and let the scorer mark the extras down, so comps without still
+    # rank first. Runs after --exclude, so exclusions always hold.
+    #
+    # Each feature is judged on its own. Together they failed on Gatlinburg:
+    # 0 of 25 comps lacked a hot tub and 14 lacked a pool, so no comp lacked
+    # BOTH and neither was filtered.
+    lacking = [normalize_feature(f) for f in lacking_features]
+    # Keyed by the comp object, not its title: sibling units share titles
+    # (ten Nashville lofts are all "Downtown Music City Loft living ~Steps to
+    # Broadway"), and keying by name merged them into one entry.
+    dropped: dict[int, tuple[str, list[str]]] = {}
+    lacking_relaxed: list[str] = []
+    for feature in lacking:
+        carrying = [c for c in kept if comp_mentions_feature(c, feature)]
+        if not carrying:
+            continue
+        if len(kept) - len(carrying) >= min_without_extras:
+            for c in carrying:
+                dropped.setdefault(id(c), (extract_listing_fields(c)[0] or "(unnamed)",
+                                           []))[1].append(feature)
+            kept = [c for c in kept if not comp_mentions_feature(c, feature)]
+        else:
+            lacking_relaxed.append(feature)
+    lacking_dropped = list(dropped.values())
+
+    return PoolSelection(kept=kept, report=report, excluded=excluded, relaxed=relaxed,
+                         lacking_dropped=lacking_dropped, lacking_relaxed=lacking_relaxed)

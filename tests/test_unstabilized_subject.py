@@ -17,6 +17,8 @@ report opened its calculator at CA$47,775.
 
 from __future__ import annotations
 
+import pytest
+
 from generators.calculator import (
     _beats_market_median,
     _market_level,
@@ -544,3 +546,25 @@ def test_brief_carries_the_calculator_basis():
     calc = _brief(sp)["calculator_defaults"]
     assert calc["occupancy_pct"]["basis"] == "market_strong"
     assert calc["adr"]["basis"] == "subject"
+
+
+# ── A full year means all twelve months ──
+#
+# Random test run, 2026-09-26: "The Clubhouse Scottsdale" (airbnb
+# 1447963181237037673) returned 9 monthly rows, Dec 2025 - Aug 2026, and was
+# treated as stabilized because the threshold was 9. AirROI counted the three
+# pre-launch months as OPEN unsold nights (nights_listed 365, 0 blocked), so
+# its 25.2% trailing occupancy was 92 nights over 365 when it had only existed
+# for 274: its live-months rate was about 34%. Across 49 cached monthly pulls,
+# every full series returned 12 rows (months with no bookings come back as 0%
+# rows, not missing ones), and every short series was missing its FIRST
+# months. Pre-launch or untracked, the trailing figures still count those
+# months, so only 12 of 12 is a year.
+
+@pytest.mark.parametrize("months,expected", [(9, False), (11, False), (12, True)])
+def test_a_full_year_needs_all_twelve_months(months, expected):
+    scottsdale = SubjectPerformance(
+        annual_revenue=59_617, occupancy_pct=25.2, adr=645, nights_booked=92,
+        nights_listed=365, months_with_data=months,
+    )
+    assert scottsdale.is_stabilized is expected

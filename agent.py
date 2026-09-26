@@ -43,7 +43,7 @@ from comp_scorer import rank_comps
 import comp_filters
 
 
-from generators.calculator import (derive_calculator_defaults, derive_seasonal_data,
+from generators.calculator import (derive_calculator_defaults,
                                    derive_seasonal_data_with_basis, derive_season_labels,
                                    market_occupancy_band, market_months_missing)
 from generators.narratives import (
@@ -106,6 +106,21 @@ async def _check_liveness(urls: list[str]) -> list[bool]:
         follow_redirects=False,
     ) as client:
         return await asyncio.gather(*[_head(client, u) for u in urls])
+
+
+async def _check_comps_usable(cands: list[dict]) -> list[bool]:
+    """A comp is usable when its listing page AND its cover photo are live.
+
+    Liveness used to probe only the listing page. A Destin comp (2026-09-26)
+    had a live listing and a 404 cover photo; Phase A then blocked the whole
+    report over it while a replacement candidate sat unused. A missing photo
+    counts as dead: Phase A requires one.
+    """
+    urls = [_airbnb_id_to_url(c) for c in cands]
+    photos = [(c.get("listing_info") or {}).get("cover_photo_url") or "" for c in cands]
+    listing_live, photo_live = await asyncio.gather(
+        _check_liveness(urls), _check_liveness(photos))
+    return [a and b for a, b in zip(listing_live, photo_live)]
 
 
 # ── Constants ─────────────────────────────────────────────────────────
@@ -376,10 +391,18 @@ async def _resolve_subject(args) -> PropertyBasics:
             description=listing_data.get("description"),
             title=listing_data.get("title"),
             sqft=int(listing_data.get("sqft")) if listing_data.get("sqft") else None,
+            # The listing's own features (porch, deck, hot tub...). Without
+            # them an address subject reached the feature gate with nothing,
+            # and six hot-tub comps priced a house with no hot tub.
+            amenities=list(listing_data.get("features") or []),
         )
         # Infer guest capacity from bedrooms if not found
         if prop.max_guests <= 0 and prop.bedrooms > 0:
             prop.max_guests = prop.bedrooms * 2 + 2
+        # The listing had no usable photo (a map or a logo is refused), so
+        # look for one before Phase A blocks the report on an empty hero.
+        if not prop.hero_image_url and not args.hero_url:
+            prop.hero_image_url = await search_hero_image(prop.address or raw) or ""
     else:
         print("[Search] No listing found online.")
         # Still build from CLI args — but try to at least find a hero image
@@ -419,6 +442,31 @@ async def _resolve_subject(args) -> PropertyBasics:
 
 
 # ── AirROI estimate -> RentalizerData ────────────────────────────────
+
+def _adopt_estimate_location(prop: PropertyBasics, estimate_data: dict | None) -> bool:
+    """Give an address or Zillow subject the coordinates AirROI geocoded.
+
+    Only the Airbnb path sets prop.latitude/longitude. Every other subject
+    reached Step 8 with none, so the market curve was never bought and the
+    scorer's distance category scored every comp 0, while /calculator/estimate
+    had already geocoded the address in the same run and returned it as
+    `location`. Measured on 1131 Tanrac Trl, Gatlinburg (2026-09-25):
+    35.7461037, -83.4811331.
+
+    A listing's own coordinates are never overwritten. Returns True only when
+    coordinates were adopted.
+    """
+    if prop.latitude is not None and prop.longitude is not None:
+        return False
+    loc = (estimate_data or {}).get("location")
+    if not isinstance(loc, dict):
+        return False
+    lat, lng = loc.get("latitude"), loc.get("longitude")
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (lat, lng)):
+        return False
+    prop.latitude, prop.longitude = float(lat), float(lng)
+    return True
+
 
 def _build_rentalizer(estimate_data: dict, prop: PropertyBasics) -> RentalizerData:
     """Construct a RentalizerData from AirROI's calculator/estimate response."""
@@ -671,6 +719,9 @@ Examples:
             occ = estimate_data.get("occupancy") or 0
             print(f"[AirROI] Estimate: rev ${rev:,.0f} / ADR ${adr:.0f} / Occ {occ:.0%}")
             print(f"[AirROI] Comp candidates: {len(candidates_raw)}")
+            if _adopt_estimate_location(prop, estimate_data):
+                print(f"[AirROI] Subject located from the estimate: "
+                      f"{prop.latitude:.5f}, {prop.longitude:.5f}")
 
             # CURRENCY FIX. Step 1's get_listing() call defaults to currency="usd"
             # and cannot pass the right one, because the currency is derived from
@@ -790,10 +841,23 @@ Examples:
             prop.title or "", prop.description or "", prop.amenities or [],
         )
 
+    # The mirror image: premium features the subject does NOT have, so comps
+    # carrying them are left out (or ranked down when too few lack them).
+    lacking_features = [] if args.no_feature_filter else comp_filters.detect_lacking_features(
+        prop.title or "", prop.description or "", prop.amenities or [],
+        exclude=required_features,
+    )
+    prop.lacking_features = lacking_features
+
     print(f"[Filters] Subject water proximity: {subject_water}"
           f"{' — dropping on-water comps' if drop_on_water else ''}")
     if required_features:
         print(f"[Filters] Subject requires: {', '.join(required_features)}")
+    if lacking_features:
+        print(f"[Filters] Subject lacks: {', '.join(lacking_features)}")
+    elif not args.no_feature_filter and not comp_filters.subject_features_readable(
+            prop.description, prop.amenities):
+        print("[Filters] Subject amenities could not be read — comps not matched on pool/hot tub")
 
     before_filters = len(candidates_raw)
     _funnel_before_filters = before_filters
@@ -808,10 +872,19 @@ Examples:
     # comp_filters.select_comp_pool and tests/test_comp_pool_selection.py.
     selection = comp_filters.select_comp_pool(
         _unfiltered_candidates, drop_on_water=drop_on_water,
-        required_features=required_features, exclude_terms=exclude_terms,
+        required_features=required_features, lacking_features=lacking_features,
+        exclude_terms=exclude_terms,
     )
     for line in selection.report.lines():
         print(f"[Filters] {line}")
+    if selection.lacking_dropped:
+        print(f"[Filters] Dropped {len(selection.lacking_dropped)} comps with a feature the "
+              f"subject lacks:")
+        for name, extras in selection.lacking_dropped:
+            print(f"[Filters]     - {name[:50]}  (has: {', '.join(extras)})")
+    for feature in selection.lacking_relaxed:
+        print(f"[Filters] Too few comps without a {feature.replace('_', ' ')} to leave "
+              f"them out — keeping them, ranked down by the scorer and disclosed")
     for name in selection.excluded:
         print(f"[Filters] Excluded by keyword: {name[:50]}")
     if selection.relaxed:
@@ -823,6 +896,10 @@ Examples:
     candidates_raw = selection.kept
 
     mapped = map_batch_for_scorer(candidates_raw)
+    if selection.lacking_relaxed:
+        for m in mapped:
+            m["extra_features"] = [f for f in selection.lacking_relaxed
+                                   if comp_filters.comp_mentions_feature(m, f)]
     subject_for_scoring = subject_for_scorer(prop, estimate_data if not args.skip_financials else {})
     # Over-select so we have replacement candidates for any dead Airbnb listings
     result = rank_comps(subject_for_scoring, mapped, top_n=12)
@@ -842,13 +919,13 @@ Examples:
             need = 6 - len(live_selected)
             batch = ranked[checked:checked + need]
             batch_urls = [_airbnb_id_to_url(c) for c in batch]
-            batch_live = await _check_liveness(batch_urls)
+            batch_live = await _check_comps_usable(batch)
             probes += len(batch)
             for cand, url, is_live in zip(batch, batch_urls, batch_live):
                 if is_live:
                     live_selected.append(cand)
                 else:
-                    print(f"[Scorer] Dropping dead listing: {cand.get('name', '?')[:40]} ({url})")
+                    print(f"[Scorer] Dropping dead listing or photo: {cand.get('name', '?')[:40]} ({url})")
             checked += len(batch)
         print(f"[Scorer] Liveness: {probes} probe(s) to fill {len(live_selected)} slot(s)")
 
@@ -867,7 +944,7 @@ Examples:
                 """Lower = closer to subject."""
                 comp_beds = c.get("bedrooms") or 0
                 comp_sleeps = c.get("sleeps") or c.get("accommodates") or c.get("max_guests") or 0
-                comp_adr = c.get("adr_raw") or c.get("adr") or 0
+                comp_adr = c.get("nightly_rate") or 0  # rate paid, not ttm_avg_rate
                 bed_diff = abs(comp_beds - subj_beds)
                 sleep_diff = abs(comp_sleeps - subj_sleeps) / max(1, subj_sleeps)
                 adr_diff = abs(comp_adr - subj_adr) / max(1, subj_adr)
@@ -889,7 +966,7 @@ Examples:
             rescue_candidates.sort(key=_closeness)
 
             rescue_urls = [_airbnb_id_to_url(c) for c in rescue_candidates]
-            rescue_liveness = await _check_liveness(rescue_urls)
+            rescue_liveness = await _check_comps_usable(rescue_candidates)
 
             bed_tol = max_bed_diff(subj_beds or 0)
             guest_tol = max_guest_diff(subj_sleeps or 0)
@@ -1044,6 +1121,9 @@ Examples:
             "A", phase_a_failures, config.OUTPUT_DIR, subject_slug=slug,
         )
         print("\n[SANITY] Phase A blocking — NOT generating report.")
+        # Say why here too: the reasons used to reach only the JSON file.
+        for failure in phase_a_failures:
+            print(f"  - {failure}")
         sys.exit(2)
     print("[Sanity] Phase A passed — all 6 comps complete, hero images live, math sane.")
 
@@ -1212,7 +1292,9 @@ Examples:
         )
 
     if not seasonal_data:
-        seasonal_data = derive_seasonal_data(
+        # Keep the basis: the methodology names the chart's source from it,
+        # and the discarding wrapper left this path reported as "".
+        seasonal_data, seasonal_basis = derive_seasonal_data_with_basis(
             rentalizer,
             comp_monthly_data=comp_monthly_data,
         )
@@ -1231,6 +1313,7 @@ Examples:
                     min(round((ratio / avg_ratio) * annual_occ, 1), 95.0)
                     for ratio in distributions
                 ]
+                seasonal_basis = "revenue_distribution"
                 print("[Seasonal] Derived from AirROI monthly revenue distributions")
 
     if not seasonal_data:
@@ -1248,7 +1331,7 @@ Examples:
     )
     _basis_label = {
         "subject":        "the subject's own trailing 12 months",
-        "market_typical": "market median occupancy (subject has no full year of history)",
+        "market_typical": "market median occupancy (no stabilized year of the subject's own)",
         "market_strong":  "market UPPER QUARTILE (subject beat the market median in every month it ran)",
         "market_pool":    f"market pool median of {len(pool_occupancies)} listings",
         "comp_set":       "comp-set median (no pool or subject history available)",
@@ -1261,8 +1344,9 @@ Examples:
 
     source = {"market": "AirROI market curve (p50, with p25-p75 band)",
               "comps": "AirROI per-comp average",
-              "subject": "this property's own monthly history"}.get(
-                  seasonal_basis, "AirROI revenue distribution")
+              "subject": "this property's own monthly history",
+              "revenue_distribution": "AirROI revenue distribution"}.get(
+                  seasonal_basis, "unknown")
     print(f"[Seasonal] Source: {source}")
     print(f"[Seasonal] Monthly occ: {[int(v) for v in seasonal_data]}")
 
@@ -1298,6 +1382,9 @@ Examples:
         prop, comps, peak_label, shoulder_label, calculator=calculator,
         comp_funnel=comp_funnel,
         market_months_missing=missing_months,
+        seasonal_basis=seasonal_basis,
+        lacking_features=lacking_features,
+        lacking_relaxed=selection.lacking_relaxed,
     )
 
     print("\n--- Step 10: Rendering HTML report (to staging) ---")

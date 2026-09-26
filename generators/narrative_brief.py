@@ -150,8 +150,9 @@ NARRATIVE_RULES: list[str] = [
     "Never state an occupancy figure or range outside the low-high band in "
     "comp_set.occupancy_pct_summary. Round bounds INWARD (a low of 61.4 becomes "
     "61.5 or 'about 62', never 61) so the range you claim never exceeds the real one.",
-    "annual_revenue is fee-INCLUSIVE and adr is fee-EXCLUSIVE. Do not divide "
-    "one by the other, and do not present them as the same basis.",
+    "annual_revenue is fee-INCLUSIVE; nightly_rate is fee-EXCLUSIVE: the rate "
+    "actually paid per booked night (room revenue / nights booked). Do not "
+    "present them as the same basis.",
     "occupancy_pct is ADJUSTED occupancy (nights booked / nights open), not "
     "booked nights over 365.",
     "A comp with rating: null has too few reviews to be rated. That is not a "
@@ -233,9 +234,13 @@ def occupancy_stats(comps: Optional[list[CompProperty]]) -> Optional[dict]:
     }
 
 
-def adr_stats(comps: Optional[list[CompProperty]]) -> Optional[dict]:
+def nightly_rate_stats(comps: Optional[list[CompProperty]]) -> Optional[dict]:
+    """Low / median / high of the rate each comp was actually paid per booked
+    night, fees excluded. Built from nightly_rate, never from `adr`
+    (ttm_avg_rate), which missed the rate paid by -13.8% to +18.9%."""
     values = sorted(
-        float(c.adr) for c in (comps or []) if c is not None and c.adr and c.adr > 0
+        float(c.nightly_rate) for c in (comps or [])
+        if c is not None and c.nightly_rate and c.nightly_rate > 0
     )
     if not values:
         return None
@@ -293,8 +298,9 @@ def _own_performance(prop, occ_summary: Optional[dict]) -> Optional[dict]:
 
     if stabilized:
         note = (
-            "MEASURED, not estimated. annual_revenue is fee-INCLUSIVE; adr is "
-            "fee-EXCLUSIVE; occupancy_pct is adjusted (booked / open nights)."
+            "MEASURED, not estimated. annual_revenue is fee-INCLUSIVE; "
+            "nightly_rate is the rate actually paid per booked night, fees "
+            "EXCLUDED; occupancy_pct is adjusted (booked / open nights)."
         )
     else:
         months = sp.months_with_data
@@ -306,8 +312,8 @@ def _own_performance(prop, occ_summary: Optional[dict]) -> Optional[dict]:
             "not on the market and understate it. Do not compare them to the "
             "comp set, do not call the property under-performing on their "
             "basis, and do not present them as a full-year result. The real "
-            "bookings (nights_booked, annual_revenue, adr) are still real. "
-            "annual_revenue is fee-INCLUSIVE; adr is fee-EXCLUSIVE."
+            "bookings (nights_booked, annual_revenue, nightly_rate) are still "
+            "real. annual_revenue is fee-INCLUSIVE; nightly_rate is fee-EXCLUSIVE."
         )
 
     return {
@@ -318,7 +324,7 @@ def _own_performance(prop, occ_summary: Optional[dict]) -> Optional[dict]:
         "occupancy_pct": _round(sp.occupancy_pct),
         "nights_booked": sp.nights_booked,
         "nights_listed": sp.nights_listed,
-        "adr": _round(sp.adr, 0),
+        "nightly_rate": _round(sp.nightly_rate, 0),
         "revenue_per_booked_night": _round(sp.revenue_per_booked_night, 0),
         "l90d_occupancy_pct": (_round(sp.l90d_occupancy_pct)
                                if sp.l90d_occupancy_pct is not None else None),
@@ -335,7 +341,7 @@ def _comp_row(index: int, comp: CompProperty) -> dict:
         "bathrooms": comp.bathrooms,
         "sleeps": comp.sleeps,
         "occupancy_pct": _round(comp.occupancy_pct),
-        "adr": _round(comp.adr, 0),
+        "nightly_rate": _round(comp.nightly_rate, 0),
         "annual_revenue": _round(comp.annual_revenue, 0),
         "distance_km": _round(comp.distance_km, 2),
         # None means too few reviews to rate. AirROI sends 0.0 for that; the
@@ -368,7 +374,7 @@ def build_narrative_brief(
     against the report.
     """
     occ = occupancy_stats(comps)
-    adr = adr_stats(comps)
+    rate = nightly_rate_stats(comps)
 
     return {
         "schema_version": 1,
@@ -395,6 +401,7 @@ def build_narrative_brief(
             "rating": prop.rating,
             "review_count": prop.review_count,
             "amenities": list(prop.amenities or []),
+            "lacks_features": list(getattr(prop, "lacking_features", None) or []),
             "description": prop.description,
             "own_performance": _own_performance(prop, occ),
         },
@@ -405,8 +412,10 @@ def build_narrative_brief(
                 "this profile in this market, fee-inclusive. It is an upper "
                 "estimate, not a forecast and not a measured result: describe it "
                 "as what a strong operator could reach, never as what this "
-                "property earns or will earn. adr is fee-exclusive; "
-                "occupancy_pct is adjusted."
+                "property earns or will earn. adr is AirROI's MODELLED rate for "
+                "this profile, not a measured rate and not on a verified fee "
+                "basis: do not compare it to any nightly_rate. occupancy_pct is "
+                "adjusted."
             ),
             "revenue_potential": _round(rentalizer.revenue_potential, 0),
             "adr": _round(rentalizer.adr, 0),
@@ -429,12 +438,13 @@ def build_narrative_brief(
         "comp_set": {
             "_note": (
                 "The comps the scorer actually selected. occupancy_pct is "
-                "adjusted (booked / open nights); adr excludes fees; "
-                "annual_revenue includes them; rating null = too few reviews."
+                "adjusted (booked / open nights); nightly_rate is the rate "
+                "actually paid per booked night, fees excluded; annual_revenue "
+                "includes fees; rating null = too few reviews."
             ),
             "count": len(comps or []),
             "occupancy_pct_summary": occ,
-            "adr_summary": adr,
+            "nightly_rate_summary": rate,
             "comps": [_comp_row(i, c) for i, c in enumerate(comps or [], 1)],
         },
         "calculator_defaults": {

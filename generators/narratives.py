@@ -46,7 +46,7 @@ from generators.narrative_brief import (
     NARRATIVE_LIST_FIELDS,
     NARRATIVE_RULES,
     _own_performance,
-    adr_stats,
+    nightly_rate_stats,
     build_narrative_brief,
     comp_occupancy_line,
     handoff_message,
@@ -280,9 +280,11 @@ def _build_prompt(
     comp_summary = ""
     for i, c in enumerate(comps, 1):
         rating = f"{c.rating:.2f}" if c.rating else "unrated (too few reviews)"
+        rate = (f"rate paid=${c.nightly_rate:,.0f}/night (fees excluded), "
+                if c.nightly_rate else "")
         comp_summary += (
             f"  Comp {i}: {c.name} — {c.bedrooms}BR/{c.bathrooms}BA, "
-            f"Sleeps {c.sleeps}, ADR=${c.adr:,.0f} (fees excluded), "
+            f"Sleeps {c.sleeps}, {rate}"
             f"AdjOcc={c.occupancy_pct:.0f}%, "
             f"Revenue=${c.annual_revenue:,.0f} (fees included), Rating={rating}\n"
         )
@@ -341,7 +343,8 @@ def _build_prompt(
             f"- Trailing 12 months revenue: ${_own['annual_revenue']:,.0f} (fees included)",
             f"- Trailing 12 months adjusted occupancy: {_own['occupancy_pct']:.0f}%",
             f"- Nights booked: {_own['nights_booked']} of {_own['nights_listed']} open nights",
-            f"- Average rate: ${_own['adr']:,.0f} (fees excluded)",
+            (f"- Rate paid per booked night: ${_own['nightly_rate']:,.0f} (fees excluded)"
+             if _own.get("nightly_rate") else "- Rate paid per booked night: unknown"),
             f"- POSITION vs comp median: {_own['position_vs_comp_median'] or 'unknown'}",
         ])
 
@@ -659,6 +662,83 @@ def _parse_narratives(
 # Path 3 — template narratives
 # --------------------------------------------------------------------------
 
+def _template_positioning_summary(
+    prop: PropertyBasics, comps: list[CompProperty], occ: Optional[dict],
+) -> str:
+    """State where the subject stands, from measured data only.
+
+    This used to open every report with "sits in a premium tier ... competes
+    with the top of the STR market". Printed on a listing at 23.6% adjusted
+    occupancy against a comp median of 59.9% (Four Corners, 2026-09-25).
+    The position comes from _own_performance, the same comparison the brief
+    hands the pass-two writer, so both passes rank the subject identically.
+    """
+    base = f"A {prop.bedrooms}-bedroom, {prop.max_guests}-guest property in {prop.market}"
+    own = _own_performance(prop, occ)
+    if own is None:
+        return (
+            f"{base} with no Airbnb track record in AirROI, so every figure in "
+            f"this report is modelled from the market and the comparable "
+            f"listings, not from bookings it has taken."
+        )
+    if not own["is_stabilized"]:
+        return (
+            f"{base} that has not been listed for a full year yet, so its "
+            f"trailing figures are not compared with the comparable listings "
+            f"in this report."
+        )
+    booked = (f"{base}. Over the last 12 months it booked "
+              f"{own['occupancy_pct']:.0f}% of its open nights")
+    position = own.get("position_vs_comp_median")
+    if position is None or not occ:
+        return booked + "."
+    relation = {"above": "above", "below": "below", "in_line": "in line with"}[position]
+    return (f"{booked}, {relation} the {occ['median']:.0f}% median of the "
+            f"{len(comps)} comparable listings selected for this report.")
+
+
+def _template_quality_card(prop: PropertyBasics, comps: list[CompProperty]) -> str:
+    """Reputation from reviews when there are any; never an inspection claim."""
+    not_inspected = "Finishes and presentation were not inspected for this analysis."
+    if not (prop.rating and prop.review_count):
+        return (
+            f"{not_inspected} Compare this property's photos against the "
+            f"comparables below before assuming it can charge more than they do."
+        )
+    text = f"Rated {prop.rating:.2f} across {prop.review_count} reviews"
+    text += ", with Superhost status." if prop.is_superhost else "."
+    rated = [c.rating for c in comps if c.rating]
+    if rated:
+        text += f" The comparables are rated {min(rated):.2f} to {max(rated):.2f}."
+    return f"{text} {not_inspected}"
+
+
+def _template_location_card(prop: PropertyBasics, comps: list[CompProperty]) -> str:
+    """Where the comps sit relative to the subject; no tier claim."""
+    dists = [c.distance_km for c in comps if c.distance_km is not None]
+    if dists:
+        return (
+            f"The comparables sit within {max(dists):.1f} km of this property "
+            f"and compete for the same {prop.market} demand. This analysis does "
+            f"not score location as an advantage or a drawback."
+        )
+    return (
+        f"The comparables come from AirROI's search around this property in "
+        f"{prop.market}. This analysis does not score location as an advantage "
+        f"or a drawback."
+    )
+
+
+def _template_guests_description(prop: PropertyBasics, comps: list[CompProperty]) -> str:
+    """Capacity against the comp set. Bylaws were never checked, so say so."""
+    text = f"Sleeps {prop.max_guests}"
+    if comps:
+        lo, hi = min(c.sleeps for c in comps), max(c.sleeps for c in comps)
+        text += f"; the comparables sleep {lo}" + (f"-{hi}" if hi != lo else "")
+    return (f"{text}. Local occupancy limits were not checked; confirm them "
+            f"before marketing to the full count.")
+
+
 def template_narratives(
     prop: PropertyBasics,
     comps: Optional[list[CompProperty]] = None,
@@ -674,7 +754,7 @@ def template_narratives(
     shippable prose on its own.
     """
     occ = occupancy_stats(comps)
-    adr = adr_stats(comps)
+    adr = nightly_rate_stats(comps)  # rates actually paid, fees excluded
     peak_months = months_from_label(peak_season_label)
     shoulder_months = months_from_label(shoulder_season_label)
     peak_share = share_from_label(peak_season_label)
@@ -749,9 +829,9 @@ def template_narratives(
 
     # ---- positioning -----------------------------------------------------
     revenue_card_text = (
-        f"Positioning at the top of the {prop.market} comp set supports a "
-        f"stronger ADR and a longer booked season, with upside from closing "
-        f"amenity gaps against the leaders."
+        f"Revenue potential depends on where this property prices against the "
+        f"{prop.market} comparables; no comparable rates were available to set "
+        f"that range here."
     )
     if adr:
         revenue_card_text = (
@@ -762,13 +842,9 @@ def template_narratives(
             f"supports it."
         )
 
+    comp_list = list(comps or [])
     return Narratives(
-        positioning_summary=(
-            f"This property sits in a premium tier for {prop.market}: "
-            f"a {prop.bedrooms}-bedroom, {prop.max_guests}-guest capacity home "
-            f"that competes with the top of the STR market rather than "
-            f"typical like-for-like inventory."
-        ),
+        positioning_summary=_template_positioning_summary(prop, comp_list, occ),
         guest_profile=(
             f"Target guest profile: groups sized to the {prop.max_guests}-guest "
             f"capacity: family and multi-couple travel, plus the holiday and "
@@ -785,19 +861,12 @@ def template_narratives(
             PositioningCard(
                 emoji="📍",
                 title="Location Premium",
-                text=(
-                    f"Location places this property in the top tier of "
-                    f"{prop.market} rentals, competing on proximity to whatever "
-                    f"drives demand in this market rather than on price alone."
-                ),
+                text=_template_location_card(prop, comp_list),
             ),
             PositioningCard(
                 emoji="⭐",
                 title="Statement Quality",
-                text=(
-                    "Premium finishes and architectural quality create a "
-                    "statement-home experience that commands higher nightly rates."
-                ),
+                text=_template_quality_card(prop, comp_list),
             ),
             PositioningCard(
                 emoji="💰",
@@ -806,13 +875,11 @@ def template_narratives(
             ),
         ],
         config_description=(
-            "Underwrite assumes premium living/dining flow, view-forward "
-            "presentation, and guest-ready utility."
+            f"{prop.bedrooms} bedrooms and {prop.bathrooms:g} baths for up to "
+            f"{prop.max_guests} guests. Layout and presentation were not "
+            f"inspected for this analysis."
         ),
-        guests_description=(
-            "Max guests aligned with municipality bylaws; comp set is "
-            "capped accordingly to keep pricing and demand signals comparable."
-        ),
+        guests_description=_template_guests_description(prop, comp_list),
         peak_season_text=peak_sentence,
         shoulder_season_text=shoulder_sentence,
         peak_season_label=peak_season_label or "",

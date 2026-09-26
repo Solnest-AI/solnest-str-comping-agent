@@ -242,6 +242,35 @@
       letter-spacing: 0.1em;
     }
 
+    /* Revenue basis labels and the per-card revenue split. AirROI revenue
+       includes fees and ADR excludes them; without these a card's own
+       arithmetic does not add up. */
+    .metric .k .k-basis{
+      font-size: 0.62rem;
+      text-transform: none;
+      letter-spacing: 0;
+      opacity: 0.75;
+    }
+    .rev-split{
+      margin-top: 0.4rem;
+      font-size: 0.8rem;
+      line-height: 1.7;
+      color: #44403c;
+    }
+    .rev-row{
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+    }
+    .rev-amt{ font-weight: 700; white-space: nowrap; }
+    .rev-note{ font-size: 0.72rem; color: var(--sol-muted); margin: -0.2rem 0 0.1rem; }
+    .rev-total{
+      border-top: 1px solid rgba(0,0,0,0.12);
+      margin-top: 0.15rem;
+      padding-top: 0.15rem;
+    }
+    .rev-total .rev-amt{ font-weight: 800; color: var(--sol-forest); }
+
     .metric .v{
       margin-top: 0.5rem;
       font-size: 1.25rem;
@@ -1009,8 +1038,11 @@
             <strong>Annual Revenue</strong> is the trailing-12-month result, fees included.
             <strong>Rev / Listed Night</strong> is that revenue divided by the nights the listing was open,
             which is how to compare a home open 187 nights against one open 365.
-            <strong>ADR</strong> excludes cleaning and guest fees, so it is a different basis from the
-            calculator's rate above. Occupancy is against each listing's own open nights.
+            <strong>How the revenue adds up</strong> splits that revenue into room revenue and cleaning
+            and other fees where AirROI's monthly data is available, and otherwise divides it by nights
+            booked, fees included. Every line there checks out on a calculator. AirROI's own average-rate
+            figure is not shown because it did not match the rate guests actually paid.
+            Occupancy is against each listing's own open nights.
           </p>
         </div>
         <span class="airroi-pill">✓ AirROI Verified</span>
@@ -1040,10 +1072,32 @@
             </div>
             <div class="metric-grid">
               <div class="metric"><div class="k">Rev / Listed Night</div><div class="v">{{ comp.revenue_per_listed_night | format_currency(property.currency) }}</div></div>
-              <div class="metric"><div class="k">Annual Revenue</div><div class="v">{{ comp.annual_revenue | format_currency_k(property.currency) }}</div></div>
+              <div class="metric"><div class="k">Annual Revenue <span class="k-basis">incl. fees</span></div><div class="v">{{ comp.annual_revenue | format_currency_k(property.currency) }}</div></div>
               <div class="metric"><div class="k">Occupancy</div><div class="v">{{ '%.1f'|format(comp.occupancy_pct) }}%</div></div>
-              <div class="metric"><div class="k">ADR</div><div class="v">{{ comp.adr | format_currency(property.currency) }}</div></div>
+              {% set rb = revenue_breakdown(comp) %}
+              {% if rb and rb.mode == 'split' %}
+              <div class="metric"><div class="k">Avg Nightly Rate <span class="k-basis">excl. fees</span></div><div class="v">{{ property.currency }}{{ '{:,}'.format(rb.nightly) }}</div></div>
+              {% elif rb %}
+              <div class="metric"><div class="k">Per Booked Night <span class="k-basis">incl. fees</span></div><div class="v">{{ property.currency }}{{ '{:,}'.format(rb.per_night) }}</div></div>
+              {% endif %}
               <div class="metric" style="grid-column: 1 / span 2;"><div class="k">Nights Booked (12 mo)</div><div class="v">{{ comp.nights_booked }}<span style="font-size:.7em;opacity:.6;"> / {{ comp.nights_listed }} listed</span></div></div>
+              {% if rb %}
+              <div class="metric" style="grid-column: 1 / span 2;">
+                <div class="k">How the revenue adds up</div>
+                <div class="rev-split">
+                  {% if rb.mode == 'split' %}
+                  <div class="rev-row"><span>Room revenue</span><span class="rev-amt">{{ property.currency }}{{ '{:,}'.format(rb.room) }}</span></div>
+                  <div class="rev-note">{{ property.currency }}{{ '{:,}'.format(rb.room) }} &divide; {{ rb.nights }} nights = {{ property.currency }}{{ '{:,}'.format(rb.nightly) }} a night</div>
+                  <div class="rev-row"><span>+ cleaning &amp; other fees</span><span class="rev-amt">{{ property.currency }}{{ '{:,}'.format(rb.fees) }}</span></div>
+                  <div class="rev-row rev-total"><span>Annual revenue</span><span class="rev-amt">{{ property.currency }}{{ '{:,}'.format(rb.total) }}</span></div>
+                  {% else %}
+                  <div class="rev-row"><span>Annual revenue</span><span class="rev-amt">{{ property.currency }}{{ '{:,}'.format(rb.total) }}</span></div>
+                  <div class="rev-row"><span>&divide; nights booked</span><span class="rev-amt">{{ rb.nights }}</span></div>
+                  <div class="rev-row rev-total"><span>Per booked night, incl. fees</span><span class="rev-amt">{{ property.currency }}{{ '{:,}'.format(rb.per_night) }}</span></div>
+                  {% endif %}
+                </div>
+              </div>
+              {% endif %}
             </div>
           </div>
           <a href="{{ comp.airbnb_url }}" target="_blank"

@@ -288,7 +288,7 @@ def derive_calculator_defaults(
     adr_range_text = (
         f"{prop.currency}{int(min(adr_values)):,} - "
         f"{prop.currency}{int(max(adr_values)):,} per booked night across the six "
-        f"comps, fees included; the ADR on each card excludes fees"
+        f"comps, fees included; the nightly rate on each card excludes fees"
     )
 
     return CalculatorDefaults(
