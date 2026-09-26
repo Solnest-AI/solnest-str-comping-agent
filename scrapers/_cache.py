@@ -52,7 +52,7 @@ def get(vendor: str, endpoint: str, params: dict | None):
         return None
     f = CACHE_DIR / f"{_key(vendor, endpoint, params)}.json"
     try:
-        rec = json.loads(f.read_text())
+        rec = json.loads(f.read_text(encoding="utf-8"))
         if time.time() - rec["at"] > TTL_SECONDS:
             _STATS["miss"] += 1
             return None
@@ -71,7 +71,7 @@ def put(vendor: str, endpoint: str, params: dict | None, data) -> None:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         f = CACHE_DIR / f"{_key(vendor, endpoint, params)}.json"
         tmp = f.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"at": time.time(), "endpoint": endpoint, "data": data}))
+        tmp.write_text(json.dumps({"at": time.time(), "endpoint": endpoint, "data": data}), encoding="utf-8")
         tmp.replace(f)          # atomic, so a killed run cannot leave a half file
         _STATS["write"] += 1
     except (OSError, TypeError, ValueError):

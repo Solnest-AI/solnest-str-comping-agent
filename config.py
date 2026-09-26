@@ -101,7 +101,7 @@ def _load_branding() -> dict:
     path = _BRANDING_PATH if _BRANDING_PATH.exists() else _BRANDING_EXAMPLE
     try:
         if path.exists():
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
             if isinstance(data, dict):
                 merged.update({k: v for k, v in data.items() if v not in (None, "")})
     except (json.JSONDecodeError, OSError) as e:

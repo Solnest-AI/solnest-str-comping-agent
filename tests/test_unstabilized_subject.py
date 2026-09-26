@@ -375,7 +375,7 @@ def test_brief_tells_the_writer_what_the_potential_actually_is():
     """The narrative rules say every figure must come from the brief, so the
     brief licenses whatever it carries. It must not hand over a ceiling
     unlabelled."""
-    src = open("generators/narrative_brief.py").read()
+    src = open("generators/narrative_brief.py", encoding="utf-8").read()
     assert "75th percentile" in src
     assert "not a forecast" in src
 
@@ -466,7 +466,7 @@ def test_the_card_no_longer_publishes_a_modelled_ceiling():
     """4 of 6 Sun Peaks cards printed annual_revenue x 1.02 under a label that
     read as a finding. The field is still computed for the scorer; it is just
     not shown."""
-    tpl = open("templates/report.html.j2").read()
+    tpl = open("templates/report.html.j2", encoding="utf-8").read()
     assert "comp.revenue_potential" not in tpl
     assert "Modelled Potential" not in tpl
     assert "comp.revenue_per_listed_night" in tpl
@@ -475,7 +475,7 @@ def test_the_card_no_longer_publishes_a_modelled_ceiling():
 def test_revenue_potential_is_still_computed_for_the_scorer():
     """Removing it from the card must not remove the efficiency signal."""
     import comp_scorer
-    src = open("comp_scorer.py").read()
+    src = open("comp_scorer.py", encoding="utf-8").read()
     assert "comp_revenue_potential" in src
     assert hasattr(comp_scorer, "score_comp") or "revenue_potential" in src
 

@@ -103,7 +103,7 @@ No Anthropic key. See the narrative handoff below.
 
 Clone the repo, open Claude Code in the folder, and just ask:
 
-> run comps on https://www.airbnb.com/rooms/12345678
+> run comps on https://www.airbnb.com/rooms/39508095
 
 The bundled skill at `.claude/skills/str-comping-agent/SKILL.md` drives the whole
 loop: it runs the pipeline, reads the narrative brief, writes the analysis copy
@@ -113,7 +113,7 @@ itself, and re-renders. You get one finished HTML report.
 
 ```bash
 # Pass 1 — fetch, score, render. Costs about $0.40 of AirROI credit, ~30s.
-python agent.py --input "https://www.airbnb.com/rooms/12345678"
+python agent.py --input "https://www.airbnb.com/rooms/39508095"
 #   output/<slug>.html                    the report
 #   output/<slug>.report-data.json        cached pipeline output
 #   output/<slug>.narrative-brief.json    what to write the copy from
@@ -136,14 +136,14 @@ for. The loop:
 ```bash
 # 1. Run it. You get a complete report with template copy,
 #    plus output/<slug>.narrative-brief.json
-python agent.py --input "https://www.airbnb.com/rooms/12345678"
+python agent.py --input "https://www.airbnb.com/rooms/39508095"
 
 # 2. In Claude Code: read that brief, write output/<slug>.narratives.json
 #    The brief carries the comp table, the market's real peak and shoulder
 #    months, the calculator defaults, and the exact JSON shape to write.
 
 # 3. Re-run with the copy
-python agent.py --input "https://www.airbnb.com/rooms/12345678" \
+python agent.py --input "https://www.airbnb.com/rooms/39508095" \
                 --narratives "output/<slug>.narratives.json"
 ```
 

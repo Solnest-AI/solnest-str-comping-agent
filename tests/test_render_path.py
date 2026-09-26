@@ -75,9 +75,9 @@ def test_render_makes_no_network_calls(monkeypatch, tmp_path):
     monkeypatch.setattr(httpx.AsyncClient, "post", _boom, raising=False)
 
     data_path = tmp_path / "x.report-data.json"
-    data_path.write_text(_report_data().model_dump_json())
+    data_path.write_text(_report_data().model_dump_json(), encoding="utf-8")
     # Loading and applying copy is the part that must stay offline.
-    restored = ReportData.model_validate_json(data_path.read_text())
+    restored = ReportData.model_validate_json(data_path.read_text(encoding="utf-8"))
     assert restored.comps
     assert calls == []
 
@@ -104,7 +104,7 @@ def test_skill_file_exists_and_declares_the_two_pass_loop():
     """The skill is how this actually gets used; keep it honest."""
     skill = Path(__file__).parent.parent / ".claude/skills/str-comping-agent/SKILL.md"
     assert skill.exists(), "SKILL.md is the entry point for Claude Code users"
-    text = skill.read_text()
+    text = skill.read_text(encoding="utf-8")
     assert text.startswith("---"), "SKILL.md needs YAML frontmatter to be discoverable"
     assert "name: str-comping-agent" in text
     assert "--render" in text and "--narratives" in text, "the loop must be documented"

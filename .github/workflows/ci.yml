@@ -12,12 +12,24 @@ permissions:
 
 jobs:
   test:
-    name: lint + test (py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    name: lint + test (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        os: [ubuntu-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        include:
+          # Users run this on their own laptops. Windows defaults to cp1252
+          # for text files (until Python 3.15), and Airbnb listing names are
+          # full of emoji, so Windows gets a real run rather than an
+          # assumption. 3.14 is what a fresh python.org download installs.
+          - os: windows-latest
+            python-version: "3.12"
+          - os: windows-latest
+            python-version: "3.14"
+          - os: macos-latest
+            python-version: "3.14"
 
     steps:
       - uses: actions/checkout@v4

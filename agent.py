@@ -569,7 +569,7 @@ async def _render_only(args) -> None:
         sys.exit(2)
 
     try:
-        report_data = ReportData.model_validate_json(data_path.read_text())
+        report_data = ReportData.model_validate_json(data_path.read_text(encoding="utf-8"))
     except Exception as e:
         print(f"[Render] {data_path} is not a valid report-data file: {e}")
         sys.exit(2)
@@ -1421,7 +1421,7 @@ Examples:
     # narrative loop free instead of a second full run.
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     data_path = report_data_path(config.OUTPUT_DIR, prop)
-    data_path.write_text(report_data.model_dump_json(indent=1))
+    data_path.write_text(report_data.model_dump_json(indent=1), encoding="utf-8")
     print(f"[Data] Pipeline output cached: {data_path.name}")
 
     output_path = await _render_and_gate(report_data, slug)

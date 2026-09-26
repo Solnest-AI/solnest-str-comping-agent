@@ -40,7 +40,7 @@ def test_expired_entry_is_a_miss(isolated_cache, monkeypatch):
 def test_corrupt_entry_is_a_miss_not_an_error(isolated_cache):
     _cache.put("airroi", "/listings", {"id": 5}, {"good": 1})
     for f in isolated_cache.glob("*.json"):
-        f.write_text("{ this is not json")
+        f.write_text("{ this is not json", encoding="utf-8")
     assert _cache.get("airroi", "/listings", {"id": 5}) is None
 
 

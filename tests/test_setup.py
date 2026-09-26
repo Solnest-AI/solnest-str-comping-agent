@@ -22,13 +22,13 @@ def test_only_airroi_is_required():
 
 def test_airbtics_is_no_longer_asked_for():
     assert "AIRBTICS_API_KEY" not in {k for k, *_ in setup.KEYS}
-    assert "airbtics" not in (_ROOT / ".env.example").read_text().lower()
+    assert "airbtics" not in (_ROOT / ".env.example").read_text(encoding="utf-8").lower()
 
 
 def test_setup_completes_with_only_an_airroi_key(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(setup, "ENV_PATH", tmp_path / ".env")
     monkeypatch.setattr(setup, "ENV_EXAMPLE", tmp_path / ".env.example")
-    (tmp_path / ".env.example").write_text((_ROOT / ".env.example").read_text())
+    (tmp_path / ".env.example").write_text((_ROOT / ".env.example").read_text(encoding="utf-8"), encoding="utf-8")
 
     answers = iter(["ar_test_key_000000000000"])
     monkeypatch.setattr("builtins.input", lambda _p="": next(answers, ""))
@@ -39,6 +39,6 @@ def test_setup_completes_with_only_an_airroi_key(tmp_path, monkeypatch, capsys):
     assert "Still missing required keys" not in out
     assert "<- REQUIRED" not in out and "← REQUIRED" not in out
 
-    env = (tmp_path / ".env").read_text()
+    env = (tmp_path / ".env").read_text(encoding="utf-8")
     assert "AIRROI_API_KEY=ar_test_key_000000000000" in env
     assert "AIRBTICS" not in env

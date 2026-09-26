@@ -266,7 +266,7 @@ def test_brief_carries_the_comp_table_and_calculator(case, tmp_path):
     _run(N.generate_narratives(
         prop, rentalizer, comps, calculator, output_dir=tmp_path,
     ))
-    brief = json.loads(narrative_brief_path(tmp_path, prop).read_text())
+    brief = json.loads(narrative_brief_path(tmp_path, prop).read_text(encoding="utf-8"))
 
     assert brief["comp_set"]["count"] == len(comps)
     rows = brief["comp_set"]["comps"]
@@ -300,7 +300,7 @@ def test_brief_carries_the_derived_season_labels(case, tmp_path):
         peak_season_label=peak, shoulder_season_label=shoulder,
         monthly_distribution=dist, output_dir=tmp_path,
     ))
-    season = json.loads(narrative_brief_path(tmp_path, prop).read_text())["market_seasonality"]
+    season = json.loads(narrative_brief_path(tmp_path, prop).read_text(encoding="utf-8"))["market_seasonality"]
     assert season["peak_season_label"] == peak
     assert season["shoulder_season_label"] == shoulder
     assert season["peak_months"]
