@@ -78,3 +78,15 @@ Thumbs.db
 # Local identity. The report falls back to branding.example.json without it,
 # so a fresh clone renders with neutral placeholders rather than ours.
 branding.json
+
+# Owner-only dev material. Kept locally, never published: the public repo
+# ships exactly what the distribution zip ships (see scripts/package.py).
+AGENTS.md
+HANDOFF.md
+STR-Agent-Updates-*.md
+_pre-sync-backup-*/
+.claude/skills/gitnexus/
+.claude/skills/generated/
+docs/superpowers/
+scripts/calibrate_against_ledger.py
+solneststays-full.png

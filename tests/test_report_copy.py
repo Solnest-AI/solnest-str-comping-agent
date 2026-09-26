@@ -1,4 +1,4 @@
-"""Fixes Codex made BY HAND to the delivered Sunburst report, ported to source.
+"""Fixes Codex made BY HAND to a delivered client report, ported to source.
 
 Codex corrected nine things directly in one generated HTML file on 2026-09-20.
 None of them reached the template or the generators, so every later report
