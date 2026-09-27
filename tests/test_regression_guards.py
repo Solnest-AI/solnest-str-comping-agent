@@ -108,44 +108,36 @@ def test_available_days_is_high_exactly_when_occupancy_is_low():
 
 # ── (b) reliability must reward booking, not idleness ────────────────────
 
-def test_reliability_score_correlates_positively_with_occupancy():
-    """corr(adjusted occupancy, reliability points) over 150 live comps > 0.
+def test_reliability_score_is_not_inverted_against_occupancy():
+    """corr(adjusted occupancy, reliability points) over 150 live comps.
 
-    Was -0.910. `_score_data_reliability` banded on `ttm_available_days`, so
-    the emptier a listing sat the bigger its "Full-time rental +2" bonus. This
-    single number is the cheapest permanent guard against reintroducing it.
+    Was -0.910: `_score_data_reliability` banded on `ttm_available_days`
+    (unsold nights), so the emptier a listing sat the bigger its bonus. Since
+    2026-09-26 (decision B) reliability is judged on nights OPEN, so it should
+    not track occupancy either way; what must never come back is the strong
+    negative correlation.
     """
     mapped = map_batch_for_scorer(LIVE)
     occ = [m["occupancy_pct"] for m in mapped]
     rel = [_score_data_reliability(m, m["nights_booked"])[0] for m in mapped]
     r = pearson(occ, rel)
     print(f"corr(occupancy_pct, reliability_score) = {r:.3f}")
-    assert r > 0.30, (
-        f"reliability scoring is inverted or uncorrelated (r={r:.3f}). "
-        "It must reward NIGHTS BOOKED, never unsold nights."
+    assert r > -0.30, (
+        f"reliability scoring is inverted (r={r:.3f}): it is rewarding unsold nights again"
     )
 
 
-def test_full_time_rental_bonus_goes_to_the_busiest_comps():
-    """The +2 reliability bonus must land on high-occupancy listings."""
-    mapped = map_batch_for_scorer(LIVE)
-    bonused, plain = [], []
-    for m in mapped:
-        pts, lines = _score_data_reliability(m, m["nights_booked"])
-        (bonused if any("Full-time rental" in l for l in lines) else plain).append(
-            m["occupancy_pct"])
-    assert bonused, "no comp earned the full-time bonus — banding is broken"
-    # 36 of 150 live comps qualify; the quietest of them books 55.6% of its
-    # open nights. Under the old (inverted) banding the bonus went to listings
-    # with the MOST unsold nights, i.e. the lowest occupancy in the pool.
-    assert min(bonused) > 50.0, (
-        f"a comp with only {min(bonused):.1f}% occupancy earned the full-time "
-        "bonus — the band is reading unsold nights again"
-    )
-    assert sum(bonused) / len(bonused) > sum(plain) / len(plain), (
-        f"bonused mean occ {sum(bonused)/len(bonused):.1f}% vs "
-        f"plain {sum(plain)/len(plain):.1f}%"
-    )
+def test_year_round_bonus_is_about_nights_open_not_nights_booked():
+    """Two listings open the same nights score the same reliability whether
+    they booked 280 nights or 120; the one open fewer nights scores less.
+    Nights booked is performance, and comps are picked for similarity
+    (decision B, 2026-09-26)."""
+    busy = _twin_comp(booked=280)
+    quiet = _twin_comp(booked=120)
+    part = _twin_comp(booked=120, blocked=120)
+    r = lambda c: _score_data_reliability(c, c["nights_booked"])[0]  # noqa: E731
+    assert r(busy) == r(quiet)
+    assert r(part) < r(quiet)
 
 
 # ── (c) a busy comp must beat a barely-booked one ────────────────────────
@@ -184,13 +176,14 @@ def _twin_score(comp: dict) -> dict:
                       500.0, 3, 8)
 
 
-def test_high_occupancy_comp_outscores_dormant_comp():
+def test_a_quiet_comp_never_outscores_an_identical_busy_one():
     """The headline inversion, as one assertion.
 
     Everything about these two listings is identical except that one booked
     280 nights and the other booked 80. Under the old scorer the quiet one
     collected the bigger reliability bonus (more "available" days) and could
-    outrank the busy one.
+    outrank the busy one. Since decision B (2026-09-26) neither is rewarded
+    for its bookings, so they score the same; the quiet one must never win.
     """
     busy = _twin_score(_twin_comp(booked=280))
     quiet = _twin_score(_twin_comp(booked=80))
@@ -198,11 +191,11 @@ def test_high_occupancy_comp_outscores_dormant_comp():
     print(f"quiet={quiet['score']} {quiet['category_scores']}")
     assert not busy["hard_fail"], busy["hard_fail_reason"]
     assert not quiet["hard_fail"], quiet["hard_fail_reason"]
-    assert busy["score"] > quiet["score"], (
-        f"280-night comp scored {busy['score']}, 80-night comp scored "
-        f"{quiet['score']} — occupancy is being scored backwards"
+    assert quiet["score"] <= busy["score"], (
+        f"80-night comp scored {quiet['score']}, 280-night comp scored "
+        f"{busy['score']} — unsold nights are being rewarded"
     )
-    assert busy["category_scores"]["reliability"] > quiet["category_scores"]["reliability"]
+    assert busy["score"] == quiet["score"], "comps are being picked for performance again"
 
 
 def test_truly_dormant_comp_is_disqualified_not_merely_ranked_low():

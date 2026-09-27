@@ -203,7 +203,9 @@ SUPPORTED_FEATURES: tuple[str, ...] = (
 )
 
 # Features checked on the subject by default when the caller does not name any.
-DEFAULT_REQUIRED_CANDIDATES: tuple[str, ...] = ("pool", "hot_tub")
+# Ski-in/ski-out added 2026-09-26: a detached Sun Peaks cabin with no ski
+# access was comped against six ski-in/ski-out townhomes, and nothing checked.
+DEFAULT_REQUIRED_CANDIDATES: tuple[str, ...] = ("pool", "hot_tub", "ski_in_out")
 
 # Caller-friendly spellings -> canonical feature key.
 _FEATURE_ALIASES: dict[str, str] = {
@@ -687,8 +689,13 @@ class PoolSelection:
     # Comps dropped for carrying a feature the subject lacks: (name, features).
     lacking_dropped: list = field(default_factory=list)
     # Lacking features too few comps were without to filter on; comps keep
-    # them and the scorer marks them down (extra_features in score_comp).
+    # them and the scorer marks them down (comp_similarity premium mismatch).
     lacking_relaxed: list = field(default_factory=list)
+    # Lacking features that actually changed the pool (dropped a comp or were
+    # relaxed), in detection order. Only these belong in the report: a Destin
+    # beach house "lacks" ski-in/ski-out, but when no comp had it, saying
+    # "comparables with one were excluded" is noise.
+    lacking_acted: list = field(default_factory=list)
 
 
 def select_comp_pool(
@@ -753,6 +760,9 @@ def select_comp_pool(
         else:
             lacking_relaxed.append(feature)
     lacking_dropped = list(dropped.values())
+    dropped_features = {f for _, fs in lacking_dropped for f in fs}
+    lacking_acted = [f for f in lacking if f in dropped_features or f in lacking_relaxed]
 
     return PoolSelection(kept=kept, report=report, excluded=excluded, relaxed=relaxed,
-                         lacking_dropped=lacking_dropped, lacking_relaxed=lacking_relaxed)
+                         lacking_dropped=lacking_dropped, lacking_relaxed=lacking_relaxed,
+                         lacking_acted=lacking_acted)

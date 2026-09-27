@@ -132,8 +132,11 @@ def test_pool_table_is_not_a_pool_for_scoring():
         subject_signals=_POOL_SUBJECT,
         comp_amenities=["Pool table", "Fire extinguisher"],
     )
-    assert pts == 0, lines
-    assert not any("Pool match" in l for l in lines), lines
+    # Not a pool: no match. Since 2026-09-26 the comparison runs both ways,
+    # so the comp is also marked down for lacking the subject's pool and for
+    # having a games room the subject lacks.
+    assert not any("Both have a pool" in l for l in lines), lines
+    assert "-2 Lacks a pool, which the subject has" in lines, lines
 
 
 def test_pool_view_is_not_a_pool_for_scoring():
@@ -143,7 +146,7 @@ def test_pool_view_is_not_a_pool_for_scoring():
         subject_signals=_POOL_SUBJECT,
         comp_amenities=["Pool view"],
     )
-    assert not any("Pool match" in l for l in lines), lines
+    assert not any("Both have a pool" in l for l in lines), lines
 
 
 def test_a_real_pool_still_scores():
@@ -153,7 +156,7 @@ def test_a_real_pool_still_scores():
         subject_signals=_POOL_SUBJECT,
         comp_amenities=["Pool"],
     )
-    assert pts == 2 and any("Pool match" in l for l in lines), lines
+    assert pts == 2 and "+2 Both have a pool" in lines, lines
 
 
 def test_pool_table_yields_a_games_room_badge_not_a_pool_badge():
@@ -172,8 +175,10 @@ def test_fire_extinguisher_is_not_a_fireplace():
         subject_signals=_FIRE_SUBJECT,
         comp_amenities=["Fire extinguisher", "Fireplace guards"],
     )
-    assert pts == 0, lines
-    assert not any("Fireplace" in l for l in lines), lines
+    # Not a fireplace, so the comp LACKS the subject's fireplace (two-way
+    # comparison since 2026-09-26) and never matches it.
+    assert pts == -1, lines
+    assert not any("Both have" in l for l in lines), lines
 
     labels, _ = _amenities_to_badges(
         amenity_list=["Fire extinguisher", "Fireplace guards"], limit=3,
@@ -188,7 +193,7 @@ def test_a_real_fireplace_still_scores():
         subject_signals=_FIRE_SUBJECT,
         comp_amenities=["Indoor fireplace", "Fire extinguisher"],
     )
-    assert pts == 1 and any("Fireplace match" in l for l in lines), lines
+    assert pts == 1 and "+1 Both have an indoor fireplace" in lines, lines
 
 
 def test_beach_essentials_is_not_beach_access():
@@ -224,7 +229,7 @@ def test_a_real_sauna_still_scores_from_text():
         subject_signals={"sauna": True, "quality_tier": "unknown"},
         comp_amenities=[],
     )
-    assert pts == 2 and any("Sauna match" in l for l in lines), lines
+    assert pts == 2 and "+2 Both have a sauna" in lines, lines
 
 
 def test_negated_amenity_text_does_not_score():
@@ -234,7 +239,9 @@ def test_negated_amenity_text_does_not_score():
         subject_signals={"sauna": True, "quality_tier": "unknown"},
         comp_amenities=[],
     )
-    assert pts == 0, lines
+    # Never a match. The comp says it has no sauna, so it lacks the subject's.
+    assert not any("Both have" in l for l in lines), lines
+    assert lines == ["-2 Lacks a sauna, which the subject has"], lines
 
 
 # ── Badges on real data ──────────────────────────────────────────────────

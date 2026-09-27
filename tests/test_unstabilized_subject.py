@@ -473,11 +473,17 @@ def test_the_card_no_longer_publishes_a_modelled_ceiling():
 
 
 def test_revenue_potential_is_still_computed_for_the_scorer():
-    """Removing it from the card must not remove the efficiency signal."""
-    import comp_scorer
+    """The adapter still derives revenue_potential (the data-completeness
+    check counts it), but since decision B (2026-09-26) the scorer does not
+    reward "revenue efficiency": that picked comps for earning more."""
+    from adapters.airroi_to_comp import map_for_scorer
     src = open("comp_scorer.py", encoding="utf-8").read()
-    assert "comp_revenue_potential" in src
-    assert hasattr(comp_scorer, "score_comp") or "revenue_potential" in src
+    assert "revenue_potential" in src                  # completeness field list
+    assert "Top-quartile revenue efficiency" not in src
+    mapped = map_for_scorer({"listing_info": {"listing_name": "x"}, "performance_metrics": {
+        "ttm_revenue": 90_000, "ttm_revpar": 200, "ttm_total_days": 365,
+        "ttm_days_reserved": 180, "ttm_blocked_days": 15}})
+    assert "revenue_potential" in mapped
 
 
 # ── "every month" must mean every month ──

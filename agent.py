@@ -33,7 +33,8 @@ import config
 from schema import PropertyBasics, ReportData, RentalizerData
 from scrapers.airbnb import scrape_airbnb_listing
 from scrapers.airroi import (run_airroi_pipeline, get_listing, get_listing_metrics,
-                             get_comparables, lookup_market, get_market_occupancy, AirROIError)
+                             get_comparables, lookup_market, get_market_occupancy, AirROIError,
+                             search_radius)
 from scrapers.property_search import scrape_listing_url, search_for_property, search_hero_image
 from adapters.airroi_to_comp import (
     map_batch_for_scorer, to_comp_property, subject_for_scorer,
@@ -41,6 +42,7 @@ from adapters.airroi_to_comp import (
 )
 from comp_scorer import rank_comps
 import comp_filters
+import comp_similarity
 
 
 from generators.calculator import (derive_calculator_defaults,
@@ -294,6 +296,7 @@ async def _resolve_subject(args) -> PropertyBasics:
                     latitude=loc.get("latitude"),
                     longitude=loc.get("longitude"),
                     amenities=[str(a) for a in (pd.get("amenities") or [])],
+                    min_nights=(data.get("booking_settings") or {}).get("min_nights"),
                 )
 
                 # The subject's own trailing-12-month history. This response
@@ -857,7 +860,7 @@ Examples:
         print(f"[Filters] Subject lacks: {', '.join(lacking_features)}")
     elif not args.no_feature_filter and not comp_filters.subject_features_readable(
             prop.description, prop.amenities):
-        print("[Filters] Subject amenities could not be read — comps not matched on pool/hot tub")
+        print("[Filters] Subject amenities could not be read — comps not matched on pool/hot tub/ski access")
 
     before_filters = len(candidates_raw)
     _funnel_before_filters = before_filters
@@ -883,8 +886,9 @@ Examples:
         for name, extras in selection.lacking_dropped:
             print(f"[Filters]     - {name[:50]}  (has: {', '.join(extras)})")
     for feature in selection.lacking_relaxed:
-        print(f"[Filters] Too few comps without a {feature.replace('_', ' ')} to leave "
-              f"them out — keeping them, ranked down by the scorer and disclosed")
+        print(f"[Filters] Too few comps without "
+              f"{comp_similarity.PREMIUM.get(feature, (0, feature.replace('_', ' ')))[1]} "
+              f"to leave them out — keeping them, ranked down by the scorer and disclosed")
     for name in selection.excluded:
         print(f"[Filters] Excluded by keyword: {name[:50]}")
     if selection.relaxed:
@@ -893,13 +897,65 @@ Examples:
         print(f"[Filters] Only {selection.report.kept - len(selection.excluded)} comps "
               f"survived filtering (from {before_filters}). Relaxing filters to "
               f"keep the report usable; --exclude still applies.")
+    # ── Targeted search: when AirROI's comparables are the wrong KIND ──
+    # The comparables endpoint takes only location and size, so it can return
+    # 24 ski-in/ski-out listings for a cabin with no ski access (Sunburst, Sun
+    # Peaks, 2026-09-26) and no ranking can fix a pool like that. One radius
+    # search ($0.50, max 10 results) asks for listings without the features
+    # the subject lacks, with the ones it has; they join the pool and go
+    # through the same filters and scoring as everything else.
+    targeted_added = 0
+    targeted_reasons, by_type = comp_similarity.targeted_search_reasons(
+        selection.lacking_relaxed, selection.kept, prop.property_type)
+    if (targeted_reasons and not args.skip_financials and not args.no_feature_filter
+            and prop.latitude is not None and prop.longitude is not None):
+        print(f"[Targeted] {'; '.join(targeted_reasons)} — one radius search "
+              f"({comp_similarity.TARGETED_RADIUS_MILES} mi, $0.50) for listings that match")
+        flt = comp_similarity.targeted_search_filter(
+            bedrooms=prop.bedrooms, bed_tolerance=max_bed_diff(prop.bedrooms),
+            required=required_features, lacking=lacking_features,
+            listing_type=prop.property_type if by_type and not selection.lacking_relaxed else None,
+        )
+        try:
+            found = await search_radius(
+                latitude=float(prop.latitude), longitude=float(prop.longitude),
+                radius_miles=comp_similarity.TARGETED_RADIUS_MILES, filter=flt,
+                sort={"num_reviews": "desc"},
+                currency=("native" if prop.currency == "CA$" else "usd"),
+            )
+        except (AirROIError, httpx.HTTPError, asyncio.TimeoutError) as e:
+            print(f"[Targeted] Search failed ({type(e).__name__}) — continuing with "
+                  f"AirROI's comparables", file=sys.stderr)
+            found = []
+        have = {str((c.get("listing_info") or {}).get("listing_id") or "")
+                for c in _unfiltered_candidates}
+        new = [c for c in found
+               if str((c.get("listing_info") or {}).get("listing_id") or "") not in have
+               and str((c.get("listing_info") or {}).get("listing_id") or "") != subject_airbnb_id]
+        targeted_added = len(new)
+        print(f"[Targeted] {len(found)} found, {targeted_added} new to the pool")
+        if new:
+            _unfiltered_candidates = _unfiltered_candidates + new
+            _funnel_candidates += targeted_added
+            _funnel_before_filters += targeted_added
+            before_filters += targeted_added
+            selection = comp_filters.select_comp_pool(
+                _unfiltered_candidates, drop_on_water=drop_on_water,
+                required_features=required_features, lacking_features=lacking_features,
+                exclude_terms=exclude_terms,
+            )
+            for name, extras in selection.lacking_dropped:
+                print(f"[Filters] (after targeted search) dropped {name[:50]}  "
+                      f"(has: {', '.join(extras)})")
+            for feature in selection.lacking_relaxed:
+                print(f"[Filters] (after targeted search) still too few comps without "
+                      f"{comp_filters.normalize_feature(feature).replace('_', ' ')}; "
+                      f"kept, ranked down and disclosed")
     candidates_raw = selection.kept
 
+    # Comps kept despite a feature the subject lacks (lacking_relaxed) are
+    # marked down by the scorer's two-way premium comparison (comp_similarity).
     mapped = map_batch_for_scorer(candidates_raw)
-    if selection.lacking_relaxed:
-        for m in mapped:
-            m["extra_features"] = [f for f in selection.lacking_relaxed
-                                   if comp_filters.comp_mentions_feature(m, f)]
     subject_for_scoring = subject_for_scorer(prop, estimate_data if not args.skip_financials else {})
     # Over-select so we have replacement candidates for any dead Airbnb listings
     result = rank_comps(subject_for_scoring, mapped, top_n=12)
@@ -1011,6 +1067,9 @@ Examples:
         "hard_fails":      len(result["hard_fails"]),
         "selected":        len(result["selected"]),
     }
+    if targeted_added:
+        comp_funnel["targeted"] = {"added": targeted_added,
+                                   "radius_miles": comp_similarity.TARGETED_RADIUS_MILES}
     print(f"[Scorer] Candidates: {len(mapped)} / Hard fails: {len(result['hard_fails'])} / Passing: {len(result['ranked'])}")
     print(f"[Scorer] Score range: {result['score_range']}")
 
@@ -1383,7 +1442,7 @@ Examples:
         comp_funnel=comp_funnel,
         market_months_missing=missing_months,
         seasonal_basis=seasonal_basis,
-        lacking_features=lacking_features,
+        lacking_features=selection.lacking_acted,
         lacking_relaxed=selection.lacking_relaxed,
     )
 

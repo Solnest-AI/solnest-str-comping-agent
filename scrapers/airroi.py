@@ -363,6 +363,35 @@ async def get_comparables(
 
 # ── Public: revenue estimate ─────────────────────────────────────────
 
+async def search_radius(
+    *,
+    latitude: float,
+    longitude: float,
+    radius_miles: float,
+    filter: dict,
+    sort: Optional[dict] = None,
+    currency: str = "native",
+    client: Optional[httpx.AsyncClient] = None,
+) -> list[dict]:
+    """POST /listings/search/radius: one page (max 10 listings, the API's cap).
+
+    $0.50 a call at standard pricing, $0.25 Preferred Partner (airroi.com/api/
+    pricing, read 2026-09-26), so callers use it only when the comparables
+    endpoint came back with the wrong kind of listing. The filter takes
+    amenity ids (snake_case: ski_in_ski_out, hot_tub) with all/any/none.
+    Results have the same shape as /listings/comparables entries.
+    """
+    body = {
+        "latitude": latitude, "longitude": longitude, "radius_miles": radius_miles,
+        "filter": filter, "pagination": {"page_size": 10, "offset": 0},
+        "currency": currency,
+    }
+    if sort:
+        body["sort"] = sort
+    data = await _post("/listings/search/radius", body, client=client)
+    return list(data.get("results") or [])
+
+
 async def get_estimate(
     *,
     lat: Optional[float] = None,

@@ -42,11 +42,14 @@ AIRROI_BASICS = ["Wifi", "Kitchen", "TV", "Heating", "Washer", "Dryer", "Air con
 # ── Detecting what the subject lacks ──
 
 def test_gatlinburg_listing_lacks_pool_and_hot_tub():
-    assert detect_lacking_features("House for sale", GATLINBURG_DESCRIPTION, []) == ["pool", "hot_tub"]
+    # ski_in_out joined the defaults 2026-09-26 (Sun Peaks cabin vs six
+    # ski-in/ski-out townhomes). A Gatlinburg house does not have it either.
+    assert detect_lacking_features("House for sale", GATLINBURG_DESCRIPTION, []) == [
+        "pool", "hot_tub", "ski_in_out"]
 
 
 def test_airroi_amenity_list_silence_is_a_no():
-    assert detect_lacking_features("Cabin", "", AIRROI_BASICS + ["Pool"]) == ["hot_tub"]
+    assert detect_lacking_features("Cabin", "", AIRROI_BASICS + ["Pool"]) == ["hot_tub", "ski_in_out"]
 
 
 def test_nothing_to_read_means_unknown_not_lacking():
@@ -56,17 +59,17 @@ def test_nothing_to_read_means_unknown_not_lacking():
 
 def test_a_mentioned_hot_tub_is_not_lacking():
     desc = GATLINBURG_DESCRIPTION + " Relax in the private hot tub on the deck!"
-    assert detect_lacking_features("House", desc, []) == ["pool"]
+    assert detect_lacking_features("House", desc, []) == ["pool", "ski_in_out"]
 
 
 def test_scraped_features_list_counts_as_something_to_read():
     feats = ["Screened-in porch", "Lower deck", "Whole home generator", "Mountain views", "Garage"]
-    assert detect_lacking_features("House", "", feats) == ["pool", "hot_tub"]
+    assert detect_lacking_features("House", "", feats) == ["pool", "hot_tub", "ski_in_out"]
 
 
 def test_features_the_operator_requires_are_never_lacking():
     assert detect_lacking_features("House", GATLINBURG_DESCRIPTION, [],
-                                   exclude=["hot_tub"]) == ["pool"]
+                                   exclude=["hot_tub"]) == ["pool", "ski_in_out"]
 
 
 # ── Selecting the pool ──
@@ -126,15 +129,28 @@ def test_each_feature_is_judged_on_its_own():
 # ── Scoring when relaxed: comps without the extra rank first ──
 
 def test_scorer_marks_down_a_comp_with_a_feature_the_subject_lacks():
-    subject = {"title": "House", "amenities": [], "bedrooms": 3, "max_guests": 8, "adr": 300}
+    # The subject needs something to read: with no description or amenities,
+    # "no hot tub" is unknown, not "lacks", and nothing is marked down.
+    subject = {"title": "House", "description": GATLINBURG_DESCRIPTION, "amenities": [],
+               "bedrooms": 3, "max_guests": 8, "adr": 300}
     base = {"name": "C", "bedrooms": 3, "sleeps": 8, "occupancy_pct": 60, "reviews": 80,
             "rating": 4.8, "nights_booked": 200, "nights_listed": 350, "nightly_rate": 300,
             "annual_revenue": 70_000, "revenue_potential": 90_000, "revpar": 160,
             "amenities_raw": []}
     plain = score_comp(dict(base), detect_subject_signals(subject), 300, 3, 8)
-    extra = score_comp(dict(base, extra_features=["hot_tub"]), detect_subject_signals(subject), 300, 3, 8)
-    assert extra["score"] < plain["score"]
-    assert any("hot tub" in line.lower() for line in extra["score_breakdown"])
+    extra = score_comp(dict(base, amenities_raw=["Hot tub"]), detect_subject_signals(subject), 300, 3, 8)
+    assert extra["score"] == plain["score"] - 2
+    assert "-2 Has a hot tub, which the subject lacks" in extra["score_breakdown"]
+
+
+def test_unreadable_subject_marks_nothing_down():
+    subject = {"title": "House", "amenities": [], "bedrooms": 3, "max_guests": 8, "adr": 300}
+    base = {"name": "C", "bedrooms": 3, "sleeps": 8, "occupancy_pct": 60, "reviews": 80,
+            "rating": 4.8, "nights_booked": 200, "nights_listed": 350, "nightly_rate": 300,
+            "annual_revenue": 70_000, "revenue_potential": 90_000, "revpar": 160}
+    plain = score_comp(dict(base, amenities_raw=[]), detect_subject_signals(subject), 300, 3, 8)
+    extra = score_comp(dict(base, amenities_raw=["Hot tub"]), detect_subject_signals(subject), 300, 3, 8)
+    assert extra["score"] == plain["score"]
 
 
 # ── Reading the listing's features ──

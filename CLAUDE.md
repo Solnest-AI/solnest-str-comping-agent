@@ -207,7 +207,9 @@ Run `python agent.py --help` if a flag here disagrees with the code; the code wi
 | `scrapers/property_search.py` | Firecrawl property scraper (address / listing URL) |
 | `scrapers/airbnb.py` | Airbnb listing scraper |
 | `adapters/airroi_to_comp.py` | Maps AirROI payloads into the internal Comp model |
-| `comp_scorer.py` | Hard gates, scoring, ranking; picks the final comp set |
+| `comp_scorer.py` | Hard gates, scoring, ranking; picks the final comp set by similarity, never by performance |
+| `comp_similarity.py` | Premium features both ways, rarity-weighted amenity overlap, property type, bathrooms, minimum stay, targeted-search filter |
+| `data/amenity_prevalence.json` | How common each AirROI amenity is (rarity weights); rebuilt by `scripts/build_amenity_prevalence.py` |
 | `generators/calculator.py` | Calculator defaults, seasonal data, season labels |
 | `generators/narrative_brief.py` | **The narrative contract + the brief written for you** |
 | `generators/narratives.py` | Template copy, and `--narratives` file loading/validation |

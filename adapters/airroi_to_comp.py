@@ -303,6 +303,7 @@ def map_for_scorer(airroi_listing: dict) -> dict:
 
     # ── Identity / physical ──
     m["name"] = li.get("listing_name") or "Unnamed listing"
+    m["listing_type"] = li.get("listing_type")  # "Entire cabin", compared in comp_similarity
     m["bedrooms"] = pd.get("bedrooms")
     m["bathrooms"] = pd.get("baths")
     m["sleeps"] = pd.get("guests")
@@ -624,6 +625,8 @@ def subject_for_scorer(
         "configuration": f"{prop.bedrooms}BR / {prop.bathrooms}BA / Sleeps {prop.max_guests}",
         "bedrooms":      prop.bedrooms,
         "bathrooms":     prop.bathrooms,
+        "property_type": prop.property_type,
+        "min_nights":    getattr(prop, "min_nights", None),
         "max_guests":    prop.max_guests,
         "guests":        prop.max_guests,
         "adr":           adr,

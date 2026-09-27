@@ -140,6 +140,9 @@ class PropertyBasics(BaseModel):
     # Premium features the subject's own listing shows it does NOT have
     # (comp_filters.detect_lacking_features). Empty when unknown.
     lacking_features: list[str] = Field(default_factory=list)
+    # The subject listing's own minimum stay, when AirROI knows it. The scorer
+    # marks down comps whose minimum is far longer (comp_similarity).
+    min_nights: Optional[int] = None
     description: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None

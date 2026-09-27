@@ -216,8 +216,16 @@ def test_subject_signals_elite_tier():
     assert signals["superhost"] is True
 
 
-def test_comp_a_scores_exactly_38():
-    """Strong comp: 4BR ski chalet matching the subject across all categories."""
+def test_comp_a_scores_exactly_29():
+    """Strong comp: 4BR ski chalet matching the subject across all categories.
+
+    38 until 2026-09-26. Decision B took performance out of comp selection:
+    financial lost "Strong RevPAR" (+3) and "Top-quartile revenue efficiency"
+    (+3) and is rate proximity only (9 -> 3); quality lost "Strong occupancy
+    (71%)" (+3) (12 -> 9). Reliability stays 4: "Open year-round (350 nights
+    listed)" (+2) replaced "Full-time rental (248 nights booked)" (+2).
+    5 + 3 + 9 + 8 + 4 + 0 = 29.
+    """
     scored = _score(COMP_A)
     cats = scored.get("category_scores", {})
 
@@ -231,27 +239,38 @@ def test_comp_a_scores_exactly_38():
         f"Comp A hard-failed: {scored['hard_fail_reason']}"
     )
     assert cats.get("physical") == 5, f"Physical: expected 5, got {cats.get('physical')}"
-    assert cats.get("financial") == 9, f"Financial: expected 9, got {cats.get('financial')}"
-    assert cats.get("quality") == 12, f"Quality: expected 12, got {cats.get('quality')}"
+    assert cats.get("financial") == 3, f"Financial: expected 3, got {cats.get('financial')}"
+    assert cats.get("quality") == 9, f"Quality: expected 9, got {cats.get('quality')}"
     assert cats.get("amenity") == 8, f"Amenity: expected 8, got {cats.get('amenity')}"
     assert cats.get("reliability") == 4, f"Reliability: expected 4, got {cats.get('reliability')}"
     assert cats.get("distance") == 0, f"Distance: expected 0, got {cats.get('distance')}"
-    assert scored["score"] == 38, f"Total: expected 38, got {scored['score']}"
+    assert scored["score"] == 29, f"Total: expected 29, got {scored['score']}"
 
 
-def test_comp_a_reliability_rewards_nights_booked_not_idle_nights():
-    """248 booked nights must earn the full-time bonus.
+def test_comp_a_reliability_rewards_nights_open_not_idle_or_booked_nights():
+    """350 nights OPEN earn the year-round bonus.
 
-    Under the old scorer this comp's fixture said `days_available=340`, and the
-    +2 came from having sat EMPTY for 340 nights. Same points, opposite meaning.
+    Under the old-old scorer this comp's fixture said `days_available=340`,
+    and the +2 came from having sat EMPTY for 340 nights. Until 2026-09-26 it
+    came from 248 nights BOOKED, which rewarded busy comps (decision B).
     """
     scored = _score(COMP_A)
     line = " ".join(scored["score_breakdown"])
-    assert "+2 Full-time rental (248 nights booked)" in line, scored["score_breakdown"]
+    assert "+2 Open year-round (350 nights listed)" in line, scored["score_breakdown"]
+    assert "nights booked" not in line
 
 
-def test_comp_b_scores_exactly_8():
-    """Weak comp: standard 3BR with softer financials and partial data."""
+def test_comp_b_scores_exactly_0():
+    """Weak comp: standard 3BR with softer financials and partial data.
+
+    Amenity was +1 (a shared fireplace) until 2026-09-26. The comparison now
+    runs both ways, so a plain cabin with no ski access, hot tub or sauna
+    loses those features' weight against a ski-in/ski-out chalet that has all
+    three: 1 - 3 - 2 - 2 = -6, and the total falls from 8 to 1. Decision B
+    (same day) then removed performance points: financial 2 -> 1 (rate
+    proximity only), quality 2 -> 1, reliability 2 -> 3 (open 335 nights
+    instead of nights booked). Total 0.
+    """
     scored = _score(COMP_B)
     cats = scored.get("category_scores", {})
 
@@ -264,11 +283,11 @@ def test_comp_b_scores_exactly_8():
         f"Comp B hard-failed: {scored['hard_fail_reason']}"
     )
     assert cats.get("physical") == 1, f"Physical: expected 1, got {cats.get('physical')}"
-    assert cats.get("financial") == 2, f"Financial: expected 2, got {cats.get('financial')}"
-    assert cats.get("quality") == 2, f"Quality: expected 2, got {cats.get('quality')}"
-    assert cats.get("amenity") == 1, f"Amenity: expected 1, got {cats.get('amenity')}"
-    assert cats.get("reliability") == 2, f"Reliability: expected 2, got {cats.get('reliability')}"
-    assert scored["score"] == 8, f"Total: expected 8, got {scored['score']}"
+    assert cats.get("financial") == 1, f"Financial: expected 1, got {cats.get('financial')}"
+    assert cats.get("quality") == 1, f"Quality: expected 1, got {cats.get('quality')}"
+    assert cats.get("amenity") == -6, f"Amenity: expected -6, got {cats.get('amenity')}"
+    assert cats.get("reliability") == 3, f"Reliability: expected 3, got {cats.get('reliability')}"
+    assert scored["score"] == 0, f"Total: expected 0, got {scored['score']}"
 
 
 def test_comp_a_outranks_comp_b():
@@ -292,8 +311,8 @@ def test_amenity_points_require_exact_vocabulary_membership():
     scored = _score(COMP_A)
     lines = " ".join(scored["score_breakdown"])
     assert "Views match" not in lines, scored["score_breakdown"]
-    assert "+3 Ski-in/out match" in lines
-    assert "+2 Hot Tub match" in lines
+    assert "+3 Both have ski-in/ski-out access" in lines
+    assert "+2 Both have a hot tub" in lines
 
 
 # ── Hard-disqualifier tests (PDF §3) ─────────────────────────────────────
@@ -345,25 +364,13 @@ def test_dormant_listing_disqualifies():
 
 # ── Penalty tests (PDF §5) ───────────────────────────────────────────────
 
-def test_financial_penalty_fires():
-    """Financial category ≤ -2 should trigger -3 penalty."""
-    weak_fin = dict(COMP_A)
-    weak_fin["adr"] = 1300          # ADR diff 53% → 0 ADR points (above 35% gate)
-    weak_fin["adr_raw"] = 1300
-    weak_fin["nightly_rate"] = 1300
-    weak_fin["revpar"] = 100        # 100/850 = 0.12 < 0.15 → -1
-    weak_fin["annual_revenue"] = 15000
-    weak_fin["revenue_potential"] = 200000  # efficiency 7.5% → -1
-    # 0 + (-1) + (-1) = -2 financial → -3 category penalty fires
-    scored = _score(weak_fin)
-    cats = scored.get("category_scores", {})
-    breakdown_text = " ".join(scored.get("score_breakdown", []))
-    assert cats.get("financial", 0) <= -2, (
-        f"Expected financial ≤ -2, got {cats.get('financial')}. "
-        f"Breakdown: {scored.get('score_breakdown', [])}"
-    )
-    assert "PENALTY" in breakdown_text, "Expected category penalty when financial ≤ -2"
+def test_financial_category_is_rate_proximity_only():
+    """A comp is never rewarded or penalised for earning more or less
+    (decision B, 2026-09-26): RevPAR and revenue efficiency are gone, so a
+    weak earner with the same rate scores the same financial points."""
+    weak = dict(COMP_A, revpar=100, annual_revenue=15000, revenue_potential=200000)
+    assert _score(weak)["category_scores"]["financial"] == _score(COMP_A)["category_scores"]["financial"]
+    far = dict(COMP_A, adr=1300, adr_raw=1300, nightly_rate=1300)   # 53% off the subject's rate
+    assert _score(far)["category_scores"]["financial"] == 0
 
 
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v", "-s"]))

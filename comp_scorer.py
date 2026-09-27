@@ -5,11 +5,21 @@ Scores and ranks comp candidates against the subject property's
 quality signals. Outputs the top N comps sorted by score descending.
 
 Scoring categories (weighted):
-  1. Physical match    — bedrooms, guest capacity, property config
-  2. Financial match   — ADR proximity, RevPAN, revenue efficiency
-  3. Quality match     — rating, review volume, occupancy performance
-  4. Amenity match     — amenity signals, luxury tier, feature alignment
-  5. Data reliability  — completeness of financial data, days available
+  1. Physical match    — bedrooms, guest capacity, property type, bathrooms
+  2. Financial match   — how close the rate paid is to the subject's
+  3. Quality match     — rating, review volume, superhost, quality tier
+  4. Amenity match     — premium features both ways, rarity-weighted overlap
+  5. Data reliability  — data completeness, nights open, freshness, min stay
+  6. Distance
+
+Comps are picked for SIMILARITY, never for performing well (decided by Ryan
+2026-09-26, "B"). Occupancy, RevPAR, revenue efficiency, nights booked,
+Guest Favorite and professional management used to add up to ~10 points,
+which filled the set with the busiest listings in town: on Sunburst (Sun
+Peaks) the comp-set median revenue was CA$141,306 with them and CA$101,373
+without. The headline already uses AirROI's upper estimate; picking top
+performers as comps as well counted the optimism twice. The hard gates
+(dormant, part-time, too few reviews) still keep non-operators out.
 
 Each category has a minimum threshold to prevent lopsided comps
 (e.g. great amenities but terrible financials).
@@ -73,9 +83,13 @@ AMENITY_VOCAB_SIGNALS: dict[str, tuple[str, ...]] = {
     "hot_tub":    ("Hot tub",),
     "pool":       ("Pool",),
     "ski_in_out": ("Ski-in/Ski-out",),
-    "games_room": ("Pool table", "Game console", "Arcade games", "Life size games", "Board games"),
+    # "Board games" is a shelf of Monopoly, not a games room, and "Fire pit" is
+    # outdoors. Both were credited as matches; once a MISSING feature costs a
+    # comp points (comp_similarity) they would also mark comps down unfairly.
+    "games_room": ("Pool table", "Game console", "Arcade games", "Life size games",
+                   "Ping pong table"),
     "gym":        ("Gym", "Exercise equipment"),
-    "fireplace":  ("Indoor fireplace", "Fire pit"),
+    "fireplace":  ("Indoor fireplace",),
     "views":      ("Ocean view", "River view", "Pool view", "Garden view", "Waterfront"),
     "water":      ("Beach access", "Lake access", "Waterfront"),
     "ev_charger": ("EV charger",),
@@ -149,6 +163,19 @@ def detect_subject_signals(subject: dict) -> dict:
         )
     for signal, keywords in TEXT_ONLY_SIGNALS.items():
         signals[signal] = any(kw in searchable for kw in keywords)
+
+    # The features comp_filters can read from text are decided the way the
+    # filters decide them: amenity list or negation-guarded text, so "no pool"
+    # is not a pool here while it is a lacking pool in the filter. Whether
+    # there was anything to read decides if absence means "lacks".
+    import comp_filters  # local: comp_filters imports this module
+    title = subject.get("title", "") or ""
+    description = subject.get("description", "") or ""
+    for feature in comp_filters.SUPPORTED_FEATURES:
+        signals[feature] = comp_filters.listing_mentions_feature(
+            title, description, subject.get("amenities") or [], feature)
+    signals["features_readable"] = comp_filters.subject_features_readable(
+        description, subject.get("amenities") or [])
 
     # Review sentiment analysis (from Apify subject reviews)
     reviews = subject.get("reviews", [])
@@ -237,17 +264,15 @@ def _score_physical_match(
 
 def _score_financial_match(
     comp_adr: float,
-    comp_occ: Optional[float],
-    comp_revpar: Optional[float],
-    comp_revenue_potential: Optional[float],
-    comp_annual_revenue: Optional[float],
     subject_adr: Optional[float],
 ) -> tuple:
-    """Score financial similarity. Returns (points, breakdown_lines)."""
+    """How close the comp's rate paid is to the subject's. Returns (points, lines).
+
+    RevPAR strength and "revenue efficiency" used to score here too. They
+    rewarded comps for earning more, not for being alike (see module docstring).
+    """
     score = 0
     breakdown = []
-
-    # ADR proximity (tighter tiers)
     if subject_adr and comp_adr:
         adr_diff_pct = abs(comp_adr - subject_adr) / subject_adr
         if adr_diff_pct <= 0.10:
@@ -259,45 +284,6 @@ def _score_financial_match(
         elif adr_diff_pct <= 0.35:
             score += 1
             breakdown.append(f"+1 ADR within 35% of subject (CA${comp_adr:.0f})")
-
-    # RevPAR — use AirROI's own ttm_revpar. The previous hand-rolled
-    # "annual_revenue / days_available" divided revenue by UNSOLD nights and
-    # overstated by up to 5x.
-    if comp_revpar is not None and subject_adr:
-        revpar_ratio = comp_revpar / subject_adr
-        if revpar_ratio >= 0.55:
-            score += 3
-            breakdown.append(f"+3 Strong RevPAR ({comp_revpar:.0f}/night — high yield)")
-        elif revpar_ratio >= 0.40:
-            score += 2
-            breakdown.append(f"+2 Solid RevPAR ({comp_revpar:.0f}/night)")
-        elif revpar_ratio >= 0.25:
-            score += 1
-            breakdown.append(f"+1 Moderate RevPAR ({comp_revpar:.0f}/night)")
-        elif revpar_ratio < 0.15:
-            score -= 1
-            breakdown.append(f"-1 Weak RevPAR ({comp_revpar:.0f}/night — low yield)")
-
-    # Revenue efficiency — actual vs potential
-    if comp_revenue_potential and comp_annual_revenue and comp_revenue_potential > 0:
-        efficiency = min(1.0, comp_annual_revenue / comp_revenue_potential)
-        # Bands recalibrated against the corrected, market-relative potential.
-        # "Potential" is now revenue at this market's p75 occupancy, so an
-        # efficiency of 1.0 means "performs like a top-quartile operator here".
-        # The old bands were tuned against an inverted denominator.
-        if efficiency >= 0.90:
-            score += 3
-            breakdown.append(f"+3 Top-quartile revenue efficiency ({efficiency:.0%} of market potential)")
-        elif efficiency >= 0.70:
-            score += 2
-            breakdown.append(f"+2 Strong revenue efficiency ({efficiency:.0%} of market potential)")
-        elif efficiency >= 0.50:
-            score += 1
-            breakdown.append(f"+1 Moderate efficiency ({efficiency:.0%} of market potential)")
-        elif efficiency < 0.25:
-            score -= 1
-            breakdown.append(f"-1 Low efficiency ({efficiency:.0%} of market potential — underperforming)")
-
     return score, breakdown
 
 
@@ -308,7 +294,7 @@ def _score_quality_match(
     subject_signals: dict,
     comp: Optional[dict] = None,
 ) -> tuple:
-    """Score quality/performance signals. Returns (points, breakdown_lines)."""
+    """Score rating and review-volume signals. Returns (points, breakdown_lines)."""
     score = 0
     breakdown = []
 
@@ -368,72 +354,35 @@ def _score_quality_match(
         score += 1
         breakdown.append("+1 Superhost comp (subject is Superhost)")
 
-    # Objective operator-quality signals. These replace guessing "luxury" and
-    # "professionally managed" from host-written marketing adjectives.
-    if comp is not None:
-        if comp.get("professional_management"):
-            score += 2
-            breakdown.append("+2 Professionally managed (AirROI host flag)")
-        if comp.get("guest_favorite"):
-            score += 2
-            breakdown.append("+2 Airbnb Guest Favorite")
-
-    # Occupancy performance (adjusted: booked / open nights)
-    if comp_occ is not None:
-        if comp_occ >= 65:
-            score += 3
-            breakdown.append(f"+3 Strong occupancy ({comp_occ:.0f}%) — proven performer")
-        elif comp_occ >= 50:
-            score += 2
-            breakdown.append(f"+2 Healthy occupancy ({comp_occ:.0f}%)")
-        elif comp_occ >= 35:
-            score += 1
-            breakdown.append(f"+1 Moderate occupancy ({comp_occ:.0f}%)")
-        elif comp_occ < 25:
-            score -= 2
-            breakdown.append(f"-2 Very low occupancy ({comp_occ:.0f}%) — may be inactive or new")
-
+    # Occupancy, Guest Favorite and professional management used to score
+    # here. All three reward the busiest listings, not the most similar ones
+    # (module docstring). Dormant listings are still hard-failed upstream.
     return score, breakdown
 
 
-_AMENITY_POINTS = {
-    "hot_tub": ("Hot Tub match", 2),
-    "pool": ("Pool match", 2),
-    "ski_in_out": ("Ski-in/out match", 3),
-    "games_room": ("Games room match", 1),
-    "views": ("Views match", 1),
-    "gym": ("Gym match", 1),
-    "fireplace": ("Fireplace match", 1),
-    "water": ("Waterfront/beach match", 2),
-    "ev_charger": ("EV charger match", 1),
-    "pets": ("Pet-friendly match", 1),
-    "resort": ("Resort access match", 1),
-}
-
 _TEXT_POINTS = {
-    "sauna": ("Sauna match", 2),
     "village": ("Village/central match", 1),
 }
 
 
 def _score_amenity_match(text: str, subject_signals: dict,
-                         comp_amenities: Optional[list] = None) -> tuple:
-    """Score amenity alignment against the subject.
+                         comp_amenities: Optional[list] = None,
+                         comp: Optional[dict] = None) -> tuple:
+    """Score premium-feature alignment with the subject, in both directions.
 
     Structured amenities are matched by EXACT set membership against AirROI's
-    vocabulary. Only signals with no vocabulary key fall back to free text, and
-    those are word-boundary matched with a negation guard.
+    vocabulary; description text only through comp_filters' negation-guarded,
+    billiards-trapped patterns. A comp earns points for sharing a premium
+    feature and loses them for lacking one the subject has or having one it
+    lacks (comp_similarity.PREMIUM). Only "village" is still scored from free
+    text, one way, with a negation guard.
     """
-    score = 0
-    breakdown = []
-    have = set(comp_amenities or [])
-
-    for signal, (label, points) in _AMENITY_POINTS.items():
-        if not subject_signals.get(signal):
-            continue
-        if have & set(AMENITY_VOCAB_SIGNALS.get(signal, ())):
-            score += points
-            breakdown.append(f"+{points} {label}")
+    import comp_similarity  # local: comp_similarity imports comp_filters, which imports this
+    if comp is None:
+        comp = {"name": "", "description": text, "amenities_raw": list(comp_amenities or [])}
+    has, mentions = comp_similarity.comp_premium(comp)
+    score, breakdown = comp_similarity.score_premium(
+        subject_signals, has, mentions, subject_signals.get("features_readable", True))
 
     for signal, (label, points) in _TEXT_POINTS.items():
         if not subject_signals.get(signal):
@@ -441,7 +390,7 @@ def _score_amenity_match(text: str, subject_signals: dict,
         for kw in TEXT_ONLY_SIGNALS.get(signal, ()):
             if not re.search(r"\b" + re.escape(kw) + r"\b", text):
                 continue
-            # Negation guard: "no sauna", "we do not have a sauna"
+            # Negation guard: "no village access", "not in the village"
             window = text[max(0, text.find(kw) - 40):text.find(kw)]
             if re.search(r"\b(no|not|without|dont|don't|lacks?)\b", window):
                 continue
@@ -470,19 +419,22 @@ def _score_data_reliability(comp: dict, comp_booked: Optional[int]) -> tuple:
         score -= 3
         breakdown.append(f"-3 Missing most financial data ({present_fields}/{len(financial_fields)} fields)")
 
-    # Booked nights — a real operating history, not a listing that sat empty.
-    # Bands are on NIGHTS BOOKED (ttm_days_reserved). The old code banded on
-    # ttm_available_days (UNSOLD nights) and so paid +2 to dormant listings.
-    if comp_booked is not None:
-        if comp_booked >= 200:
+    # Operating year-round is judged on nights OPEN (total minus blocked),
+    # never on nights booked (that rewards the busiest listings, which is not
+    # similarity) and never on ttm_available_days, which is UNSOLD nights and
+    # once paid +2 to dormant listings. Barely-booked still costs points: it
+    # is a sign the listing is not a real operator.
+    listed = comp.get("nights_listed")
+    if listed is not None:
+        if listed >= 330:
             score += 2
-            breakdown.append(f"+2 Full-time rental ({comp_booked} nights booked)")
-        elif comp_booked >= 120:
+            breakdown.append(f"+2 Open year-round ({listed} nights listed)")
+        elif listed >= 270:
             score += 1
-            breakdown.append(f"+1 Near full-time rental ({comp_booked} nights booked)")
-        elif comp_booked < 45:
-            score -= 2
-            breakdown.append(f"-2 Barely booked ({comp_booked} nights) — not a comparable operator")
+            breakdown.append(f"+1 Open most of the year ({listed} nights listed)")
+    if comp_booked is not None and comp_booked < 45:
+        score -= 2
+        breakdown.append(f"-2 Barely booked ({comp_booked} nights) — not a comparable operator")
 
     # Freshness — is this comp alive NOW, or is TTM averaging in dead months?
     if comp.get("l90d_nights_booked") is not None:
@@ -564,9 +516,6 @@ def score_comp(
     comp_reviews = _parse_int(comp.get("reviews")) or _parse_int(comp.get("review_count")) or 0
     comp_rating = None if comp.get("rating_is_unrated") else _parse_float(comp.get("rating"))
     comp_booked = _parse_int(comp.get("nights_booked"))
-    comp_revpar = _parse_float(comp.get("revpar"))
-    comp_revenue_potential = _parse_currency(comp.get("revenue_potential"))
-    comp_annual_revenue = _parse_currency(comp.get("annual_revenue"))
 
     # ── Hard disqualifiers ─────────────────────────────────────────────────
 
@@ -660,15 +609,20 @@ def score_comp(
 
     # Category 1: Physical match
     pts, lines = _score_physical_match(comp_bedrooms, comp_sleeps, subject_bedrooms, subject_guests)
+    import comp_similarity  # local: see _score_amenity_match
+    subj = subject or {}
+    comp_type = comp.get("listing_type") or (comp.get("listing_info") or {}).get("listing_type")
+    for extra_pts, extra_lines in (
+        comp_similarity.score_property_type(subj.get("property_type"), comp_type),
+        comp_similarity.score_bathrooms(subj.get("bathrooms"), comp.get("bathrooms")),
+    ):
+        pts += extra_pts
+        lines.extend(extra_lines)
     category_scores["physical"] = pts
     breakdown.extend(lines)
 
     # Category 2: Financial match
-    pts, lines = _score_financial_match(
-        comp_adr, comp_occ, comp_revpar,
-        comp_revenue_potential, comp_annual_revenue,
-        subject_adr,
-    )
+    pts, lines = _score_financial_match(comp_adr, subject_adr)
     category_scores["financial"] = pts
     breakdown.extend(lines)
 
@@ -678,19 +632,23 @@ def score_comp(
     breakdown.extend(lines)
 
     # Category 4: Amenity match
-    pts, lines = _score_amenity_match(text, subject_signals, comp.get("amenities_raw"))
-    # A premium feature the subject LACKS (hot tub, pool) lets the comp earn
-    # what the subject cannot. The caller sets extra_features only when too
-    # few comps without it existed to drop these (comp_filters.select_comp_pool),
-    # so this is what keeps the ones without ranked first.
-    for feature in comp.get("extra_features") or []:
-        pts -= 3
-        lines.append(f"-3 Has a {feature.replace('_', ' ')} the subject lacks")
+    # Premium features in both directions. This replaces the flat -3 per
+    # "extra_features" entry: a comp that keeps a feature the subject lacks
+    # (because too few comps without it existed to drop it) now loses that
+    # feature's own weight, the same as for any other mismatch.
+    pts, lines = _score_amenity_match(text, subject_signals, comp.get("amenities_raw"), comp=comp)
+    ov_pts, ov_lines = comp_similarity.score_overlap(
+        comp.get("amenity_overlap"), comp.get("amenity_overlap_pool_median"))
+    pts += ov_pts
+    lines.extend(ov_lines)
     category_scores["amenity"] = pts
     breakdown.extend(lines)
 
     # Category 5: Data reliability
     pts, lines = _score_data_reliability(comp, comp_booked)
+    mn_pts, mn_lines = comp_similarity.score_min_nights(subj.get("min_nights"), comp.get("min_nights"))
+    pts += mn_pts
+    lines.extend(mn_lines)
     category_scores["reliability"] = pts
     breakdown.extend(lines)
 
@@ -704,13 +662,9 @@ def score_comp(
 
     total_score = sum(category_scores.values())
 
-    if category_scores.get("financial", 0) <= -2:
-        total_score -= 3
-        breakdown.append("-3 PENALTY: Weak financial profile across multiple metrics")
-
     if category_scores.get("quality", 0) <= -2:
         total_score -= 3
-        breakdown.append("-3 PENALTY: Weak quality profile (low rating + few reviews + low occupancy)")
+        breakdown.append("-3 PENALTY: Weak quality profile (low rating + few reviews)")
 
     if category_scores.get("reliability", 0) <= -3:
         total_score -= 2
@@ -829,6 +783,18 @@ def rank_comps(subject: dict, comps: list, top_n: int = 6) -> dict:
     print(f"[scorer] Subject quality tier: {quality_tier} (sentiment: +{pos_sent}/-{neg_sent})", file=sys.stderr)
     print(f"[scorer] Subject superhost: {subject_signals.get('superhost', False)}", file=sys.stderr)
     print(f"[scorer] Scoring {len(comps)} candidates across 5 categories...", file=sys.stderr)
+
+    # Every non-premium amenity, weighted by rarity, relative to this pool.
+    import comp_similarity  # local: see _score_amenity_match
+    overlaps = []
+    for c in comps:
+        c["amenity_overlap"] = comp_similarity.amenity_overlap(
+            subject.get("amenities"), c.get("amenities_raw") or c.get("amenities"))
+        if c["amenity_overlap"] is not None:
+            overlaps.append(c["amenity_overlap"])
+    median_overlap = sorted(overlaps)[len(overlaps) // 2] if overlaps else None
+    for c in comps:
+        c["amenity_overlap_pool_median"] = median_overlap
 
     scored = [
         score_comp(c, subject_signals, subject_adr, subject_bedrooms,

@@ -41,7 +41,9 @@ files into `output/`:
 - `<slug>.report-data.json` — the whole assembled report, cached
 - `<slug>.narrative-brief.json` — the facts you need to write the copy
 
-Pass 1 spends real money on the user's AirROI key (about $0.50 a report, up to about $1.10 in a thin market) and takes
+Pass 1 spends real money on the user's AirROI key (about 50 cents a report; up to about
+1.60 USD when AirROI's own comparables are the wrong kind of listing and it runs a
+targeted search, in a market too thin for a market curve) and takes
 about 30 seconds. **Run it once per property.** If a `report-data.json` already exists
 and the user just wants better wording, skip straight to pass 2.
 
@@ -99,6 +101,16 @@ preferences.
 ## Reading the output
 
 Tell the user what actually happened, not just that it finished:
+
+- **Whether a targeted search ran** (`[Targeted]` in the log). AirROI's comparables
+  endpoint only knows location and size, so when its listings are the wrong kind
+  (ski-in/ski-out comps for a cabin with no ski access, hot-tub comps for a house
+  without one) the agent buys one extra search for listings that match. Say so, and
+  say how many comparables still carry a feature the subject lacks: the report
+  discloses it, and the user should hear it from you first.
+- **Comps are picked for similarity, not performance.** A quiet comp that matches the
+  subject beats a busy one that does not. Never describe the comp set as "top
+  performers".
 
 - **How many comps survived filtering, and why any were dropped.** The run prints this.
   A report built on a heavily filtered pool is weaker and the user should know.

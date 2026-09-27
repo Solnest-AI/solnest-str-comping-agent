@@ -115,6 +115,9 @@ def _operator_assumptions(calculator: "CalculatorDefaults | None") -> list[str]:
 
 _FEATURE_WORDS = {"pool": "pool", "hot_tub": "hot tub", "sauna": "sauna",
                   "ski_in_out": "ski-in/ski-out access", "ev_charger": "EV charger"}
+# With the article, for "N comparables have ___".
+_FEATURE_PHRASES = {"pool": "a pool", "hot_tub": "a hot tub", "sauna": "a sauna",
+                    "ski_in_out": "ski-in/ski-out access", "ev_charger": "an EV charger"}
 # The badge each feature shows as on a comp card (adapters._amenities_to_badges).
 _FEATURE_BADGES = {"pool": "Pool", "hot_tub": "Hot Tub", "sauna": "Sauna",
                    "ski_in_out": "Ski-in/Out", "ev_charger": "EV Charger"}
@@ -139,10 +142,10 @@ def _lacking_lines(comps: list, lacking: list[str], relaxed: list[str]) -> list[
         n = sum(1 for c in comps if badge and badge in (c.feature_badges or []))
         if n:
             lines.append(
-                f"{n} of {len(comps)} comparables have a {word(feature)}, which this "
-                f"property's listing does not mention. Too few comparable listings "
-                f"without one were available to leave them out, so the projection "
-                f"describes properties that have one"
+                f"{n} of {len(comps)} comparables have {_FEATURE_PHRASES.get(feature, word(feature))}, "
+                f"which this property's listing does not mention. Too few comparable "
+                f"listings without it were available to leave them out, so the "
+                f"projection describes properties that have it"
             )
     return lines
 
@@ -169,8 +172,14 @@ def _comp_funnel_line(funnel: dict | None) -> str:
     tail = f" ({'; '.join(parts)})" if parts else ""
     widened = (" A wider second search was needed to reach six, so some come "
                "from beyond the radius above." if funnel.get("widened") else "")
+    targeted = funnel.get("targeted") or {}
+    targeted_line = (
+        f" AirROI's own comparables were mostly a different kind of listing, so a "
+        f"targeted search within {targeted.get('radius_miles', 10)} miles for listings "
+        f"matching this one's features added {targeted['added']} candidates."
+        if targeted.get("added") else "")
     return (f"{total} candidate listings considered, {selected} selected{tail}."
-            f"{widened}")
+            f"{widened}{targeted_line}")
 
 
 def build_methodology(

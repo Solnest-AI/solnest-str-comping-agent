@@ -112,7 +112,7 @@ itself, and re-renders. You get one finished HTML report.
 ## Or run it directly
 
 ```bash
-# Pass 1 — fetch, score, render. Costs about $0.50 of AirROI credit (up to ~$1.10 in a thin market), ~30s.
+# Pass 1 — fetch, score, render. Costs about $0.50 of AirROI credit (up to ~$1.60 with a targeted search in a thin market), ~30s.
 python agent.py --input "https://www.airbnb.com/rooms/39508095"
 #   output/<slug>.html                    the report
 #   output/<slug>.report-data.json        cached pipeline output
