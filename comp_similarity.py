@@ -157,14 +157,30 @@ SEARCH_AMENITY_IDS = {"pool": "pool", "hot_tub": "hot_tub", "ski_in_out": "ski_i
 TARGETED_RADIUS_MILES = 10
 
 
+def required_shortfall(pool: list, required, minimum: int = 10) -> list[str]:
+    """Required features (the subject HAS them) that fewer than `minimum` comps
+    in the pool have, judged the way the required filter judges them (the
+    authoritative amenity list). `minimum` matches comp_filters'
+    min_without_extras, the same bar the lacking direction uses.
+
+    Miami, 2026-09-26: 4 of AirROI's 25 comparables had a hot tub, only 3
+    survived filtering, and the filters relaxed, dropping the hot-tub
+    requirement. The targeted search only ran because pool was also short;
+    this is the reason that should have fired on its own."""
+    return [f for f in required
+            if sum(1 for c in pool if comp_filters.comp_has_feature(c, f)) < minimum]
+
+
 def targeted_search_reasons(lacking_relaxed, kept: list, subject_type: Optional[str],
-                            min_comps: int = 6) -> tuple[list[str], bool]:
+                            min_comps: int = 6, required_short=()) -> tuple[list[str], bool]:
     """Why AirROI's own comparables are not enough, and whether property type
     is one of the reasons. Sunburst (Sun Peaks, 2026-09-26): 24 of AirROI's
     25 comparables were ski-in/ski-out for a cabin with no ski access, so no
     amount of ranking could produce a like-for-like set."""
-    reasons = [f"too few comparables without {PREMIUM.get(f, (0, f.replace('_', ' ')))[1]}"
-               for f in lacking_relaxed]
+    reasons = [f"too few comparables with {PREMIUM.get(f, (0, f.replace('_', ' ')))[1]}"
+               for f in required_short]
+    reasons += [f"too few comparables without {PREMIUM.get(f, (0, f.replace('_', ' ')))[1]}"
+                for f in lacking_relaxed]
     by_type = False
     s_class = property_class(subject_type)
     if s_class:

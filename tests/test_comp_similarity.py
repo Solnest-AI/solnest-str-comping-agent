@@ -162,3 +162,26 @@ def test_disclosure_skips_features_no_comp_had():
     sel = comp_filters.select_comp_pool(beach, lacking_features=["hot_tub", "ski_in_out", "pool"])
     assert sel.lacking_acted == ["pool"]        # no comp had a hot tub or ski access
     assert sel.lacking_relaxed == ["pool"]
+
+
+# ── Targeted search also fires when too few comps HAVE a required feature ──
+
+def _tub_comp(i, tub):
+    return {"name": f"Comp {i}", "description": "House",
+            "amenities_raw": ["Wifi", "Hot tub"] if tub else ["Wifi"]}
+
+
+def test_required_feature_shortfall_triggers_the_targeted_search():
+    """Miami, 2026-09-26: 4 of 25 had a hot tub. A hot-tub + pool subject lacks
+    nothing, so the lacking trigger alone would never have searched."""
+    pool = [_tub_comp(i, tub=i < 4) for i in range(25)]
+    short = sim.required_shortfall(pool, ["hot_tub"])
+    assert short == ["hot_tub"]
+    reasons, by_type = sim.targeted_search_reasons([], pool, None, required_short=short)
+    assert reasons == ["too few comparables with a hot tub"] and not by_type
+
+
+def test_no_search_when_enough_comps_have_the_required_feature():
+    pool = [_tub_comp(i, tub=i < 12) for i in range(25)]
+    assert sim.required_shortfall(pool, ["hot_tub"]) == []
+    assert sim.targeted_search_reasons([], pool, None, required_short=[])[0] == []

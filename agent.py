@@ -906,7 +906,9 @@ Examples:
     # through the same filters and scoring as everything else.
     targeted_added = 0
     targeted_reasons, by_type = comp_similarity.targeted_search_reasons(
-        selection.lacking_relaxed, selection.kept, prop.property_type)
+        selection.lacking_relaxed, selection.kept, prop.property_type,
+        required_short=comp_similarity.required_shortfall(
+            _unfiltered_candidates, required_features))
     if (targeted_reasons and not args.skip_financials and not args.no_feature_filter
             and prop.latitude is not None and prop.longitude is not None):
         print(f"[Targeted] {'; '.join(targeted_reasons)} — one radius search "
