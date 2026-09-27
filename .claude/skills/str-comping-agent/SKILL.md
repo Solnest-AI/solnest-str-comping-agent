@@ -15,9 +15,12 @@ second pass costs nothing and takes under a second, so always do it.
 
 ## Prerequisites
 
-1. **`AIRROI_API_KEY` in `.env`** — the only required key. Get one at
-   https://www.airroi.com/api/developer/activate. If it is missing, `agent.py` prints
-   setup instructions and exits; walk the user through `SETUP.md` rather than guessing.
+1. **`AIRROI_API_KEY`** — the only required key. Anyone who ran the STR Secrets
+   connections kit already has it: with no `.env` in this folder, the agent reads the
+   key the kit registered in `~/.claude.json` and prints
+   `[Config] AirROI key: connections kit (~/.claude.json)`. **Never ask for a key the
+   kit already collected; just run pass 1.** Only if `agent.py` prints "Setup
+   incomplete" is it really missing: then the kit's AirROI row, or `SETUP.md`.
 2. **`FIRECRAWL_API_KEY`** — optional, and only needed for a street address or a
    Zillow/Realtor link. An Airbnb URL resolves entirely through AirROI.
 3. **AirROI is the single market-data source.** Airbtics was removed 2026-09-20:
@@ -25,7 +28,8 @@ second pass costs nothing and takes under a second, so always do it.
    reports, and only the AirROI market call carries the p25/p75 percentiles the
    seasonality chart shades as a band.
 
-Never ask the user for a key value in chat. Point them at `python setup.py`.
+Never ask the user for a key value in chat. If one is genuinely missing, point them at the
+connections kit's row for it, or `python setup.py`.
 
 ## The two-pass loop — always run both
 

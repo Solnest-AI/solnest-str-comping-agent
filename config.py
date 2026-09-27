@@ -15,12 +15,61 @@ def _get(key: str, default: str = "") -> str:
     return os.getenv(key, default)
 
 
+def key_from_connections_kit(name: str, claude_json: Path | None = None) -> str:
+    """A key the STR Secrets connections kit already collected, or "".
+
+    The kit (github.com/Solnest-AI/str-secrets-connections, summit pre-work)
+    registers the AirROI and Firecrawl MCP servers in the top-level
+    "mcpServers" of ~/.claude.json with the key in a header
+    (lib/mcp_register.py): airroi-official -> X-API-KEY, firecrawl ->
+    "Authorization: Bearer <key>". Attendees ran it before this folder
+    existed, so its .env fan-out never reached us and they would otherwise be
+    asked for keys they already gave. Read-only; the value is never printed.
+    """
+    path = claude_json or (Path.home() / ".claude.json")
+    try:
+        servers = json.loads(path.read_text(encoding="utf-8")).get("mcpServers") or {}
+    except (OSError, ValueError, AttributeError):
+        return ""
+    host, header, prefix = {
+        "AIRROI_API_KEY": ("airroi.com", "X-API-KEY", ""),
+        "FIRECRAWL_API_KEY": ("firecrawl.dev", "Authorization", "bearer "),
+    }.get(name, ("", "", ""))
+    if not host:
+        return ""
+    for server in servers.values():
+        if not isinstance(server, dict):
+            continue
+        value = ""
+        if host in (server.get("url") or ""):
+            value = str((server.get("headers") or {}).get(header) or "").strip()
+            if prefix and value.lower().startswith(prefix):
+                value = value[len(prefix):].strip()
+            elif prefix:
+                value = ""
+        value = value or str((server.get("env") or {}).get(name) or "").strip()
+        # A literal variable name or ${...} is a template, not a key.
+        if value and value != name and not value.startswith("$"):
+            return value
+    return ""
+
+
+def _key(name: str) -> tuple[str, str]:
+    """(value, where it came from): this folder's .env / environment first,
+    then the connections kit's ~/.claude.json entry."""
+    value = _get(name)
+    if value:
+        return value, ".env"
+    value = key_from_connections_kit(name)
+    return (value, "connections kit (~/.claude.json)") if value else ("", "")
+
+
 # ── AirROI (primary STR data provider — listings, comps, calculator, markets) ──
-AIRROI_API_KEY: str = _get("AIRROI_API_KEY")
+AIRROI_API_KEY, AIRROI_KEY_SOURCE = _key("AIRROI_API_KEY")
 AIRROI_BASE_URL: str = _get("AIRROI_BASE_URL", "https://api.airroi.com")
 
 # ── Firecrawl (universal web scraping for property search) ──
-FIRECRAWL_API_KEY: str = _get("FIRECRAWL_API_KEY")
+FIRECRAWL_API_KEY, FIRECRAWL_KEY_SOURCE = _key("FIRECRAWL_API_KEY")
 FIRECRAWL_BASE_URL: str = _get("FIRECRAWL_BASE_URL", "https://api.firecrawl.dev/v1")
 
 # ── Airbtics (optional market-level overlay) ──
@@ -60,8 +109,9 @@ def ensure_firecrawl_configured() -> None:
     """Raise if Firecrawl API key is missing — required for property search."""
     if not FIRECRAWL_API_KEY:
         raise RuntimeError(
-            "FIRECRAWL_API_KEY is not set. Copy .env.example to .env and fill in the key. "
-            "Get one at https://www.firecrawl.dev"
+            "FIRECRAWL_API_KEY is not set, here or in the STR Secrets connections kit. "
+            "Run the kit's Firecrawl row, or copy .env.example to .env and fill in the "
+            "key. Get one at https://www.firecrawl.dev"
         )
 
 
@@ -69,8 +119,9 @@ def ensure_airroi_configured() -> None:
     """Raise if AirROI API key is missing — required for the main pipeline."""
     if not AIRROI_API_KEY:
         raise RuntimeError(
-            "AIRROI_API_KEY is not set. Copy .env.example to .env and fill in the key. "
-            "Get one at https://www.airroi.com/api/developer/activate"
+            "AIRROI_API_KEY is not set, here or in the STR Secrets connections kit. "
+            "Run the kit's AirROI row, or copy .env.example to .env and fill in the "
+            "key. Get one at https://www.airroi.com/api/developer/activate"
         )
 
 

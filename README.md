@@ -84,6 +84,8 @@ By hand:
 ```bash
 pip install -r requirements.txt
 cp .env.example .env                      # then add your AirROI key
+                                          # (ran the STR Secrets connections kit? skip this:
+                                          #  the agent reads the key the kit registered)
 cp branding.example.json branding.json    # then add your company
 ```
 
@@ -96,6 +98,11 @@ cp branding.example.json branding.json    # then add your company
 | `GMAIL_ADDRESS` + `GMAIL_APP_PASSWORD` | Optional | `--email` delivery. Reports always save locally regardless. | https://myaccount.google.com/apppasswords |
 
 No Anthropic key. See the narrative handoff below.
+
+**Ran the STR Secrets connections kit?** You need no `.env` here. With none, the
+agent reads the AirROI and Firecrawl keys the kit registered in `~/.claude.json`
+and says so: `[Config] AirROI key: connections kit (~/.claude.json)`. A `.env`
+in this folder always wins.
 
 ---
 

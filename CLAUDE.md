@@ -35,6 +35,14 @@ If `pip` is missing, use `python -m pip install -r requirements.txt`.
 
 ### Step 3: Collect API keys
 
+**STR Secrets Summit attendees already have their keys. Do not ask for them.**
+The connections kit (summit pre-work) registered AirROI and Firecrawl in
+`~/.claude.json`, and when this folder has no `.env` the agent reads the keys
+from there. Skip straight to Step 5; the run prints
+`[Config] AirROI key: connections kit (~/.claude.json)`. Only if `agent.py`
+prints "Setup incomplete" is a key really missing: have them re-run the kit's
+AirROI row, or fall back to `python setup.py` below.
+
 **Only one key is required.** Do not ask for the others unless the user wants
 what they unlock.
 

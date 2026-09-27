@@ -161,6 +161,11 @@ def _verify_setup() -> bool:
     ]
     missing = [(k, label, url) for k, val, label, url in required if not val]
     if not missing:
+        # Say where the key came from (never the key itself): an attendee who
+        # ran the STR Secrets connections kit should see it was picked up.
+        print(f"[Config] AirROI key: {config.AIRROI_KEY_SOURCE}"
+              + (f"; Firecrawl key: {config.FIRECRAWL_KEY_SOURCE}"
+                 if config.FIRECRAWL_API_KEY else "; no Firecrawl key (Airbnb links only)"))
         return True
 
     print()
@@ -171,7 +176,8 @@ def _verify_setup() -> bool:
         print(f"  [MISSING] {label:<12} ({k})")
         print(f"            Get one at: {url}")
     print()
-    print("Run the interactive setup to fix this:")
+    print("If you ran the STR Secrets connections kit, re-run its AirROI row: this")
+    print("agent reads the key the kit registered in ~/.claude.json. Otherwise run:")
     print("    python setup.py")
     print()
     print("It walks you through each key one at a time and writes them to .env.")
