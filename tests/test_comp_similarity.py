@@ -9,6 +9,8 @@ down for a feature the subject lacks.
 
 from __future__ import annotations
 
+import pytest
+
 import comp_filters
 import comp_similarity as sim
 from comp_scorer import detect_subject_signals, rank_comps, score_comp
@@ -66,13 +68,13 @@ def test_overlap_rewards_sharing_rare_amenities():
     subject = ["Wifi", "Kitchen", "Kayak", "Boat slip"]
     shares_rare = ["Wifi", "Kitchen", "Kayak", "Boat slip"]
     shares_common = ["Wifi", "Kitchen", "Hangers", "Iron"]
-    assert sim.amenity_overlap(subject, shares_rare) == 1.0
+    assert sim.amenity_overlap(subject, shares_rare) == pytest.approx(1.0)
     assert sim.amenity_overlap(subject, shares_common) < 0.2
 
 
 def test_overlap_ignores_premium_features_and_empty_lists():
     # Premium features are scored separately; counting them here would double up.
-    assert sim.amenity_overlap(["Hot tub", "Kayak"], ["Kayak"]) == 1.0
+    assert sim.amenity_overlap(["Hot tub", "Kayak"], ["Kayak"]) == pytest.approx(1.0)
     assert sim.amenity_overlap([], ["Kayak"]) is None
 
 

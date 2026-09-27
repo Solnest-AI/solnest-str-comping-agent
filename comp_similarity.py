@@ -129,8 +129,11 @@ def amenity_overlap(subject_amenities, comp_amenities) -> Optional[float]:
     c = set(comp_amenities or []) - PREMIUM_VOCAB
     if not s or not c:
         return None
-    union = sum(amenity_weight(a) for a in s | c)
-    return sum(amenity_weight(a) for a in s & c) / union if union else None
+    # Summed in sorted order: set order changes with the hash seed, and float
+    # addition in a different order can move the last bit, so the same pair
+    # would otherwise score 1.0 on one run and 1.0000000000000002 on another.
+    union = sum(amenity_weight(a) for a in sorted(s | c))
+    return sum(amenity_weight(a) for a in sorted(s & c)) / union if union else None
 
 
 def score_overlap(overlap: Optional[float], pool_median: Optional[float]) -> tuple[int, list[str]]:
