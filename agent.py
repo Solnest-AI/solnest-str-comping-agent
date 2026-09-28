@@ -54,7 +54,7 @@ from generators.narratives import (
 from generators.narrative_brief import report_data_path
 from generators.methodology import build_methodology
 from validators.sanity import (
-    run_phase_a, run_phase_b, write_failure_report, validate_calculator_defaults,
+    check_subject_hero, run_phase_a, run_phase_b, write_failure_report, validate_calculator_defaults,
 )
 from report.template_engine import save_report
 from report.email_sender import send_report_email
@@ -141,6 +141,9 @@ _CA_PROVINCES = {
     "AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE",
     "QC", "SK", "YT",
 }
+# Canadian postal code: letter-digit-letter, optional space, digit-letter-digit.
+# No US ZIP or state abbreviation has this shape.
+_CA_POSTAL = re.compile(r"\b[ABCEGHJ-NPRSTVXY]\d[A-Z] ?\d[A-Z]\d\b")
 
 
 # ── Setup verification ───────────────────────────────────────────────
@@ -194,11 +197,17 @@ def _detect_currency(address: str) -> str:
     Checks for US state or Canadian province abbreviations at the end of
     the address (e.g., "Arvada, CO" → "$", "Sun Peaks, BC" → "CA$").
     Falls back to "$" (USD) as AirROI defaults to USD.
+
+    Periods are ignored and a Canadian postal code (A1A 1A1) counts as Canada:
+    property sites write "Sun Peaks, B.C. V0E 5N0", and matching only "BC"
+    sent that address to AirROI as USD (2026-09-28).
     """
     if not address:
         return "$"
+    if _CA_POSTAL.search(address.upper()):
+        return "CA$"
     # Tokenize the last few words — state/province is usually at the end
-    tokens = [t.strip().rstrip(",").upper() for t in address.split() if t.strip()]
+    tokens = [t.strip().replace(".", "").rstrip(",").upper() for t in address.split() if t.strip()]
     # Check last 3 tokens for a state/province match
     for token in reversed(tokens[-3:]):
         # Strip trailing zip/postal code digits
@@ -707,6 +716,19 @@ Examples:
     print(f"          Currency: {prop.currency}")
     if prop.hero_image_url:
         print(f"          Hero: {prop.hero_image_url[:80]}")
+
+    # Phase A refuses a missing or untrusted subject photo, but it runs after
+    # the paid AirROI calls. An address often resolves to a local rental
+    # company's site, whose photo is always refused, so check it here, free,
+    # before spending anything (Sun Peaks address run, 2026-09-28).
+    hero_failures = check_subject_hero(prop.hero_image_url)
+    if hero_failures and not args.skip_financials:
+        print("\n[SANITY] Subject photo refused — stopping before any paid AirROI call.")
+        for failure in hero_failures:
+            print(f"  - {failure}")
+        print("  Fix: re-run with --hero-url set to a photo of this property on Airbnb, "
+              "Zillow, Realtor.ca or Redfin (right-click the photo > Copy image address).")
+        sys.exit(2)
 
     # Step 2-3: AirROI pipeline (estimate + comparables)
     if args.skip_financials:

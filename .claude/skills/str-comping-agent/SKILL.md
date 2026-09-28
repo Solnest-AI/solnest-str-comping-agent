@@ -147,6 +147,13 @@ Tell the user what actually happened, not just that it finished:
   and worth naming.
 - **Anything the sanity gate flagged.**
 
+**Address input:** check the `[Search] Found:` line against what the user gave you. The
+search can land on a neighbouring unit (asked for Unit 13, matched #12); say so before
+presenting numbers. If the run stops with `Subject photo refused` (an address often
+resolves to a local rental company's site), nothing has been spent on AirROI yet: ask
+the user for a photo of the property on Airbnb, Zillow, Realtor.ca or Redfin (right-click
+the photo, Copy image address) and re-run the same command with `--hero-url "<that>"`.
+
 If Phase A blocks the run, do not try to force it through. It blocks because a comp is
 missing data the report needs, and shipping a broken report is worse than none.
 
