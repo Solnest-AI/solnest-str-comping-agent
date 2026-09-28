@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -92,26 +93,62 @@ def kit_value(name: str, kit: Path | None) -> str:
     return read_env(kit / ".env").get(name, "") if kit else ""
 
 
+def _rewrite(env: Path, edit) -> None:
+    """Rewrite the kit's .env through edit(lines) -> lines. The master copy is
+    written to a unique temp file beside it and swapped in, so a crash or a
+    full disk cannot leave it half-written; the temp file (which may hold a
+    key) is removed if anything fails. Keeps the file's BOM and line endings."""
+    raw = env.read_bytes() if env.exists() else b""
+    bom = raw.startswith(b"\xef\xbb\xbf")
+    eol = "\r\n" if b"\r\n" in raw else "\n"
+    lines = edit(raw.decode("utf-8-sig").splitlines())
+    fd, tmp = tempfile.mkstemp(dir=env.parent, prefix=".env.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8-sig" if bom else "utf-8", newline="") as f:
+            f.write(eol.join(lines) + eol)
+        os.replace(tmp, env)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def _last_line_of(lines: list[str], name: str) -> int | None:
+    hits = [i for i, line in enumerate(lines)
+            if (m := _LINE.match(line.strip())) and m.group(1) == name]
+    return hits[-1] if hits else None
+
+
 def set_value(env: Path, name: str, value: str) -> None:
     """Set NAME=value in the kit's .env: on NAME's LAST line (the one the kit's
     env_load and read_env use), else appended. Touches no other line and never
-    prints the value. Written to a temp file and swapped in, so a crash or a
-    full disk cannot leave the master copy half-written."""
+    prints the value."""
     if not value or "\n" in value or "\r" in value:
         raise ValueError(f"{name}: refusing to write an empty or multi-line value")
-    raw = env.read_bytes() if env.exists() else b""
-    bom = raw.startswith(b"\xef\xbb\xbf")
-    eol = "\r\n" if b"\r\n" in raw else "\n"   # keep the file's own line endings
-    lines = raw.decode("utf-8-sig").splitlines()
-    hits = [i for i, line in enumerate(lines)
-            if (m := _LINE.match(line.strip())) and m.group(1) == name]
-    if hits:
-        lines[hits[-1]] = f"{name}={value}"
-    else:
-        lines.append(f"{name}={value}")
-    tmp = env.with_name(env.name + ".tmp")
-    tmp.write_text(eol.join(lines) + eol, encoding="utf-8-sig" if bom else "utf-8", newline="")
-    os.replace(tmp, env)
+
+    def edit(lines: list[str]) -> list[str]:
+        i = _last_line_of(lines, name)
+        if i is None:
+            return [*lines, f"{name}={value}"]
+        lines[i] = f"{name}={value}"
+        return lines
+
+    _rewrite(env, edit)
+
+
+def add_blank_lines(env: Path, names) -> None:
+    """Append an empty NAME= line for each name the kit's .env lacks, so the
+    student has a line to paste after. Never writes a value."""
+    missing = [n for n in names if n not in read_env(env)]
+    if missing:
+        _rewrite(env, lambda lines: [*lines, *(f"{n}=" for n in missing)])
+
+
+def redact(text: str, *secrets: str) -> str:
+    """text with any of these values masked, for printing a vendor's reply."""
+    for s in secrets:
+        if s:
+            text = text.replace(s, "***")
+    return text
 
 
 # ── The 24-hour "keys passed" stamp written by scripts/check_setup.py ──

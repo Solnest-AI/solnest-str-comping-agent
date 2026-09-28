@@ -54,7 +54,6 @@ def test_setup_survives_a_cp1252_pipe(tmp_path):
     cp1252, which cannot encode the ── and … it prints (2026-09-27). Forcing
     cp1252 reproduces that on every OS. Runs on a copy so no real .env is written."""
     shutil.copy(_ROOT / "setup.py", tmp_path)
-    shutil.copy(_ROOT / "kit.py", tmp_path)   # setup.py parses .env with kit.read_env
     shutil.copy(_ROOT / ".env.example", tmp_path)
     env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
     env.pop("PYTHONUTF8", None)
@@ -62,3 +61,16 @@ def test_setup_survives_a_cp1252_pipe(tmp_path):
                        capture_output=True, timeout=60)
     assert b"UnicodeEncodeError" not in r.stderr, r.stderr.decode("utf-8", "replace")[-500:]
     assert "Setup".encode() in r.stdout
+
+
+def test_a_quoted_value_survives_a_rerun_untouched(tmp_path, monkeypatch):
+    """setup.py writes back what it read; stripping the quotes would let
+    python-dotenv cut "pass # word" at the #."""
+    monkeypatch.setattr(setup, "ENV_PATH", tmp_path / ".env")
+    monkeypatch.setattr(setup, "ENV_EXAMPLE", tmp_path / ".env.example")
+    (tmp_path / ".env.example").write_text((_ROOT / ".env.example").read_text(encoding="utf-8"), encoding="utf-8")
+    (tmp_path / ".env").write_text(
+        'AIRROI_API_KEY=a\nFIRECRAWL_API_KEY=f\nGMAIL_APP_PASSWORD="pass # word"\n', encoding="utf-8")
+    monkeypatch.setattr("builtins.input", lambda _p="": "")
+    setup.main()
+    assert 'GMAIL_APP_PASSWORD="pass # word"' in (tmp_path / ".env").read_text(encoding="utf-8")

@@ -493,7 +493,8 @@ async def _firecrawl_post(endpoint: str, body: dict) -> dict:
         return {}
     if resp.status_code >= 400:
         kit.check_key_status("Firecrawl", resp.status_code)   # before the body is printed
-        print(f"[firecrawl] {endpoint} returned {resp.status_code}: {resp.text[:300]}", file=sys.stderr)
+        body = kit.redact(resp.text[:300], config.FIRECRAWL_API_KEY)
+        print(f"[firecrawl] {endpoint} returned {resp.status_code}: {body}", file=sys.stderr)
         return {}
     try:
         return resp.json()

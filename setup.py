@@ -12,8 +12,6 @@ the result back to .env. Safe to re-run anytime.
 import sys
 from pathlib import Path
 
-import kit
-
 ROOT = Path(__file__).parent
 ENV_PATH = ROOT / ".env"
 ENV_EXAMPLE = ROOT / ".env.example"
@@ -62,7 +60,19 @@ KEYS = [
 
 def read_env() -> dict[str, str]:
     """Parse the existing .env (or .env.example as fallback) into a dict."""
-    return kit.read_env(ENV_PATH if ENV_PATH.exists() else ENV_EXAMPLE)
+    # Raw values, quotes kept: write_env writes them back verbatim, and
+    # kit.read_env strips quotes, which would truncate a value like "a # b".
+    source = ENV_PATH if ENV_PATH.exists() else ENV_EXAMPLE
+    out: dict[str, str] = {}
+    if not source.exists():
+        return out
+    for line in source.read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#") or "=" not in s:
+            continue
+        k, _, v = s.partition("=")
+        out[k.strip()] = v.strip()
+    return out
 
 
 def write_env(values: dict[str, str]) -> None:

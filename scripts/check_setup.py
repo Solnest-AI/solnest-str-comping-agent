@@ -111,17 +111,6 @@ def open_for_paste(path: Path) -> None:
         print(f"  Could not open an editor. The file is: {path}")
 
 
-def ensure_lines(env: Path, names) -> None:
-    """Add an empty NAME= line for any required name the kit's .env lacks, so
-    the student has a line to paste after. Never writes a value."""
-    text = env.read_text(encoding="utf-8-sig") if env.exists() else ""
-    have = kit.read_env(env)
-    missing = [n for n in names if n not in have]
-    if missing:
-        sep = "" if (not text or text.endswith("\n")) else "\n"
-        env.write_text(text + sep + "".join(f"{n}=\n" for n in missing), encoding="utf-8", newline="\n")
-
-
 def main(argv: list[str]) -> int:
     no_open = "--no-open" in argv
     force = "--force" in argv
@@ -172,7 +161,7 @@ def main(argv: list[str]) -> int:
         return 0
 
     STAMP.unlink(missing_ok=True)   # a failed live check must not leave an old READY standing
-    ensure_lines(env, bad)
+    kit.add_blank_lines(env, bad)   # atomic: the kit's .env is the master copy
     print(f"[setup] Opening {env} for the student.")
     for n in bad:
         print(f"  {n}: paste the key straight after the = sign on the {n}= line. Get it at {WHERE[n]}")

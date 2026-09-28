@@ -60,6 +60,8 @@ class AirROIError(RuntimeError):
     """
 
     def __init__(self, status: int, message: str, body: Optional[dict] = None):
+        # Callers print this; never let a vendor reply echo the key to the console.
+        message = kit.redact(str(message), config.AIRROI_API_KEY)
         super().__init__(f"AirROI API {status}: {message}")
         self.status = status
         self.message = message

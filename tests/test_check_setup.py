@@ -252,3 +252,46 @@ def test_airroi_key_failure_skips_the_non_json_path():
 
     with pytest.raises(cs.kit.KeyFailure):
         asyncio.run(go())
+
+
+def test_blank_lines_are_added_atomically_keeping_crlf_and_bom(tmp_path):
+    env = tmp_path / ".env"
+    env.write_bytes(b"\xef\xbb\xbfSTACK_PMS=x\r\nAIRROI_API_KEY=a")
+    cs.kit.add_blank_lines(env, ["AIRROI_API_KEY", "FIRECRAWL_API_KEY"])
+    assert env.read_bytes() == b"\xef\xbb\xbfSTACK_PMS=x\r\nAIRROI_API_KEY=a\r\nFIRECRAWL_API_KEY=\r\n"
+    assert [p.name for p in tmp_path.iterdir()] == [".env"]
+
+
+def test_a_failed_swap_leaves_the_master_intact_and_no_temp_file(tmp_path, monkeypatch):
+    """Windows can refuse os.replace while another program holds the file."""
+    env = tmp_path / ".env"
+    env.write_text("AIRROI_API_KEY=old\n", encoding="utf-8")
+
+    def refuse(*_a):
+        raise PermissionError("in use")
+
+    monkeypatch.setattr(cs.kit.os, "replace", refuse)
+    with pytest.raises(PermissionError):
+        cs.kit.set_value(env, "AIRROI_API_KEY", "new-secret")
+    assert env.read_text(encoding="utf-8") == "AIRROI_API_KEY=old\n"
+    assert [p.name for p in tmp_path.iterdir()] == [".env"], "a temp copy holding the key was left behind"
+
+
+def test_vendor_replies_never_echo_the_key(monkeypatch, capsys):
+    import asyncio
+
+    import httpx
+
+    from scrapers import airroi
+    from scrapers import property_search as ps
+
+    monkeypatch.setattr(airroi.config, "AIRROI_API_KEY", "ar-live-123")
+    assert "ar-live-123" not in str(airroi.AirROIError(400, "bad request for key ar-live-123"))
+
+    monkeypatch.setattr(ps.config, "FIRECRAWL_API_KEY", "fc-live-456")
+    transport = httpx.MockTransport(lambda req: httpx.Response(429, text="slow down fc-live-456"))
+    real = httpx.AsyncClient
+    monkeypatch.setattr(ps.httpx, "AsyncClient", lambda **kw: real(transport=transport, **kw))
+    assert asyncio.run(ps._firecrawl_post("/scrape", {})) == {}
+    err = capsys.readouterr().err
+    assert "429" in err and "fc-live-456" not in err
