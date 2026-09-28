@@ -61,6 +61,66 @@ jobs:
       - name: Test (pytest)
         run: pytest -q
 
+  # The job above hands pytest a Python that setup-python installed. Users get
+  # none: they run the desktop app, and scripts/ensure_env.sh must install uv,
+  # download Python and the dependencies by itself. This proves that on
+  # brand-new machines, with the runner's own Python and uv taken off PATH.
+  fresh-machine:
+    name: fresh machine setup (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-11-arm, macos-latest, ubuntu-latest]
+    defaults:
+      run:
+        shell: bash   # Git Bash on Windows: what Claude Code's Bash tool runs
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Hide the runner's Python and uv
+        run: |
+          keep=""
+          IFS=':' read -ra parts <<< "$PATH"
+          for p in "${parts[@]}"; do
+            if ls "$p"/python* "$p"/python*.exe "$p"/uv "$p"/uv.exe >/dev/null 2>&1; then
+              case "$p" in /usr/bin|/bin|/c/Windows*|/c/WINDOWS*) keep="$keep:$p" ;; *) echo "hiding $p" ;; esac
+            else
+              keep="$keep:$p"
+            fi
+          done
+          echo "CLEAN_PATH=${keep#:}" >> "$GITHUB_ENV"
+
+      - name: First run installs everything (uv, Python 3.13, dependencies)
+        env:
+          UV_PYTHON_PREFERENCE: only-managed
+        run: |
+          export PATH="$CLEAN_PATH"
+          command -v uv && { echo "::error::uv still visible"; exit 1; } || true
+          PY="$(bash scripts/ensure_env.sh --dev)"
+          "$PY" --version
+          echo "PY=$PY" >> "$GITHUB_ENV"
+
+      - name: Second run is the fast path
+        run: |
+          export PATH="$CLEAN_PATH"
+          out="$(bash scripts/ensure_env.sh --dev 2>&1 >/dev/null)"
+          [ -z "$out" ] || { echo "::error::second run reinstalled: $out"; exit 1; }
+
+      - name: The skill's command form, setup.py through a pipe, stdin at EOF
+        run: |
+          export PATH="$CLEAN_PATH"
+          PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --help | head -3
+          "$PY" setup.py < /dev/null > setup.out 2>&1 || true
+          ! grep -q Traceback setup.out || { cat setup.out; exit 1; }
+          rm -f .env
+
+      - name: Full test suite with the Python the script built
+        run: |
+          export PATH="$CLEAN_PATH"
+          "$PY" -m pytest -q
+          "$PY" -m ruff check .
+
   secrets-guard:
     name: no secrets committed
     runs-on: ubuntu-latest

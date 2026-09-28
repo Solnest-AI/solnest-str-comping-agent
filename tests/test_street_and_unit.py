@@ -134,7 +134,13 @@ def test_missing_details_exit_cleanly_when_stdin_only_looks_like_a_terminal(monk
     def eof(prompt=""):
         raise EOFError
 
+    async def no_hero(address):
+        return ""
+
     monkeypatch.setattr(agent, "search_for_property", fake_search)
+    # Hermetic: without this the photo-less result falls through to a real
+    # Firecrawl photo search, which only passed on a machine with a key.
+    monkeypatch.setattr(agent, "search_hero_image", no_hero)
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
     monkeypatch.setattr("builtins.input", eof)
     args = SimpleNamespace(input=ASKED, allow_other_unit=False, hero_url=None, listing_url=None,
