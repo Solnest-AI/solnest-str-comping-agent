@@ -31,6 +31,16 @@ STAMP="$ROOT/.venv/.deps-stamp"
 # Native Windows programs (uv, python) want C:/... paths, not /c/...
 native() { if [ "$WIN" = 1 ]; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
 
+# The Claude Code desktop app on Windows is a Microsoft Store (MSIX) app: what it writes
+# under AppData is redirected into its sandbox, and uv's default Python home
+# (AppData\Roaming\uv\python) then fails with "Failed to create Python minor version link
+# directory" (os error 1921). Reproduced inside the app on 2026-09-28. Keep Python under the
+# profile, exactly where the STR Secrets connections kit puts it (install-tools.sh), so both
+# share one copy. A value the user already set wins.
+if [ "$WIN" = 1 ]; then
+    export UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-$(cygpath -w "${USERPROFILE:-$HOME}")\\.uv\\python}"
+fi
+
 venv_ok() { [ -f "$VPY" ] && "$VPY" -c 'import sys; sys.exit(sys.version_info < (3, 10))' >/dev/null 2>&1; }
 # find_spec locates each package without importing it: ~0.1s instead of ~3s.
 deps_ok() { "$VPY" -c 'import importlib.util as u, sys; sys.exit(any(u.find_spec(m) is None for m in ("httpx", "jinja2", "dotenv", "pydantic", "bs4", "anthropic")))' >/dev/null 2>&1; }
