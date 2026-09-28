@@ -204,6 +204,79 @@ def locality_agrees(city: str, result: dict) -> bool:
     return _mentions_locality(city, address, market, title)
 
 
+# ── Street number + unit ─────────────────────────────────────────────
+#
+# Ranking used to look only at extraction richness and the town. Asked for
+# "5005 Valley Drive Unit 13, Sun Peaks BC", it returned the better-documented
+# "Stones Throw #12" (12-5005 Valley Drive) as the subject, AirROI was queried
+# with Unit 12's address, and nothing said so (2026-09-28). The street number
+# is now a hard gate like the town, and a unit that still disagrees stops the
+# run before AirROI so the user can confirm it.
+
+_UNIT_WORD = re.compile(
+    r"\b(?:UNIT|APT|APARTMENT|SUITE|STE)\b\.?\s*(?:NO\.?\s*|#\s*)?([A-Z]?\d+[A-Z]?)\b"
+    r"|#\s*([A-Z]?\d+[A-Z]?)\b"
+)
+# Canadian style "12-5005 Valley Drive": unit, dash, street number, street name.
+_UNIT_DASH_STREET = re.compile(r"(?:^|[\s,])([A-Z]?\d+[A-Z]?)\s*-\s*(\d+[A-Z]?)\s+[A-Z]")
+_STREET_NUMBER = re.compile(r"(?:^|,)\s*(\d+[A-Z]?)\s+[A-Z]")
+
+
+def _clean_unit(u: str) -> str:
+    u = (u or "").upper()
+    return u.lstrip("0") or u   # "013" and "13" are the same unit
+
+
+def street_and_unit(text: str) -> tuple[str, str]:
+    """(street number, unit) out of an address or listing title; "" when absent.
+
+      "5005 Valley Drive Unit 13, Sun Peaks BC" -> ("5005", "13")
+      "12-5005 Valley Drive, Sun Peaks, B.C."   -> ("5005", "12")
+      "Unit 13, 5005 Valley Drive"              -> ("5005", "13")
+      "Stones Throw #12"                        -> ("", "12")
+    """
+    s = (text or "").upper()
+    m = _UNIT_DASH_STREET.search(s)
+    if m:
+        return m.group(2), _clean_unit(m.group(1))
+    unit = ""
+    m = _UNIT_WORD.search(s)
+    if m:
+        unit = _clean_unit(m.group(1) or m.group(2))
+        s = s[:m.start()] + "," + s[m.end():]
+    m = _STREET_NUMBER.search(s)
+    return (m.group(1) if m else ""), unit
+
+
+def _result_street_and_unit(result: dict) -> tuple[str, str]:
+    """A parsed result's street number and unit: the address first, then the
+    title for the unit ("Stones Throw #12" names it; its address may not)."""
+    street, unit = street_and_unit(result.get("raw_address") or result.get("address") or "")
+    if not unit:
+        unit = street_and_unit(result.get("title") or "")[1]
+    return street, unit
+
+
+def street_conflicts(address: str, result: dict) -> bool:
+    """Reject gate: both name a street number and they differ (another building)."""
+    want, _ = street_and_unit(address)
+    got, _ = _result_street_and_unit(result)
+    return bool(want and got and want != got)
+
+
+def unit_mismatch(address: str, result: dict) -> str:
+    """Why the result may be a different unit than the one asked for, or ""."""
+    _, want = street_and_unit(address)
+    if not want:
+        return ""
+    _, got = _result_street_and_unit(result)
+    if got == want:
+        return ""
+    if got:
+        return f"Asked for Unit {want}, but the best listing found is Unit {got} at the same street address."
+    return f"Asked for Unit {want}, but the listing found does not say which unit it is."
+
+
 # ── Result parser ────────────────────────────────────────────────────
 
 def _coerce_int(v) -> Optional[int]:
@@ -541,7 +614,21 @@ async def search_for_property(address: str) -> Optional[dict]:
         if not json_data or not isinstance(json_data, dict):
             continue
 
+        # Another building: never the subject, however rich the page.
+        if street_conflicts(address, json_data):
+            continue
+
         score = 0
+        # The street number and unit asked for. The unit outweighs the whole
+        # extraction-richness + domain budget below (12), so the right unit's
+        # thin page beats a better-documented neighbour: a page with gaps asks
+        # for --beds etc., a wrong unit silently prices someone else's condo.
+        want_street, want_unit = street_and_unit(address)
+        got_street, got_unit = _result_street_and_unit(json_data)
+        if want_street and got_street == want_street:
+            score += 4
+        if want_unit and got_unit == want_unit:
+            score += 13
         if json_data.get("bedrooms"):
             score += 3
         if pick_hero_image(json_data.get("hero_image_url"), r.get("metadata")):
@@ -603,16 +690,24 @@ async def search_for_property(address: str) -> Optional[dict]:
                 want_city, _parse_firecrawl_result(jd, top_url)
             ):
                 continue
+            if jd and street_conflicts(address, jd):
+                continue
             attempts += 1
             print(f"[Search] Trying top result as fallback: {top_url[:60]}")
             scraped = await scrape_listing_url(top_url, expect_locality=want_city)
+            if scraped and street_conflicts(address, scraped):
+                print(f"[Search] {top_url[:60]} is a different street number — discarding.",
+                      file=sys.stderr)
+                continue
             if scraped:
+                scraped["unit_mismatch"] = unit_mismatch(address, scraped)
                 return scraped
         return None
 
     result = _parse_firecrawl_result(best["json"], best["url"], best["metadata"])
     result["hero_image_url"] = await resolved_hero(
         best["json"].get("hero_image_url"), best["metadata"])
+    result["unit_mismatch"] = unit_mismatch(address, result)
 
     print(f"[Search] Best match: {best['url'][:60]}")
     print(f"         {result.get('title', '')[:50]} / "

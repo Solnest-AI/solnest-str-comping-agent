@@ -147,9 +147,17 @@ Tell the user what actually happened, not just that it finished:
   and worth naming.
 - **Anything the sanity gate flagged.**
 
-**Address input:** check the `[Search] Found:` line against what the user gave you. The
-search can land on a neighbouring unit (asked for Unit 13, matched #12); say so before
-presenting numbers. If the run stops with `Subject photo refused` (an address often
+**Address input:** the search rejects listings at another street number and prefers the
+exact unit. If it can only find a different unit in the same building, the run stops with
+`Asked for Unit 13, but the best listing found is Unit 12` before anything is spent on
+AirROI. Tell the user which unit was found and ask: if that unit is a fair stand-in (same
+building and layout), re-run the same command with `--allow-other-unit` and say in your
+summary that the report is built on that unit; otherwise ask for their unit's own Airbnb,
+Zillow or Realtor link and use it as `--input`. Never add `--allow-other-unit` on your own. If it stops with
+`Missing required fields: --beds, --baths, --guests` (the listing page did not say),
+nothing has been spent: ask the user for those numbers and re-run with them. Never guess
+them or copy them from a neighbouring unit.
+If the run stops with `Subject photo refused` (an address often
 resolves to a local rental company's site), nothing has been spent on AirROI yet: ask
 the user for a photo of the property on Airbnb, Zillow, Realtor.ca or Redfin (right-click
 the photo, Copy image address) and re-run the same command with `--hero-url "<that>"`.

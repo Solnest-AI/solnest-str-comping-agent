@@ -209,7 +209,8 @@ specifically. Fix the JSON and re-run.
 | `--subject-on-water` | Declare the subject is on water (skips the auto water-proximity filter) |
 | `--allow-oceanfront-comps` | Keep waterfront comps even when the subject is inland |
 | `--currency "$"` / `"CA$"` | Override currency (auto-detected from the address) |
-| `--hero-url URL` | Supply the hero photo when the listing scrape is blocked |
+| `--hero-url URL` | Supply the hero photo when the listing scrape is blocked, or when the run stops with "Subject photo refused" |
+| `--allow-other-unit` | Accept a listing for a different unit at the same street address. The address search stops before AirROI and asks otherwise; only pass it after the user confirms that unit is a fair stand-in |
 | `--listing-url URL` | Link the report's "View Listing" button |
 | `--skip-financials` | Dev only. Skips AirROI, produces an empty estimate |
 
