@@ -47,41 +47,44 @@ machine takes a minute or two; tell the user that. After that it only checks,
 in under a second, and reinstalls by itself when `requirements.txt` changes.
 If it prints `[setup] FAILED:`, relay that line: it says what to do.
 
-### Step 2: API keys
+**Windows with no Bash tool** (Claude answers in PowerShell): Git for Windows is
+missing, and everything here runs in Git Bash. Follow the connections kit's
+`connectors/system-git.md` to install it (it works from PowerShell), then have the
+student fully quit and reopen Claude Code, and start again.
 
-**STR Secrets Summit attendees already have their keys. Do not ask for them.**
-The connections kit (summit pre-work) saved AirROI and Firecrawl where the
-agent looks when this folder's `.env` has no key: the `airroi-official` and
-`firecrawl` headers in `~/.claude.json`, or the `.env` beside the kit's bundled
-`airroi` server. Skip straight to Step 4; the run prints
-`[Config] AirROI key: connections kit (~/.claude.json)`. Only if `agent.py`
-prints "Setup incomplete" is a key really missing: have them re-run the kit's
-AirROI row, or open `.env` for them as below.
+### Step 2: The connections kit and keys (required, nothing skipped)
 
-**Only one key is required.** Do not ask for the others unless the user wants
-what they unlock.
-
-| Key | Required? | What breaks without it | Where to get it |
-|---|---|---|---|
-| `AIRROI_API_KEY` | **YES** | Everything. This is the comp data. | https://www.airroi.com/api/developer/activate |
-| `FIRECRAWL_API_KEY` | No | Address and Zillow/Realtor input. Airbnb URLs still work. | https://www.firecrawl.dev |
-| `GMAIL_ADDRESS` + `GMAIL_APP_PASSWORD` | No | `--email` delivery. Reports still save to `output/`. | https://myaccount.google.com/apppasswords |
-
-**There is no `ANTHROPIC_API_KEY` step.** If the user offers one, tell them it
-is not needed and that you write the narratives yourself.
-
-To add a key, open `.env` for the user to paste into. `setup.py` is
-interactive and cannot run from the desktop app.
+Every student ran the STR Secrets connections kit before the summit. Verify it
+did its job:
 
 ```bash
-[ -f .env ] || cp .env.example .env
-notepad .env     # Windows. On a Mac: open -e .env
+PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/check_setup.py
 ```
 
-Never overwrite an existing `.env`. Tell them the exact line (for example
-`FIRECRAWL_API_KEY=`), to paste the key straight after the `=` with no spaces
-or quotes, then save and close. Never ask for a key in chat, never read one
-back into the transcript, and never write one anywhere except `.env`.
+It finds the kit, reads `AIRROI_API_KEY` and `FIRECRAWL_API_KEY` from the
+**kit's `.env` (the master copy)**, and tests both for real. Both are required:
+AirROI is the comp data, Firecrawl is street addresses. Act on its exit code:
+
+- **0 `READY`:** go to Step 3.
+- **2:** a key is blank or rejected. The kit's `.env` is already open in
+  Notepad / TextEdit and the output says which line and where to get the key.
+  Tell the student that, one key at a time: paste straight after the `=`, save,
+  say "saved". Run the check again.
+- **3:** no kit on this computer, or it was never run. Set it up for them:
+  clone `https://github.com/Solnest-AI/str-secrets-connections` into this
+  folder's parent (skip if it is already there), read its `CONNECTIONS.md` and
+  follow it: Phase 0, Phase 1, then the AirROI and Firecrawl rows. Then run the
+  check again until it says `READY`.
+
+| Key | Required? | Where to get it |
+|---|---|---|
+| `AIRROI_API_KEY` | **YES** | https://www.airroi.com/api/developer (needs the $10 credit deposit) |
+| `FIRECRAWL_API_KEY` | **YES** | https://www.firecrawl.dev/app/api-keys |
+| `GMAIL_ADDRESS` + `GMAIL_APP_PASSWORD` | No | https://myaccount.google.com/apppasswords (only for `--email`) |
+
+**There is no `ANTHROPIC_API_KEY` step.** If the user offers one, tell them it
+is not needed and that you write the narratives yourself. Never ask for a key in
+chat, never type one into a file yourself, never read one back.
 
 ### Step 3: Set the branding
 
@@ -325,8 +328,8 @@ link it and `/api/openapi.json` 404s.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `AIRROI_API_KEY is not set` | No `.env`, or the key is blank | Open `.env` for them (Step 2) and have them paste the key |
-| `FIRECRAWL_API_KEY is not set` | Address or listing-URL input without Firecrawl | Add the key, or pass an Airbnb URL instead |
+| `AIRROI_API_KEY is not set` | The kit's `.env` has no working key | Run `scripts/check_setup.py` (Step 2); it opens the kit's `.env` for them |
+| `FIRECRAWL_API_KEY is not set` | The kit's `.env` has no working Firecrawl key | Run `scripts/check_setup.py` (Step 2); it opens the kit's `.env` for them |
 | `Phase A sanity failed: <6 comps` | Too few comparable listings in this market | Relax with `--no-feature-filter`, or try a denser market. AirROI caps comparables at 25 and accepts only a 1-10 mile radius, so there is no way to widen the pool. |
 | Report renders but the prose is generic | You have not done the narrative handoff | Read `output/<slug>.narrative-brief.json` and re-run with `--narratives` |
 | `--narratives file not found` | Ran with `--narratives` before writing the file | Run once without it to generate the brief |

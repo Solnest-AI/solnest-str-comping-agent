@@ -61,12 +61,50 @@ def test_missing_or_malformed_file_is_just_no_key(tmp_path):
     assert config.key_from_connections_kit("AIRROI_API_KEY", bad) == ""
 
 
-def test_this_folders_env_wins_over_the_kit(monkeypatch):
-    monkeypatch.setattr(config, "key_from_connections_kit", lambda name, p=None: "from_kit")
+def test_key_precedence_kit_env_then_this_folder_then_claude_json(monkeypatch):
+    """The kit's .env is the master copy (Ryan, 2026-09-28)."""
+    monkeypatch.setattr(config, "key_from_connections_kit", lambda name, p=None: "from_claude_json")
+    monkeypatch.setattr(config, "_kit_key", lambda name: "from_kit_env")
     monkeypatch.setenv("AIRROI_API_KEY", "from_env")
+    assert config._key("AIRROI_API_KEY") == ("from_kit_env", "connections kit (.env)")
+    monkeypatch.setattr(config, "_kit_key", lambda name: "")
     assert config._key("AIRROI_API_KEY") == ("from_env", ".env")
     monkeypatch.delenv("AIRROI_API_KEY")
-    assert config._key("AIRROI_API_KEY") == ("from_kit", "connections kit (~/.claude.json)")
+    assert config._key("AIRROI_API_KEY") == ("from_claude_json", "connections kit (~/.claude.json)")
+
+
+def _make_kit(d, env=None):
+    d.mkdir(parents=True)
+    (d / "CONNECTIONS.md").write_text("", encoding="utf-8")
+    (d / "fan-out-env.sh").write_text("", encoding="utf-8")
+    if env is not None:
+        (d / ".env").write_text(env, encoding="utf-8")
+    return d
+
+
+def test_finds_the_kit_on_the_desktop_and_reads_its_env(tmp_path, monkeypatch):
+    import kit
+    monkeypatch.delenv("STR_SECRETS_KIT", raising=False)
+    k = _make_kit(tmp_path / "Desktop" / "str-secrets-connections",
+                  'AIRROI_API_KEY="ar_desk"\nFIRECRAWL_API_KEY=\n')
+    found = kit.find_kit(home=tmp_path, near=tmp_path / "elsewhere" / "comping")
+    assert found == k.resolve()
+    assert kit.kit_value("AIRROI_API_KEY", found) == "ar_desk"
+    assert kit.kit_value("FIRECRAWL_API_KEY", found) == ""
+
+
+def test_a_kit_that_was_run_beats_an_unused_download(tmp_path, monkeypatch):
+    import kit
+    monkeypatch.delenv("STR_SECRETS_KIT", raising=False)
+    _make_kit(tmp_path / "Downloads" / "str-secrets-connections")
+    used = _make_kit(tmp_path / "Documents" / "SECRETS" / "str-secrets-connections", "AIRROI_API_KEY=x\n")
+    assert kit.find_kit(home=tmp_path, near=tmp_path / "x" / "y") == used.resolve()
+
+
+def test_no_kit_is_none(tmp_path, monkeypatch):
+    import kit
+    monkeypatch.delenv("STR_SECRETS_KIT", raising=False)
+    assert kit.find_kit(home=tmp_path, near=tmp_path / "x" / "y") is None
 
 
 def test_reads_the_env_beside_the_bundled_stdio_server(tmp_path):
