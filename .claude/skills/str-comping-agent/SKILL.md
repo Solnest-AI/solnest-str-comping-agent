@@ -13,11 +13,31 @@ categories, filters out the ones that would distort the projection, and renders 
 valid on its own, then hands you a brief so you can replace it with something better. That
 second pass costs nothing and takes under a second, so always do it.
 
+## Step 0 — the environment (automatic, every time)
+
+Users run this from the Claude Code desktop app and never type into a terminal, so
+**you** make sure it can run. Never call bare `python`, `python3` or `pip`: on a fresh
+Windows machine `python` is the Microsoft Store stub and opens the Store instead of
+running. Every command in this skill starts with:
+
+```bash
+PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py ...
+```
+
+Run it from this project's root with the Bash tool. `ensure_env.sh` finds uv (the
+connections kit installs it) or installs it per-user with no admin, builds a private
+`.venv` with Python 3.13, installs anything missing from `requirements.txt`, and prints
+the Python to use. When everything is already there it only checks (under a second).
+The first run on a fresh machine downloads Python and the libraries: tell the user it
+takes a minute or two, once. If it prints `[setup] FAILED:`, relay that line; it says
+what to do. Do not work around it with a system Python.
+
 ## Prerequisites
 
 1. **`AIRROI_API_KEY`** — the only required key. Anyone who ran the STR Secrets
-   connections kit already has it: with no `.env` in this folder, the agent reads the
-   key the kit registered in `~/.claude.json` and prints
+   connections kit already has it: with no key in this folder's `.env`, the agent reads
+   the key the kit registered (the `airroi-official` header in `~/.claude.json`, or the
+   `.env` beside the kit's bundled `airroi` server) and prints
    `[Config] AirROI key: connections kit (~/.claude.json)`. **Never ask for a key the
    kit already collected; just run pass 1.** Only if `agent.py` prints "Setup
    incomplete" is it really missing: then the kit's AirROI row, or `SETUP.md`.
@@ -29,14 +49,18 @@ second pass costs nothing and takes under a second, so always do it.
    seasonality chart shades as a band.
 
 Never ask the user for a key value in chat. If one is genuinely missing, point them at the
-connections kit's row for it, or `python setup.py`.
+connections kit's row for it, or open `.env` for them to paste into: copy `.env.example`
+to `.env` **only if `.env` does not exist**, then open it with `notepad .env` (Windows)
+or `open -e .env` (Mac). Tell them the exact line (e.g. `FIRECRAWL_API_KEY=`), to paste
+the key straight after the `=`, save and close. Never read the key back. `setup.py` is
+interactive and cannot run from the desktop app.
 
 ## The two-pass loop — always run both
 
 ### Pass 1 — data
 
 ```bash
-python agent.py --input "<airbnb url | zillow url | street address>"
+PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --input "<airbnb url | zillow url | street address>"
 ```
 
 This fetches, scores, filters, renders an HTML report with template copy, and writes two
@@ -60,8 +84,8 @@ the exact JSON shape to return.
 Write that JSON to `output/<slug>.narratives.json`, then:
 
 ```bash
-python agent.py --render "output/<slug>.report-data.json" \
-                --narratives "output/<slug>.narratives.json"
+PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --render "output/<slug>.report-data.json" \
+    --narratives "output/<slug>.narratives.json"
 ```
 
 **Pass 2 makes no API calls, spends nothing, and finishes in under a second.** It re-renders

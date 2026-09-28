@@ -14,34 +14,45 @@ below before you run anything, because it changes what a "finished" report means
 
 ## When the user says "set this up"
 
-Walk them through this in order. Confirm each step before moving on.
+Users run this from the Claude Code desktop app. They never type into a
+terminal: you run every command yourself with the Bash tool, from this folder.
+Confirm each step before moving on.
 
-### Step 1: Check Python
-
-Run `python --version`. If it fails or shows below 3.10:
-
-> "You need Python 3.10 or newer. Download it from https://www.python.org/downloads/
-> and check 'Add Python to PATH' during install. Tell me when it's done."
-
-On macOS/Linux `python` may not exist; try `python3`.
-
-### Step 2: Install dependencies
+**Never run bare `python`, `python3` or `pip`.** On a fresh Windows machine
+`python` is the Microsoft Store stub and opens the Store instead of running.
+Every Python command in this file goes through `scripts/ensure_env.sh`, which
+prints the Python to use:
 
 ```bash
-pip install -r requirements.txt
+PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py ...
 ```
 
-If `pip` is missing, use `python -m pip install -r requirements.txt`.
+Wherever this file shows `"$PY" something.py`, run it with that prefix.
 
-### Step 3: Collect API keys
+### Step 1: Python and dependencies (automatic)
+
+```bash
+PY="$(bash scripts/ensure_env.sh)" && "$PY" --version
+```
+
+That one command does the whole install. It finds uv (the connections kit
+installs it) or installs it per-user with no admin, builds a private `.venv`
+with Python 3.13 (uv downloads it; the machine's own Python, or lack of one,
+does not matter), and installs `requirements.txt`. The first run on a fresh
+machine takes a minute or two; tell the user that. After that it only checks,
+in under a second, and reinstalls by itself when `requirements.txt` changes.
+If it prints `[setup] FAILED:`, relay that line: it says what to do.
+
+### Step 2: API keys
 
 **STR Secrets Summit attendees already have their keys. Do not ask for them.**
-The connections kit (summit pre-work) registered AirROI and Firecrawl in
-`~/.claude.json`, and when this folder has no `.env` the agent reads the keys
-from there. Skip straight to Step 5; the run prints
+The connections kit (summit pre-work) saved AirROI and Firecrawl where the
+agent looks when this folder's `.env` has no key: the `airroi-official` and
+`firecrawl` headers in `~/.claude.json`, or the `.env` beside the kit's bundled
+`airroi` server. Skip straight to Step 4; the run prints
 `[Config] AirROI key: connections kit (~/.claude.json)`. Only if `agent.py`
 prints "Setup incomplete" is a key really missing: have them re-run the kit's
-AirROI row, or fall back to `python setup.py` below.
+AirROI row, or open `.env` for them as below.
 
 **Only one key is required.** Do not ask for the others unless the user wants
 what they unlock.
@@ -50,22 +61,25 @@ what they unlock.
 |---|---|---|---|
 | `AIRROI_API_KEY` | **YES** | Everything. This is the comp data. | https://www.airroi.com/api/developer/activate |
 | `FIRECRAWL_API_KEY` | No | Address and Zillow/Realtor input. Airbnb URLs still work. | https://www.firecrawl.dev |
-
 | `GMAIL_ADDRESS` + `GMAIL_APP_PASSWORD` | No | `--email` delivery. Reports still save to `output/`. | https://myaccount.google.com/apppasswords |
 
 **There is no `ANTHROPIC_API_KEY` step.** If the user offers one, tell them it
 is not needed and that you write the narratives yourself.
 
-Run the interactive builder, or write `.env` yourself from `.env.example`:
+To add a key, open `.env` for the user to paste into. `setup.py` is
+interactive and cannot run from the desktop app.
 
 ```bash
-python setup.py
+[ -f .env ] || cp .env.example .env
+notepad .env     # Windows. On a Mac: open -e .env
 ```
 
-Ask for one key at a time. Wait for each. Never echo a key back into the
-transcript, and never write one anywhere except `.env`.
+Never overwrite an existing `.env`. Tell them the exact line (for example
+`FIRECRAWL_API_KEY=`), to paste the key straight after the `=` with no spaces
+or quotes, then save and close. Never ask for a key in chat, never read one
+back into the transcript, and never write one anywhere except `.env`.
 
-### Step 4: Set the branding
+### Step 3: Set the branding
 
 The report is white-label. It reads `branding.json`; if that file is absent it
 falls back to `branding.example.json`, so a fresh clone renders with neutral
@@ -78,10 +92,10 @@ cp branding.example.json branding.json
 Then edit `company_name`, `tagline`, `logo_url`, `website_url`,
 `primary_color`, `accent_color`. Do **not** edit the template to rebrand.
 
-### Step 5: First report
+### Step 4: First report
 
 ```bash
-python agent.py --input "https://www.airbnb.com/rooms/39508095"
+PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --input "https://www.airbnb.com/rooms/39508095"
 ```
 
 The HTML lands in `output/`. Then do the narrative handoff below. The first
@@ -98,7 +112,7 @@ them. The loop is three steps.
 ### 1. Run the agent
 
 ```bash
-python agent.py --input "<property>"
+PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --input "<property>"
 ```
 
 Alongside the HTML it writes a brief:
@@ -165,7 +179,7 @@ holes without them, so write both.
 ### 3. Re-run with the copy
 
 ```bash
-python agent.py --input "<same input>" --narratives "output/<slug>.narratives.json"
+PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --render "output/<slug>.report-data.json" --narratives "output/<slug>.narratives.json"
 ```
 
 The brief carries a ready-made `rerun_command` field. Use it verbatim.
@@ -199,7 +213,7 @@ specifically. Fix the JSON and re-run.
 | `--listing-url URL` | Link the report's "View Listing" button |
 | `--skip-financials` | Dev only. Skips AirROI, produces an empty estimate |
 
-Run `python agent.py --help` if a flag here disagrees with the code; the code wins.
+Run `"$PY" agent.py --help` if a flag here disagrees with the code; the code wins.
 
 ---
 
@@ -291,14 +305,15 @@ link it and `/api/openapi.json` 404s.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `AIRROI_API_KEY is not set` | No `.env`, or the key is blank | `cp .env.example .env`, paste the key, or run `python setup.py` |
+| `AIRROI_API_KEY is not set` | No `.env`, or the key is blank | Open `.env` for them (Step 2) and have them paste the key |
 | `FIRECRAWL_API_KEY is not set` | Address or listing-URL input without Firecrawl | Add the key, or pass an Airbnb URL instead |
 | `Phase A sanity failed: <6 comps` | Too few comparable listings in this market | Relax with `--no-feature-filter`, or try a denser market. AirROI caps comparables at 25 and accepts only a 1-10 mile radius, so there is no way to widen the pool. |
 | Report renders but the prose is generic | You have not done the narrative handoff | Read `output/<slug>.narrative-brief.json` and re-run with `--narratives` |
 | `--narratives file not found` | Ran with `--narratives` before writing the file | Run once without it to generate the brief |
 | `NarrativeFileError: ... not valid JSON` | Markdown fences or commentary around the object | Write the bare JSON object only |
 | Comps look wrong (oversized, waterfront, dormant) | Filters too loose or too tight | `--require`, `--exclude`, `--allow-oceanfront-comps` |
-| Module import error | Dependencies not installed | `pip install -r requirements.txt` |
+| Module import error, or `python` opens the Microsoft Store | Ran bare `python` instead of the `.venv` | Always prefix with `PY="$(bash scripts/ensure_env.sh)" &&` and run `"$PY"` |
+| `[setup] FAILED: ...` | No internet, or uv/Python blocked on this machine | Do what the message says, then run the same command again |
 | Report shows someone else's company | No `branding.json` | `cp branding.example.json branding.json` and edit it |
 
 ---
@@ -319,9 +334,9 @@ link it and `/api/openapi.json` 404s.
 ## Tests
 
 ```bash
-pip install -r requirements-dev.txt
-pytest -q        # hermetic: no network, no API keys
-ruff check .     # lint
+PY="$(bash scripts/ensure_env.sh --dev)"   # adds pytest + ruff to the .venv
+"$PY" -m pytest -q                          # hermetic: no network, no API keys
+"$PY" -m ruff check .                       # lint
 ```
 
 The suite must never need network access or an API key. It runs against real

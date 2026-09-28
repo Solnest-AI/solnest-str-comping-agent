@@ -4,6 +4,7 @@ The point of `--render` is that improving the narrative copy must be FREE.
 If it ever starts touching the network again, the Claude Code loop becomes a
 second full-price run and nobody will use it twice. These tests lock that in.
 """
+import sys
 from pathlib import Path
 
 
@@ -123,6 +124,9 @@ def test_rerun_command_uses_the_free_render_path():
     assert "--render" in cmd
     assert "--input" not in cmd
     assert "x.report-data.json" in cmd and "x.narratives.json" in cmd
+    # Never bare `python`: that is the Microsoft Store stub on a fresh Windows machine.
+    assert not cmd.startswith("python ")
+    assert Path(sys.executable).as_posix() in cmd
 
 
 def test_brief_rules_cover_the_known_traps():
