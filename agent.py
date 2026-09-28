@@ -150,24 +150,16 @@ _CA_POSTAL = re.compile(r"\b[ABCEGHJ-NPRSTVXY]\d[A-Z] ?\d[A-Z]\d\b")
 
 # ── Setup verification ───────────────────────────────────────────────
 
-def _stop_on_key_failure(e: BaseException) -> None:
-    """A rejected key or empty credit is not a thin market or a bad listing:
-    falling back only ends the run on a misleading error (a bad AirROI key once
-    ended on "Subject photo refused", sending the student hunting for a photo).
-    AirROIError has already printed what to do; stop here."""
-    if getattr(e, "status", None) in kit.KEY_FAILURES:
-        sys.exit(2)
-
-
 def _verify_setup() -> bool:
     """Check required API keys are present. Direct to scripts/check_setup.py if not.
 
     Returns True if all required keys are set. Returns False (and prints help)
     if any required key is missing.
     """
-    # AirROI is the only hard requirement. Firecrawl is needed only to resolve a
-    # street address or a Zillow/Realtor link; an Airbnb URL resolves entirely
-    # through AirROI. There is deliberately NO Anthropic key: the narrative copy
+    # Both keys are required at setup (scripts/check_setup.py), but only AirROI
+    # is checked here: a run from an Airbnb URL resolves entirely through
+    # AirROI, and Firecrawl is needed only for an address or a Zillow/Realtor
+    # link, which fails loudly without it. There is deliberately NO Anthropic key: the narrative copy
     # comes from Claude Code via the narrative-brief handoff.
     required = [
         ("AIRROI_API_KEY", config.AIRROI_API_KEY, "AirROI",
@@ -351,7 +343,6 @@ async def _resolve_subject(args) -> PropertyBasics:
                 return prop
 
             except AirROIError as e:
-                _stop_on_key_failure(e)
                 print(f"[AirROI] Listing fetch failed: {e}")
                 print("[AirROI] Falling back to HTML scraper...")
             except Exception as e:
@@ -831,8 +822,7 @@ Examples:
                               file=sys.stderr)
         except AirROIError as e:
             print(f"\n[AirROI] Pipeline error: {e}")
-            if e.status not in kit.KEY_FAILURES:   # a key/credit failure already said what to do
-                print("[AirROI] Check address/coordinates; try specifying --beds/--baths/--guests.")
+            print("[AirROI] Check address/coordinates; try specifying --beds/--baths/--guests.")
             sys.exit(1)
 
         print("\n--- Step 3: Building subject rentalizer ---")
@@ -999,7 +989,6 @@ Examples:
                 currency=("native" if prop.currency == "CA$" else "usd"),
             )
         except (AirROIError, httpx.HTTPError, asyncio.TimeoutError) as e:
-            _stop_on_key_failure(e)
             print(f"[Targeted] Search failed ({type(e).__name__}) — continuing with "
                   f"AirROI's comparables", file=sys.stderr)
             found = []
@@ -1335,7 +1324,6 @@ Examples:
                 seasonal_data = []
                 print("[Seasonal] Market curve too thin — falling back to per-comp metrics")
         except (AirROIError, httpx.HTTPError, asyncio.TimeoutError) as e:
-            _stop_on_key_failure(e)
             print(f"[Seasonal] Market curve unavailable ({type(e).__name__}) — "
                   "falling back to per-comp metrics", file=sys.stderr)
             seasonal_data = []
@@ -1380,7 +1368,6 @@ Examples:
                       f"its trailing-12-month figures cover a period it was not listed "
                       f"for, so the projection will anchor to the market instead")
         except (AirROIError, httpx.HTTPError, asyncio.TimeoutError) as e:
-            _stop_on_key_failure(e)
             print(f"[Seasonal] Subject monthly unavailable ({type(e).__name__}) — "
                   "chart will show the market band only", file=sys.stderr)
             subject_monthly = []
@@ -1581,5 +1568,16 @@ Examples:
     print(f"\n  File: {output_path.resolve()}\n")
 
 
+def run() -> None:
+    """main(), stopped cleanly when a vendor rejects the key or is out of
+    credit anywhere in the run (kit.KeyFailure skips every fallback)."""
+    try:
+        asyncio.run(main())
+    except kit.KeyFailure as e:
+        kit.forget_setup_pass()
+        print(f"\n{e}", file=sys.stderr)
+        sys.exit(2)
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    run()

@@ -54,6 +54,7 @@ def test_setup_survives_a_cp1252_pipe(tmp_path):
     cp1252, which cannot encode the ── and … it prints (2026-09-27). Forcing
     cp1252 reproduces that on every OS. Runs on a copy so no real .env is written."""
     shutil.copy(_ROOT / "setup.py", tmp_path)
+    shutil.copy(_ROOT / "kit.py", tmp_path)   # setup.py parses .env with kit.read_env
     shutil.copy(_ROOT / ".env.example", tmp_path)
     env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
     env.pop("PYTHONUTF8", None)

@@ -492,10 +492,8 @@ async def _firecrawl_post(endpoint: str, body: dict) -> dict:
         print(f"[firecrawl] {endpoint} HTTP error: {e}", file=sys.stderr)
         return {}
     if resp.status_code >= 400:
+        kit.check_key_status("Firecrawl", resp.status_code)   # before the body is printed
         print(f"[firecrawl] {endpoint} returned {resp.status_code}: {resp.text[:300]}", file=sys.stderr)
-        hint = kit.key_failure("Firecrawl", resp.status_code)
-        if hint:
-            print(hint, file=sys.stderr)
         return {}
     try:
         return resp.json()

@@ -95,15 +95,23 @@ def kit_value(name: str, kit: Path | None) -> str:
 def set_value(env: Path, name: str, value: str) -> None:
     """Set NAME=value in the kit's .env: on NAME's LAST line (the one the kit's
     env_load and read_env use), else appended. Touches no other line and never
-    prints the value. UTF-8, no BOM, LF endings, like the kit writes."""
-    lines = env.read_text(encoding="utf-8-sig").splitlines() if env.exists() else []
+    prints the value. Written to a temp file and swapped in, so a crash or a
+    full disk cannot leave the master copy half-written."""
+    if not value or "\n" in value or "\r" in value:
+        raise ValueError(f"{name}: refusing to write an empty or multi-line value")
+    raw = env.read_bytes() if env.exists() else b""
+    bom = raw.startswith(b"\xef\xbb\xbf")
+    eol = "\r\n" if b"\r\n" in raw else "\n"   # keep the file's own line endings
+    lines = raw.decode("utf-8-sig").splitlines()
     hits = [i for i, line in enumerate(lines)
             if (m := _LINE.match(line.strip())) and m.group(1) == name]
     if hits:
         lines[hits[-1]] = f"{name}={value}"
     else:
         lines.append(f"{name}={value}")
-    env.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    tmp = env.with_name(env.name + ".tmp")
+    tmp.write_text(eol.join(lines) + eol, encoding="utf-8-sig" if bom else "utf-8", newline="")
+    os.replace(tmp, env)
 
 
 # ── The 24-hour "keys passed" stamp written by scripts/check_setup.py ──
@@ -112,15 +120,31 @@ SETUP_STAMP = ROOT / ".cache" / "setup_ok.json"
 KEY_FAILURES = {401: "rejected the key", 402: "is out of credit", 403: "rejected the key"}
 
 
-def key_failure(vendor: str, status: int) -> str:
-    """Empty for an ordinary error. For a key or credit failure: forget the last
-    passed check (so check_setup probes again instead of trusting it) and
-    return the line that tells Claude what to do."""
-    if status not in KEY_FAILURES:
-        return ""
+class KeyFailure(BaseException):
+    """A vendor rejected the key or is out of credit. Not the property's fault,
+    so no fallback may absorb it: it derives from BaseException, which every
+    `except Exception` / `except AirROIError` degrade path lets through, and
+    (unlike SystemExit) asyncio.gather propagates it like any error. agent.py
+    catches it once, at the top, and stops the run. The message never holds
+    the key or the vendor's response body."""
+
+    def __init__(self, vendor: str, status: int):
+        super().__init__(f"[setup] {vendor} {KEY_FAILURES[status]} (HTTP {status}). Not a problem "
+                         "with the property. Run: PY=\"$(bash scripts/ensure_env.sh)\" && "
+                         "\"$PY\" scripts/check_setup.py")
+        self.vendor = vendor
+        self.status = status
+
+
+def check_key_status(vendor: str, status: int) -> None:
+    """Call on every vendor HTTP response: raises KeyFailure for 401/402/403."""
+    if status in KEY_FAILURES:
+        raise KeyFailure(vendor, status)
+
+
+def forget_setup_pass() -> None:
+    """Drop the 24-hour pass so the next check_setup probes for real."""
     try:
         SETUP_STAMP.unlink()
     except OSError:
         pass
-    return (f"[setup] {vendor} {KEY_FAILURES[status]} (HTTP {status}). Not a problem with the "
-            "property. Run: PY=\"$(bash scripts/ensure_env.sh)\" && \"$PY\" scripts/check_setup.py")

@@ -69,17 +69,9 @@ def _key_beside_stdio_server(server: dict, name: str) -> str:
     for arg in server.get("args") or []:
         if not isinstance(arg, str) or not arg.endswith(".py"):
             continue
-        env = Path(arg).parent / ".env"
-        try:
-            lines = env.read_text(encoding="utf-8-sig").splitlines()
-        except (OSError, ValueError):
-            continue
-        for line in lines:
-            k, sep, v = line.strip().partition("=")
-            if sep and k.strip() == name:
-                v = v.strip().strip('"').strip("'")
-                if v:
-                    return v
+        value = kit.read_env(Path(arg).parent / ".env").get(name, "")
+        if value:
+            return value
     return ""
 
 

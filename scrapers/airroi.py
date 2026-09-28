@@ -64,16 +64,6 @@ class AirROIError(RuntimeError):
         self.status = status
         self.message = message
         self.body = body or {}
-        # A key or credit failure is not about the property, and some callers
-        # swallow this error to degrade gracefully: say so once, loudly.
-        global _KEY_FAILURE_SHOWN
-        hint = kit.key_failure("AirROI", status)
-        if hint and not _KEY_FAILURE_SHOWN:
-            _KEY_FAILURE_SHOWN = True
-            print(hint, file=sys.stderr)
-
-
-_KEY_FAILURE_SHOWN = False
 
 
 # ── HTTP helper ───────────────────────────────────────────────────────
@@ -163,6 +153,7 @@ async def _request_with_retries(
             await asyncio.sleep(_retry_delay(resp, attempt))
             continue
 
+        kit.check_key_status("AirROI", resp.status_code)   # no fallback may absorb this
         try:
             data = resp.json()
         except Exception as e:
@@ -235,6 +226,7 @@ async def _post(
     async def _send(c: httpx.AsyncClient) -> dict:
         resp = await c.post(url, json=body, headers=headers)
         if resp.status_code >= 400:
+            kit.check_key_status("AirROI", resp.status_code)   # no fallback may absorb this
             try:
                 payload = resp.json()
             except ValueError:

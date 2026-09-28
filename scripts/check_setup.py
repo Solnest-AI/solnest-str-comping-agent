@@ -142,10 +142,15 @@ def main(argv: list[str]) -> int:
     for n in REQUIRED:
         if not values[n]:
             value, where = other_copy(n)
-            if value:
+            if not value:
+                continue
+            try:
                 kit.set_value(env, n, value)
-                values[n] = value
-                print(f"[setup] {n}: blank in the kit's .env; copied in from {where} (value not shown).")
+            except (ValueError, OSError):
+                print(f"[setup] {n}: found in {where} but could not copy it into the kit's .env.")
+                continue
+            values[n] = value
+            print(f"[setup] {n}: blank in the kit's .env; copied in from {where} (value not shown).")
     blank = [n for n in REQUIRED if not values[n]]
     results: dict[str, str] = {}
     if not blank and not force and _recently_ok(values):
@@ -166,6 +171,7 @@ def main(argv: list[str]) -> int:
         print("[setup] READY: AirROI and Firecrawl both work.")
         return 0
 
+    STAMP.unlink(missing_ok=True)   # a failed live check must not leave an old READY standing
     ensure_lines(env, bad)
     print(f"[setup] Opening {env} for the student.")
     for n in bad:
