@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
+import kit
+
 # Load .env from project root. override=True so the .env wins over any empty
 # values already in the shell environment (e.g., ANTHROPIC_API_KEY="" set globally).
 _env_path = Path(__file__).parent / ".env"
@@ -81,9 +83,20 @@ def _key_beside_stdio_server(server: dict, name: str) -> str:
     return ""
 
 
+KIT_DIR = kit.find_kit()
+
+
+def _kit_key(name: str) -> str:
+    return kit.kit_value(name, KIT_DIR)
+
+
 def _key(name: str) -> tuple[str, str]:
-    """(value, where it came from): this folder's .env / environment first,
-    then the connections kit's ~/.claude.json entry."""
+    """(value, where it came from). The connections kit's own .env is the master
+    copy (Ryan, 2026-09-28: one place to paste, one place to fix), then this
+    folder's .env / environment, then what the kit registered in ~/.claude.json."""
+    value = _kit_key(name)
+    if value:
+        return value, "connections kit (.env)"
     value = _get(name)
     if value:
         return value, ".env"
@@ -137,8 +150,8 @@ def ensure_firecrawl_configured() -> None:
     if not FIRECRAWL_API_KEY:
         raise RuntimeError(
             "FIRECRAWL_API_KEY is not set, here or in the STR Secrets connections kit. "
-            "Run the kit's Firecrawl row, or copy .env.example to .env and fill in the "
-            "key. Get one at https://www.firecrawl.dev"
+            "Run scripts/check_setup.py: it opens the kit's .env to paste the key into. "
+            "Get one at https://www.firecrawl.dev/app/api-keys"
         )
 
 
@@ -147,8 +160,8 @@ def ensure_airroi_configured() -> None:
     if not AIRROI_API_KEY:
         raise RuntimeError(
             "AIRROI_API_KEY is not set, here or in the STR Secrets connections kit. "
-            "Run the kit's AirROI row, or copy .env.example to .env and fill in the "
-            "key. Get one at https://www.airroi.com/api/developer/activate"
+            "Run scripts/check_setup.py: it opens the kit's .env to paste the key into. "
+            "Get one at https://www.airroi.com/api/developer"
         )
 
 

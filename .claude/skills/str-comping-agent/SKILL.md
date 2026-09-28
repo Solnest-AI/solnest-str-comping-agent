@@ -32,28 +32,41 @@ The first run on a fresh machine downloads Python and the libraries: tell the us
 takes a minute or two, once. If it prints `[setup] FAILED:`, relay that line; it says
 what to do. Do not work around it with a system Python.
 
-## Prerequisites
+## Step 1 — verify the connections kit and keys (required, before the first run)
 
-1. **`AIRROI_API_KEY`** — the only required key. Anyone who ran the STR Secrets
-   connections kit already has it: with no key in this folder's `.env`, the agent reads
-   the key the kit registered (the `airroi-official` header in `~/.claude.json`, or the
-   `.env` beside the kit's bundled `airroi` server) and prints
-   `[Config] AirROI key: connections kit (~/.claude.json)`. **Never ask for a key the
-   kit already collected; just run pass 1.** Only if `agent.py` prints "Setup
-   incomplete" is it really missing: then the kit's AirROI row, or `SETUP.md`.
-2. **`FIRECRAWL_API_KEY`** — optional, and only needed for a street address or a
-   Zillow/Realtor link. An Airbnb URL resolves entirely through AirROI.
-3. **AirROI is the single market-data source.** Airbtics was removed 2026-09-20:
-   two providers meant "the market" meant different things on different client
-   reports, and only the AirROI market call carries the p25/p75 percentiles the
-   seasonality chart shades as a band.
+Every student ran the STR Secrets connections kit before the summit, so this is usually a
+silent pass. Run it before the first report of a session, and again whenever a run fails
+on a key:
 
-Never ask the user for a key value in chat. If one is genuinely missing, point them at the
-connections kit's row for it, or open `.env` for them to paste into: copy `.env.example`
-to `.env` **only if `.env` does not exist**, then open it with `notepad .env` (Windows)
-or `open -e .env` (Mac). Tell them the exact line (e.g. `FIRECRAWL_API_KEY=`), to paste
-the key straight after the `=`, save and close. Never read the key back. `setup.py` is
-interactive and cannot run from the desktop app.
+```bash
+PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/check_setup.py
+```
+
+It finds the kit (next to this folder, Desktop, Documents, Downloads, OneDrive), reads
+`AIRROI_API_KEY` and `FIRECRAWL_API_KEY` from the **kit's `.env`, the master copy**, and
+tests each with one real request (AirROI $0.01, Firecrawl free). A pass is remembered for
+24 hours. Both keys are required: nothing is skipped. Act on the exit code:
+
+- **0 `READY`:** go straight to the report.
+- **2, a key is blank or rejected:** it has already opened the kit's `.env` in Notepad
+  (Windows) or TextEdit (Mac) and printed which line and where to get the key. Tell the
+  student exactly that, one key at a time: paste the key straight after the `=`, save,
+  say "saved". Then run the check again. Never ask for a key in chat, never type a key into
+  a file yourself, never read one back. `unreachable` means the internet, not the key.
+- **3, no kit, or it was never run:** set the kit up for them. Clone
+  `https://github.com/Solnest-AI/str-secrets-connections` into this folder's parent (skip
+  the clone if the folder is already there), read its `CONNECTIONS.md` and follow it:
+  Phase 0, Phase 1, then the AirROI and Firecrawl rows. Nothing else in the kit is needed
+  for comps. Then come back and run the check again until it says `READY`.
+
+`agent.py` reads the same keys the same way and prints where each came from
+(`[Config] AirROI key: connections kit (.env)`). Never open or print `~/.claude.json` or
+the kit's `.env` to look for keys yourself. `setup.py` is interactive and cannot run from
+the desktop app.
+
+AirROI is the single market-data source. Airbtics was removed 2026-09-20: two providers
+meant "the market" meant different things on different client reports, and only the
+AirROI market call carries the p25/p75 percentiles the seasonality chart shades as a band.
 
 ## The two-pass loop — always run both
 
