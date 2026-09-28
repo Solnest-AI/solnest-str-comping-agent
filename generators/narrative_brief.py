@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import re
 import statistics
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -567,10 +568,15 @@ def rerun_command(data_path: str, narratives_path: str) -> str:
     MUST be the `--render` form. The `--input` form re-runs the whole pipeline,
     which costs the user another round of AirROI credit and ~30s just to change
     the wording — the exact thing `--render` exists to avoid.
+
+    Names the interpreter running right now, never bare `python`: on a fresh
+    Windows machine `python` is the Microsoft Store stub, and this one already
+    has every dependency (scripts/ensure_env.sh built it).
     """
     data = data_path or "<slug>.report-data.json"
     out = narratives_path or "<slug>.narratives.json"
-    return f'python agent.py --render "{data}" --narratives "{out}"'
+    py = Path(sys.executable).as_posix()
+    return f'"{py}" agent.py --render "{data}" --narratives "{out}"'
 
 
 def write_narrative_brief(brief: dict, path: Path) -> Path:

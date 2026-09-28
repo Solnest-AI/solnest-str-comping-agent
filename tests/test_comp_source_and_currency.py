@@ -61,3 +61,17 @@ def test_usd_and_native_records_differ_by_fx_not_by_occupancy():
 
 def test_missing_performance_block_yields_none_not_a_crash():
     assert subject_performance_from_listing({"listing_info": {"listing_id": 1}}) is None
+
+
+def test_currency_reads_dotted_provinces_and_postal_codes():
+    """Property sites write "Sun Peaks, B.C. V0E 5N0". Matching only "BC" sent
+    that address to AirROI as USD and labelled a BC report in US dollars
+    (2026-09-28, live address run)."""
+    from agent import _detect_currency
+    assert _detect_currency("12-5005 Valley Drive, Sun Peaks, B.C. V0E 5N0") == "CA$"
+    assert _detect_currency("Toronto, Ont. M5V3L9") == "CA$"
+    assert _detect_currency("Toronto, Ont. M5V 3L9") == "CA$"
+    assert _detect_currency("Sun Peaks, BC") == "CA$"
+    assert _detect_currency("Arvada, CO 80002") == "$"
+    assert _detect_currency("123 Main St, Austin, TX 78701") == "$"
+    assert _detect_currency("A1B2C3D4 Road, Destin, FL") == "$"

@@ -117,6 +117,11 @@ def prompt(label: str, required: bool, where: str, hint: str, current: str) -> s
 
 
 def main() -> int:
+    # Force UTF-8 output on Windows: cp1252 can't encode the ── and … below, and
+    # Claude Code runs this through a pipe, where Python falls back to cp1252.
+    for stream in (sys.stdout, sys.stderr):
+        if stream.encoding and stream.encoding.lower() != "utf-8":
+            stream.reconfigure(encoding="utf-8", errors="replace")
     print("=" * 60)
     print("  AIRROI Comping Agent — Setup")
     print("=" * 60)

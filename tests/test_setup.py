@@ -8,6 +8,10 @@ who had done exactly what the docs said.
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import setup
@@ -42,3 +46,17 @@ def test_setup_completes_with_only_an_airroi_key(tmp_path, monkeypatch, capsys):
     env = (tmp_path / ".env").read_text(encoding="utf-8")
     assert "AIRROI_API_KEY=ar_test_key_000000000000" in env
     assert "AIRBTICS" not in env
+
+
+def test_setup_survives_a_cp1252_pipe(tmp_path):
+    """Claude Code runs setup.py through a pipe; on Windows Python then writes
+    cp1252, which cannot encode the ── and … it prints (2026-09-27). Forcing
+    cp1252 reproduces that on every OS. Runs on a copy so no real .env is written."""
+    shutil.copy(_ROOT / "setup.py", tmp_path)
+    shutil.copy(_ROOT / ".env.example", tmp_path)
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+    env.pop("PYTHONUTF8", None)
+    r = subprocess.run([sys.executable, "setup.py"], cwd=tmp_path, env=env, stdin=subprocess.DEVNULL,
+                       capture_output=True, timeout=60)
+    assert b"UnicodeEncodeError" not in r.stderr, r.stderr.decode("utf-8", "replace")[-500:]
+    assert "Setup".encode() in r.stdout

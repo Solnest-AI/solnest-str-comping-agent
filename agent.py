@@ -54,7 +54,7 @@ from generators.narratives import (
 from generators.narrative_brief import report_data_path
 from generators.methodology import build_methodology
 from validators.sanity import (
-    run_phase_a, run_phase_b, write_failure_report, validate_calculator_defaults,
+    check_subject_hero, run_phase_a, run_phase_b, write_failure_report, validate_calculator_defaults,
 )
 from report.template_engine import save_report
 from report.email_sender import send_report_email
@@ -141,6 +141,9 @@ _CA_PROVINCES = {
     "AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE",
     "QC", "SK", "YT",
 }
+# Canadian postal code: letter-digit-letter, optional space, digit-letter-digit.
+# No US ZIP or state abbreviation has this shape.
+_CA_POSTAL = re.compile(r"\b[ABCEGHJ-NPRSTVXY]\d[A-Z] ?\d[A-Z]\d\b")
 
 
 # ── Setup verification ───────────────────────────────────────────────
@@ -194,11 +197,17 @@ def _detect_currency(address: str) -> str:
     Checks for US state or Canadian province abbreviations at the end of
     the address (e.g., "Arvada, CO" → "$", "Sun Peaks, BC" → "CA$").
     Falls back to "$" (USD) as AirROI defaults to USD.
+
+    Periods are ignored and a Canadian postal code (A1A 1A1) counts as Canada:
+    property sites write "Sun Peaks, B.C. V0E 5N0", and matching only "BC"
+    sent that address to AirROI as USD (2026-09-28).
     """
     if not address:
         return "$"
+    if _CA_POSTAL.search(address.upper()):
+        return "CA$"
     # Tokenize the last few words — state/province is usually at the end
-    tokens = [t.strip().rstrip(",").upper() for t in address.split() if t.strip()]
+    tokens = [t.strip().replace(".", "").rstrip(",").upper() for t in address.split() if t.strip()]
     # Check last 3 tokens for a state/province match
     for token in reversed(tokens[-3:]):
         # Strip trailing zip/postal code digits
@@ -374,6 +383,20 @@ async def _resolve_subject(args) -> PropertyBasics:
         print(f"[Input] Address provided: {raw}")
         print("[Search] Searching for property listing...")
         listing_data = await search_for_property(raw)
+        # The search found a listing at the right street number but maybe not
+        # the unit asked for. Its address is what AirROI gets queried with, so
+        # stop here, before any paid call, unless the user accepted it.
+        note = (listing_data or {}).get("unit_mismatch")
+        if note:
+            if getattr(args, "allow_other_unit", False):
+                print(f"[Search] {note} Continuing: --allow-other-unit.")
+            else:
+                print(f"\n[Search] {note}")
+                print(f"         Listing found: {listing_data.get('listing_url') or ''}")
+                print("  Nothing has been spent on AirROI. If that unit is a fair stand-in "
+                      "(same building and layout), re-run with --allow-other-unit. Otherwise "
+                      "pass this unit's own Airbnb, Zillow or Realtor link as --input.")
+                sys.exit(2)
 
     if listing_data:
         print(f"[Search] Found: {listing_data.get('raw_address') or listing_data.get('title')}")
@@ -434,18 +457,26 @@ async def _resolve_subject(args) -> PropertyBasics:
 
     if (prop.bedrooms <= 0 or prop.bathrooms <= 0 or prop.max_guests <= 0
             or not prop.market or prop.market == "Unknown Market"):
+        missing = []
+        if prop.bedrooms <= 0:   missing.append("--beds")
+        if prop.bathrooms <= 0:  missing.append("--baths")
+        if prop.max_guests <= 0: missing.append("--guests")
+        if not prop.market or prop.market == "Unknown Market":
+            missing.append("--market")
+        no_prompt = (f"\n[Input] Missing required fields: {', '.join(missing)}. "
+                     f"Pass them as CLI args (non-TTY environment).")
         if not sys.stdin.isatty():
-            missing = []
-            if prop.bedrooms <= 0:   missing.append("--beds")
-            if prop.bathrooms <= 0:  missing.append("--baths")
-            if prop.max_guests <= 0: missing.append("--guests")
-            if not prop.market or prop.market == "Unknown Market":
-                missing.append("--market")
-            print(f"\n[Input] Missing required fields: {', '.join(missing)}. "
-                  f"Pass them as CLI args (non-TTY environment).", file=sys.stderr)
+            print(no_prompt, file=sys.stderr)
             sys.exit(1)
+        # isatty() is not proof anyone can type: on Windows the NUL device
+        # reports as a terminal, and Claude Code runs commands that way. The
+        # prompt then hit EOF and crashed with a traceback (2026-09-28).
         print("\n[Input] Missing property details. Please provide:")
-        prop = _prompt_missing_details(prop)
+        try:
+            prop = _prompt_missing_details(prop)
+        except EOFError:
+            print(no_prompt, file=sys.stderr)
+            sys.exit(1)
 
     return prop
 
@@ -666,6 +697,9 @@ Examples:
                         help="Skip AirROI (dev/testing only — produces an empty rentalizer)")
     parser.add_argument("--hero-url", default=None,
                         help="Manual subject hero image URL (use when MLS scrape is blocked)")
+    parser.add_argument("--allow-other-unit", action="store_true",
+                        help="Accept a listing for a different unit at the same street address "
+                             "(the address search stops and asks otherwise)")
     parser.add_argument("--listing-url", default=None,
                         help="Manual realtor.ca listing URL (use when MLS search fails)")
     parser.add_argument("--currency", default=None, choices=["$", "CA$"],
@@ -707,6 +741,19 @@ Examples:
     print(f"          Currency: {prop.currency}")
     if prop.hero_image_url:
         print(f"          Hero: {prop.hero_image_url[:80]}")
+
+    # Phase A refuses a missing or untrusted subject photo, but it runs after
+    # the paid AirROI calls. An address often resolves to a local rental
+    # company's site, whose photo is always refused, so check it here, free,
+    # before spending anything (Sun Peaks address run, 2026-09-28).
+    hero_failures = check_subject_hero(prop.hero_image_url)
+    if hero_failures and not args.skip_financials:
+        print("\n[SANITY] Subject photo refused — stopping before any paid AirROI call.")
+        for failure in hero_failures:
+            print(f"  - {failure}")
+        print("  Fix: re-run with --hero-url set to a photo of this property on Airbnb, "
+              "Zillow, Realtor.ca or Redfin (right-click the photo > Copy image address).")
+        sys.exit(2)
 
     # Step 2-3: AirROI pipeline (estimate + comparables)
     if args.skip_financials:
