@@ -73,7 +73,8 @@ AirROI is the comp data, Firecrawl is street addresses. Act on its exit code:
 - **3:** no kit on this computer, or it was never run. Set it up for them:
   clone `https://github.com/Solnest-AI/str-secrets-connections` into this
   folder's parent (skip if it is already there), read its `CONNECTIONS.md` and
-  follow it: Phase 0, Phase 1, then the AirROI and Firecrawl rows. Then run the
+  follow it: Phase 0, Phase 1, then the AirROI and Firecrawl rows
+  (`connectors/market-airroi.md`, `connectors/web-firecrawl.md`). Then run the
   check again until it says `READY`.
 
 | Key | Required? | Where to get it |

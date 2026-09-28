@@ -150,7 +150,7 @@ _CA_POSTAL = re.compile(r"\b[ABCEGHJ-NPRSTVXY]\d[A-Z] ?\d[A-Z]\d\b")
 # ── Setup verification ───────────────────────────────────────────────
 
 def _verify_setup() -> bool:
-    """Check required API keys are present. Direct user to setup.py if not.
+    """Check required API keys are present. Direct to scripts/check_setup.py if not.
 
     Returns True if all required keys are set. Returns False (and prints help)
     if any required key is missing.
@@ -180,12 +180,11 @@ def _verify_setup() -> bool:
         print(f"  [MISSING] {label:<12} ({k})")
         print(f"            Get one at: {url}")
     print()
-    print("If you ran the STR Secrets connections kit, re-run its AirROI row: this")
-    print("agent reads the key the kit registered in ~/.claude.json. Otherwise run:")
-    print("    python setup.py")
+    print("The keys live in the STR Secrets connections kit's .env. Run:")
+    print('    PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/check_setup.py')
     print()
-    print("It walks you through each key one at a time and writes them to .env.")
-    print("Everything else is optional. Firecrawl is only needed for address or\nZillow input; Airbtics adds market seasonality; Gmail enables --email.")
+    print("It finds the kit, opens its .env for the key to be pasted in, and tests it.")
+    print("Never bare python: on a fresh Windows machine it opens the Microsoft Store.")
     print()
     return False
 

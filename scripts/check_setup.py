@@ -115,7 +115,8 @@ def main(argv: list[str]) -> int:
         print("NEXT: set up the STR Secrets connections kit for them, then run this check again.")
         print(f"      Clone {kit.KIT_URL} next to this folder (skip if it is already there),")
         print("      read its CONNECTIONS.md and follow it: Phase 0, Phase 1, then the AirROI")
-        print("      and Firecrawl rows. Nothing else in the kit is needed for comps.")
+        print("      and Firecrawl rows (connectors/market-airroi.md, connectors/web-firecrawl.md).")
+        print("      Nothing else in the kit is needed for comps.")
         return 3
 
     env = found / ".env"

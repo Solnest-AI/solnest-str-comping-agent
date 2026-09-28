@@ -16,7 +16,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 KIT_URL = "https://github.com/Solnest-AI/str-secrets-connections"
 KIT_MARKERS = ("CONNECTIONS.md", "fan-out-env.sh")
-_LINE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+# Spaces around the = are tolerated because the kit's env_load tolerates them:
+# a key the kit reads as set must not read as blank here, or check_setup would
+# append an empty duplicate line that blanks the key for the kit too.
+_LINE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
 _SKIP = {".git", ".venv", "node_modules", "__pycache__", "output", "Library", "AppData"}
 
 

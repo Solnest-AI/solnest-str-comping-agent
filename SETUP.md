@@ -5,7 +5,9 @@ any property. Drop in an Airbnb URL, a listing URL, or just an address. You get
 back a report with comps, seasonality, revenue projections, and an interactive
 calculator.
 
-**You need one API key: AirROI.** Everything else is optional.
+**You need two API keys: AirROI and Firecrawl.** Everything else is optional.
+STR Secrets attendees already have both in the connections kit; the agent reads
+them from the kit's `.env`.
 
 ---
 
@@ -29,18 +31,18 @@ one step at a time. You don't need to know Python.
 | Service | Required? | Where to get it | Cost |
 |---|---|---|---|
 | **AirROI** | **YES** | https://www.airroi.com/api/developer/activate | Free tier available |
-| Firecrawl | optional | https://www.firecrawl.dev | Free tier available |
+| **Firecrawl** | **YES** | https://www.firecrawl.dev/app/api-keys | Free tier available |
 | Gmail app password | optional | https://myaccount.google.com/apppasswords | Free |
 
 **There is no Anthropic key.** The report's written analysis is produced by
 Claude Code using the Claude you already have. Nothing extra to buy, no
 per-report API cost.
 
-### What each optional key actually unlocks
+### What Firecrawl and the optional key unlock
 
 - **Firecrawl.** Lets you pass a *street address* or a *Zillow/Realtor URL*.
-  Without it, those inputs fail, but Airbnb URLs work fine because they resolve
-  entirely through AirROI. Add it if you analyze off-market properties.
+  Without it those inputs fail (an Airbnb URL alone resolves through AirROI),
+  and `scripts/check_setup.py` will not report READY.
 - **Gmail.** Only for `--email`. Reports always save to `output/` as HTML
   either way. Use an **app password**, never your account password.
 

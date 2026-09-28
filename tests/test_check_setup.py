@@ -65,6 +65,16 @@ def test_blank_firecrawl_is_required_and_gets_a_line_to_paste_into(world, capsys
     assert "FIRECRAWL_API_KEY: blank" in out and "never in the chat" in out
 
 
+def test_spaces_around_the_equals_sign_still_read_as_set(world):
+    """The kit's env_load accepts `KEY = value`. Reading it as blank here once
+    appended a second, empty KEY= line, which blanked the key for the kit too."""
+    kit_dir, _, _ = world
+    env = kit_dir / ".env"
+    env.write_text('AIRROI_API_KEY = "a"\nFIRECRAWL_API_KEY =f\n', encoding="utf-8")
+    assert cs.main(["--no-open"]) == 0
+    assert env.read_text(encoding="utf-8").count("AIRROI_API_KEY") == 1
+
+
 def test_a_rejected_key_is_not_ready(world):
     kit_dir, probes, _ = world
     (kit_dir / ".env").write_text("AIRROI_API_KEY=a\nFIRECRAWL_API_KEY=f\n", encoding="utf-8")
