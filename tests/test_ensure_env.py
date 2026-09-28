@@ -65,6 +65,7 @@ def test_script_checks_every_runtime_requirement():
 
 def test_instructions_never_run_bare_python():
     """Every command Claude is told to run goes through ensure_env.sh."""
-    for doc in (ROOT / ".claude/skills/str-comping-agent/SKILL.md", ROOT / "CLAUDE.md"):
+    for doc in (ROOT / ".claude/skills/str-comping-agent/SKILL.md", ROOT / "CLAUDE.md",
+                ROOT / "README.md", ROOT / "SETUP.md"):
         for n, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
             assert not re.match(r"\s*(python3?|pip3?) ", line), f"{doc.name}:{n} runs bare python: {line.strip()}"

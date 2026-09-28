@@ -134,7 +134,7 @@ def test_missing_details_exit_cleanly_when_stdin_only_looks_like_a_terminal(monk
     def eof(prompt=""):
         raise EOFError
 
-    async def no_hero(address):
+    async def no_hero(address, accept=None):
         return ""
 
     monkeypatch.setattr(agent, "search_for_property", fake_search)
@@ -149,3 +149,44 @@ def test_missing_details_exit_cleanly_when_stdin_only_looks_like_a_terminal(monk
         asyncio.run(agent._resolve_subject(args))
     assert e.value.code == 1
     assert "--beds, --baths, --guests" in capsys.readouterr().err
+
+
+def _resolve_with_photo(monkeypatch, listing_hero, found_hero):
+    """Unit 13's own listing, with the given photo; the photo search returns found_hero."""
+    calls = []
+
+    async def fake_search(raw):
+        r = ps._parse_firecrawl_result({**UNIT_13_THIN["json"], "bedrooms": 4, "bathrooms": 4},
+                                       UNIT_13_THIN["url"])
+        return {**r, "hero_image_url": listing_hero, "unit_mismatch": ""}
+
+    async def fake_hero(address, accept=None):
+        calls.append(address)
+        return found_hero if (found_hero and (accept is None or accept(found_hero))) else None
+
+    monkeypatch.setattr(agent, "search_for_property", fake_search)
+    monkeypatch.setattr(agent, "search_hero_image", fake_hero)
+    args = SimpleNamespace(input=ASKED, allow_other_unit=False, hero_url=None, listing_url=None,
+                           market=None, beds=None, baths=None, guests=8)
+    return asyncio.run(agent._resolve_subject(args)), calls
+
+
+UNTRUSTED = "https://www.sunpeakscondos.com/unitimages/37874/002.jpg"
+ZILLOW = "https://photos.zillowstatic.com/fp/abc-cc_ft_1536.jpg"
+
+
+def test_an_untrusted_listing_photo_triggers_a_search_for_a_trusted_one(monkeypatch):
+    """Sun Peaks, 2026-09-28: the only photo came from a local rental company's
+    site, so the run stopped and asked the user for one. Search first."""
+    prop, calls = _resolve_with_photo(monkeypatch, UNTRUSTED, ZILLOW)
+    assert calls and prop.hero_image_url == ZILLOW
+
+
+def test_the_search_never_swaps_in_another_untrusted_photo(monkeypatch):
+    prop, _ = _resolve_with_photo(monkeypatch, UNTRUSTED, "https://www.other-pm-site.com/x.jpg")
+    assert prop.hero_image_url == UNTRUSTED   # the photo gate then stops the run and asks
+
+
+def test_a_trusted_listing_photo_is_kept_without_searching(monkeypatch):
+    prop, calls = _resolve_with_photo(monkeypatch, ZILLOW, "https://photos.zillowstatic.com/other.jpg")
+    assert calls == [] and prop.hero_image_url == ZILLOW

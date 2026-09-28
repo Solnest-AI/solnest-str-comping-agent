@@ -9,8 +9,16 @@ Give it a property (an Airbnb link, a Zillow link, or a street address) and it
 pulls comparable Airbnb listings nearby, scores them, and generates a branded,
 self-contained HTML report with revenue projections.
 
-It runs inside **Claude Code**. Open Claude Code in this folder and say
-**"set this up"**; `CLAUDE.md` walks you through it one step at a time.
+It runs inside **Claude Code**. Paste this repo's link into the Claude Code
+desktop app and say **"set this up"**; `CLAUDE.md` walks you through it one
+step at a time.
+
+> **Claude, setting this up for someone:** clone it, then follow
+> `CLAUDE.md` > "When the user says set this up". Run every Python command
+> through `scripts/ensure_env.sh`, never bare `python`/`pip` (on a fresh
+> Windows machine `python` opens the Microsoft Store). Never open or print
+> `~/.claude.json`: `agent.py` finds the connections-kit keys itself and prints
+> where they came from.
 
 **One API key required.** AirROI. Everything else is optional. There is **no
 Anthropic key**. The report's written analysis comes from Claude Code itself.
@@ -82,7 +90,7 @@ Fastest path: open this folder in Claude Code and say **"set this up."**
 By hand:
 
 ```bash
-pip install -r requirements.txt
+bash scripts/ensure_env.sh   # installs uv, Python 3.13 and everything else
 cp .env.example .env                      # then add your AirROI key
                                           # (ran the STR Secrets connections kit? skip this:
                                           #  the agent reads the key the kit registered)
@@ -120,13 +128,13 @@ itself, and re-renders. You get one finished HTML report.
 
 ```bash
 # Pass 1 — fetch, score, render. Costs about $0.50 of AirROI credit (up to ~$1.60 with a targeted search in a thin market), ~30s.
-python agent.py --input "https://www.airbnb.com/rooms/39508095"
+PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --input "https://www.airbnb.com/rooms/39508095"
 #   output/<slug>.html                    the report
 #   output/<slug>.report-data.json        cached pipeline output
 #   output/<slug>.narrative-brief.json    what to write the copy from
 
 # Pass 2 — swap in better copy. No API calls, no cost, under a second.
-python agent.py --render "output/<slug>.report-data.json" \
+PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --render "output/<slug>.report-data.json" \
                 --narratives "output/<slug>.narratives.json"
 ```
 
@@ -143,14 +151,14 @@ for. The loop:
 ```bash
 # 1. Run it. You get a complete report with template copy,
 #    plus output/<slug>.narrative-brief.json
-python agent.py --input "https://www.airbnb.com/rooms/39508095"
+PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --input "https://www.airbnb.com/rooms/39508095"
 
 # 2. In Claude Code: read that brief, write output/<slug>.narratives.json
 #    The brief carries the comp table, the market's real peak and shoulder
 #    months, the calculator defaults, and the exact JSON shape to write.
 
 # 3. Re-run with the copy
-python agent.py --input "https://www.airbnb.com/rooms/39508095" \
+PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --input "https://www.airbnb.com/rooms/39508095" \
                 --narratives "output/<slug>.narratives.json"
 ```
 
@@ -216,7 +224,7 @@ str-comping-agent/
 ## Development
 
 ```bash
-pip install -r requirements-dev.txt
+bash scripts/ensure_env.sh --dev   # adds pytest + ruff
 pytest -q        # hermetic: no network, no keys
 ruff check .     # lint
 ```

@@ -17,6 +17,7 @@ import re
 import sys
 from datetime import date
 from pathlib import Path
+from urllib.parse import urlparse
 
 # Force UTF-8 output on Windows (cp1252 can't encode emoji in listing names)
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
@@ -431,10 +432,18 @@ async def _resolve_subject(args) -> PropertyBasics:
         # Infer guest capacity from bedrooms if not found
         if prop.max_guests <= 0 and prop.bedrooms > 0:
             prop.max_guests = prop.bedrooms * 2 + 2
-        # The listing had no usable photo (a map or a logo is refused), so
-        # look for one before Phase A blocks the report on an empty hero.
-        if not prop.hero_image_url and not args.hero_url:
-            prop.hero_image_url = await search_hero_image(prop.address or raw) or ""
+        # The listing had no usable photo (a map or a logo is refused), or one
+        # the photo gate will refuse (an address often resolves to a local
+        # rental company's site: Sun Peaks, 2026-09-28), so look for one on a
+        # trusted host before the gate stops the run and asks the user.
+        if not args.hero_url and (not prop.hero_image_url
+                                  or check_subject_hero(prop.hero_image_url)):
+            if prop.hero_image_url:
+                print(f"[Search] Listing photo is from an untrusted site "
+                      f"({urlparse(prop.hero_image_url).netloc}); searching for a trusted one...")
+            found = await search_hero_image(
+                prop.address or raw, accept=lambda u: not check_subject_hero(u))
+            prop.hero_image_url = found or prop.hero_image_url
     else:
         print("[Search] No listing found online.")
         # Still build from CLI args — but try to at least find a hero image
