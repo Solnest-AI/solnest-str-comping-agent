@@ -23,6 +23,7 @@ from typing import Optional
 import httpx
 
 import config
+import kit
 
 
 # ── JSON schema for Firecrawl extraction ─────────────────────────────
@@ -491,7 +492,9 @@ async def _firecrawl_post(endpoint: str, body: dict) -> dict:
         print(f"[firecrawl] {endpoint} HTTP error: {e}", file=sys.stderr)
         return {}
     if resp.status_code >= 400:
-        print(f"[firecrawl] {endpoint} returned {resp.status_code}: {resp.text[:300]}", file=sys.stderr)
+        kit.check_key_status("Firecrawl", resp.status_code)   # before the body is printed
+        body = kit.redact(resp.text, config.FIRECRAWL_API_KEY)[:300]   # redact, then cut
+        print(f"[firecrawl] {endpoint} returned {resp.status_code}: {body}", file=sys.stderr)
         return {}
     try:
         return resp.json()

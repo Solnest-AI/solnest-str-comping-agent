@@ -73,7 +73,8 @@ AirROI is the comp data, Firecrawl is street addresses. Act on its exit code:
 - **3:** no kit on this computer, or it was never run. Set it up for them:
   clone `https://github.com/Solnest-AI/str-secrets-connections` into this
   folder's parent (skip if it is already there), read its `CONNECTIONS.md` and
-  follow it: Phase 0, Phase 1, then the AirROI and Firecrawl rows. Then run the
+  follow it: Phase 0, Phase 1, then the AirROI and Firecrawl rows
+  (`connectors/market-airroi.md`, `connectors/web-firecrawl.md`). Then run the
   check again until it says `READY`.
 
 | Key | Required? | Where to get it |
@@ -330,6 +331,7 @@ link it and `/api/openapi.json` 404s.
 |---|---|---|
 | `AIRROI_API_KEY is not set` | The kit's `.env` has no working key | Run `scripts/check_setup.py` (Step 2); it opens the kit's `.env` for them |
 | `FIRECRAWL_API_KEY is not set` | The kit's `.env` has no working Firecrawl key | Run `scripts/check_setup.py` (Step 2); it opens the kit's `.env` for them |
+| `[setup] AirROI rejected the key` / `is out of credit` (or Firecrawl) | The key stopped working mid-run (the run stops; the 24h pass is forgotten) | Run `scripts/check_setup.py` (Step 2); out of credit means topping up at the vendor, not a new key |
 | `Phase A sanity failed: <6 comps` | Too few comparable listings in this market | Relax with `--no-feature-filter`, or try a denser market. AirROI caps comparables at 25 and accepts only a 1-10 mile radius, so there is no way to widen the pool. |
 | Report renders but the prose is generic | You have not done the narrative handoff | Read `output/<slug>.narrative-brief.json` and re-run with `--narratives` |
 | `--narratives file not found` | Ran with `--narratives` before writing the file | Run once without it to generate the brief |

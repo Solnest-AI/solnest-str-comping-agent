@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import httpx
 
 import config
+import kit
 from schema import PropertyBasics, ReportData, RentalizerData
 from scrapers.airbnb import scrape_airbnb_listing
 from scrapers.airroi import (run_airroi_pipeline, get_listing, get_listing_metrics,
@@ -150,14 +151,15 @@ _CA_POSTAL = re.compile(r"\b[ABCEGHJ-NPRSTVXY]\d[A-Z] ?\d[A-Z]\d\b")
 # ── Setup verification ───────────────────────────────────────────────
 
 def _verify_setup() -> bool:
-    """Check required API keys are present. Direct user to setup.py if not.
+    """Check required API keys are present. Direct to scripts/check_setup.py if not.
 
     Returns True if all required keys are set. Returns False (and prints help)
     if any required key is missing.
     """
-    # AirROI is the only hard requirement. Firecrawl is needed only to resolve a
-    # street address or a Zillow/Realtor link; an Airbnb URL resolves entirely
-    # through AirROI. There is deliberately NO Anthropic key: the narrative copy
+    # Both keys are required at setup (scripts/check_setup.py), but only AirROI
+    # is checked here: a run from an Airbnb URL resolves entirely through
+    # AirROI, and Firecrawl is needed only for an address or a Zillow/Realtor
+    # link, which fails loudly without it. There is deliberately NO Anthropic key: the narrative copy
     # comes from Claude Code via the narrative-brief handoff.
     required = [
         ("AIRROI_API_KEY", config.AIRROI_API_KEY, "AirROI",
@@ -180,12 +182,11 @@ def _verify_setup() -> bool:
         print(f"  [MISSING] {label:<12} ({k})")
         print(f"            Get one at: {url}")
     print()
-    print("If you ran the STR Secrets connections kit, re-run its AirROI row: this")
-    print("agent reads the key the kit registered in ~/.claude.json. Otherwise run:")
-    print("    python setup.py")
+    print("The keys live in the STR Secrets connections kit's .env. Run:")
+    print('    PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/check_setup.py')
     print()
-    print("It walks you through each key one at a time and writes them to .env.")
-    print("Everything else is optional. Firecrawl is only needed for address or\nZillow input; Airbtics adds market seasonality; Gmail enables --email.")
+    print("It finds the kit, opens its .env for the key to be pasted in, and tests it.")
+    print("Never bare python: on a fresh Windows machine it opens the Microsoft Store.")
     print()
     return False
 
@@ -1567,5 +1568,16 @@ Examples:
     print(f"\n  File: {output_path.resolve()}\n")
 
 
+def run() -> None:
+    """main(), stopped cleanly when a vendor rejects the key or is out of
+    credit anywhere in the run (kit.KeyFailure skips every fallback)."""
+    try:
+        asyncio.run(main())
+    except kit.KeyFailure as e:
+        kit.forget_setup_pass()
+        print(f"\n{e}", file=sys.stderr)
+        sys.exit(2)
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    run()

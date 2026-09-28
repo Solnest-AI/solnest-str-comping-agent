@@ -13,3 +13,14 @@ _TESTS = Path(__file__).parent
 for p in (str(_ROOT), str(_TESTS)):
     if p not in sys.path:
         sys.path.insert(0, p)
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _private_setup_stamp(tmp_path, monkeypatch):
+    """A test that builds a 401/402/403 AirROIError must never delete the real
+    .cache/setup_ok.json (kit.key_failure forgets it by design)."""
+    import kit
+    monkeypatch.setattr(kit, "SETUP_STAMP", tmp_path / "setup_ok.json")

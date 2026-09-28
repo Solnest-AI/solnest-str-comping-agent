@@ -16,12 +16,13 @@ step at a time.
 > **Claude, setting this up for someone:** clone it, then follow
 > `CLAUDE.md` > "When the user says set this up". Run every Python command
 > through `scripts/ensure_env.sh`, never bare `python`/`pip` (on a fresh
-> Windows machine `python` opens the Microsoft Store). Never open or print
-> `~/.claude.json`: `agent.py` finds the connections-kit keys itself and prints
-> where they came from.
+> Windows machine `python` opens the Microsoft Store). Verify keys with
+> `scripts/check_setup.py`; never open or print `~/.claude.json` or the kit's
+> `.env`: `agent.py` finds the connections-kit keys itself and prints where
+> they came from.
 
-**One API key required.** AirROI. Everything else is optional. There is **no
-Anthropic key**. The report's written analysis comes from Claude Code itself.
+**Two API keys: AirROI and Firecrawl.** Everything else is optional. There is
+**no Anthropic key**. The report's written analysis comes from Claude Code itself.
 
 **Bring your own keys. Zero secrets in the repo.** Keys live in a local `.env`
 that is gitignored and never leaves your machine.
@@ -91,9 +92,9 @@ By hand:
 
 ```bash
 bash scripts/ensure_env.sh   # installs uv, Python 3.13 and everything else
-cp .env.example .env                      # then add your AirROI key
+cp .env.example .env                      # then add your AirROI + Firecrawl keys
                                           # (ran the STR Secrets connections kit? skip this:
-                                          #  the agent reads the key the kit registered)
+                                          #  the agent reads the kit's .env itself)
 cp branding.example.json branding.json    # then add your company
 ```
 
@@ -102,15 +103,16 @@ cp branding.example.json branding.json    # then add your company
 | Key | Required? | What it buys you | Get it |
 |---|---|---|---|
 | `AIRROI_API_KEY` | **Required** | The comp data: listings, comparables, TTM performance, revenue estimates | https://www.airroi.com/api/developer/activate |
-| `FIRECRAWL_API_KEY` | Optional | Street-address and Zillow/Realtor input. Airbnb URLs work without it. | https://www.firecrawl.dev |
+| `FIRECRAWL_API_KEY` | **Required** | Street-address and Zillow/Realtor input (an Airbnb URL alone works without it, but `check_setup.py` requires both) | https://www.firecrawl.dev/app/api-keys |
 | `GMAIL_ADDRESS` + `GMAIL_APP_PASSWORD` | Optional | `--email` delivery. Reports always save locally regardless. | https://myaccount.google.com/apppasswords |
 
 No Anthropic key. See the narrative handoff below.
 
-**Ran the STR Secrets connections kit?** You need no `.env` here. With none, the
-agent reads the AirROI and Firecrawl keys the kit registered in `~/.claude.json`
-and says so: `[Config] AirROI key: connections kit (~/.claude.json)`. A `.env`
-in this folder always wins.
+**Ran the STR Secrets connections kit?** You need no `.env` here. The agent
+reads the AirROI and Firecrawl keys from the kit's own `.env` (the master copy)
+and says so: `[Config] AirROI key: connections kit (.env)`. The kit's `.env`
+wins over one in this folder; `~/.claude.json` is the last fallback.
+`scripts/check_setup.py` finds the kit and tests both keys.
 
 ---
 

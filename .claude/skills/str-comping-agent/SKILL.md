@@ -1,6 +1,6 @@
 ---
 name: str-comping-agent
-description: Generate a short-term-rental income analysis report for any property from an Airbnb link, a Zillow/Realtor link, or a plain street address. Use this skill whenever someone says "run comps", "comp this property", "what would this earn on Airbnb", "STR income report", "run the comping agent", "underwrite this STR", "what's the revenue potential", "analyze this property", or pastes an Airbnb/Zillow/Realtor URL or an address with income or investment intent. Also trigger on "rerun the report", "redo the copy", or "make the narrative better" for a property that already has a report on disk. Produces a branded, self-contained HTML report backed by real comparable listings pulled from AirROI, with revenue, ADR, occupancy, a seasonality curve and an interactive projection calculator. Requires only an AIRROI_API_KEY. YOU write the narrative copy in pass two; there is deliberately no Anthropic API key.
+description: Generate a short-term-rental income analysis report for any property from an Airbnb link, a Zillow/Realtor link, or a plain street address. Use this skill whenever someone says "run comps", "comp this property", "what would this earn on Airbnb", "STR income report", "run the comping agent", "underwrite this STR", "what's the revenue potential", "analyze this property", or pastes an Airbnb/Zillow/Realtor URL or an address with income or investment intent. Also trigger on "rerun the report", "redo the copy", or "make the narrative better" for a property that already has a report on disk. Produces a branded, self-contained HTML report backed by real comparable listings pulled from AirROI, with revenue, ADR, occupancy, a seasonality curve and an interactive projection calculator. Needs the AirROI and Firecrawl keys from the STR Secrets connections kit. YOU write the narrative copy in pass two; there is deliberately no Anthropic API key.
 ---
 
 # STR Comping Agent
@@ -56,7 +56,8 @@ tests each with one real request (AirROI $0.01, Firecrawl free). A pass is remem
 - **3, no kit, or it was never run:** set the kit up for them. Clone
   `https://github.com/Solnest-AI/str-secrets-connections` into this folder's parent (skip
   the clone if the folder is already there), read its `CONNECTIONS.md` and follow it:
-  Phase 0, Phase 1, then the AirROI and Firecrawl rows. Nothing else in the kit is needed
+  Phase 0, Phase 1, then the AirROI and Firecrawl rows (`connectors/market-airroi.md`,
+  `connectors/web-firecrawl.md`). Nothing else in the kit is needed
   for comps. Then come back and run the check again until it says `READY`.
 
 `agent.py` reads the same keys the same way and prints where each came from

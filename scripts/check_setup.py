@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import time
@@ -34,7 +35,7 @@ sys.path.insert(0, str(ROOT))
 import kit  # noqa: E402
 
 REQUIRED = ("AIRROI_API_KEY", "FIRECRAWL_API_KEY")
-STAMP = ROOT / ".cache" / "setup_ok.json"
+STAMP = kit.SETUP_STAMP   # agent.py forgets it when a vendor rejects the key mid-run
 FRESH_FOR = 24 * 3600
 
 
@@ -81,6 +82,22 @@ def _recently_ok(values: dict[str, str]) -> bool:
     return s.get("fingerprint") == _fingerprint(values) and time.time() - s.get("at", 0) < FRESH_FOR
 
 
+def other_copy(name: str) -> tuple[str, str]:
+    """(value, where) for a key the kit's .env lacks but this computer has
+    elsewhere: this folder's .env, the environment, or what the kit registered
+    in ~/.claude.json. Adopting it into the kit's .env keeps one master copy
+    without asking a student to paste a key they already gave."""
+    value = kit.read_env(ROOT / ".env").get(name, "")
+    if value:
+        return value, "this folder's .env"
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value, "the environment"
+    from config import key_from_connections_kit   # lazy: config loads .env and walks for the kit
+    value = key_from_connections_kit(name)
+    return (value, "~/.claude.json") if value else ("", "")
+
+
 def open_for_paste(path: Path) -> None:
     """Open the file in the plain text editor; the student pastes and saves."""
     try:
@@ -94,17 +111,6 @@ def open_for_paste(path: Path) -> None:
         print(f"  Could not open an editor. The file is: {path}")
 
 
-def ensure_lines(env: Path, names) -> None:
-    """Add an empty NAME= line for any required name the kit's .env lacks, so
-    the student has a line to paste after. Never writes a value."""
-    text = env.read_text(encoding="utf-8-sig") if env.exists() else ""
-    have = kit.read_env(env)
-    missing = [n for n in names if n not in have]
-    if missing:
-        sep = "" if (not text or text.endswith("\n")) else "\n"
-        env.write_text(text + sep + "".join(f"{n}=\n" for n in missing), encoding="utf-8", newline="\n")
-
-
 def main(argv: list[str]) -> int:
     no_open = "--no-open" in argv
     force = "--force" in argv
@@ -115,12 +121,25 @@ def main(argv: list[str]) -> int:
         print("NEXT: set up the STR Secrets connections kit for them, then run this check again.")
         print(f"      Clone {kit.KIT_URL} next to this folder (skip if it is already there),")
         print("      read its CONNECTIONS.md and follow it: Phase 0, Phase 1, then the AirROI")
-        print("      and Firecrawl rows. Nothing else in the kit is needed for comps.")
+        print("      and Firecrawl rows (connectors/market-airroi.md, connectors/web-firecrawl.md).")
+        print("      Nothing else in the kit is needed for comps.")
         return 3
 
     env = found / ".env"
     print(f"[setup] Connections kit: {found}")
     values = {n: kit.kit_value(n, found) for n in REQUIRED}
+    for n in REQUIRED:
+        if not values[n]:
+            value, where = other_copy(n)
+            if not value:
+                continue
+            try:
+                kit.set_value(env, n, value)
+            except (ValueError, OSError):
+                print(f"[setup] {n}: found in {where} but could not copy it into the kit's .env.")
+                continue
+            values[n] = value
+            print(f"[setup] {n}: blank in the kit's .env; copied in from {where} (value not shown).")
     blank = [n for n in REQUIRED if not values[n]]
     results: dict[str, str] = {}
     if not blank and not force and _recently_ok(values):
@@ -141,7 +160,8 @@ def main(argv: list[str]) -> int:
         print("[setup] READY: AirROI and Firecrawl both work.")
         return 0
 
-    ensure_lines(env, bad)
+    STAMP.unlink(missing_ok=True)   # a failed live check must not leave an old READY standing
+    kit.add_blank_lines(env, bad)   # atomic: the kit's .env is the master copy
     print(f"[setup] Opening {env} for the student.")
     for n in bad:
         print(f"  {n}: paste the key straight after the = sign on the {n}= line. Get it at {WHERE[n]}")
