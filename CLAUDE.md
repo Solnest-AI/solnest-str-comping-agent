@@ -65,7 +65,8 @@ It finds the kit, reads `AIRROI_API_KEY` and `FIRECRAWL_API_KEY` from the
 **kit's `.env` (the master copy)**, and tests both for real. Both are required:
 AirROI is the comp data, Firecrawl is street addresses. Act on its exit code:
 
-- **0 `READY`:** go to Step 3.
+- **0 `READY`:** keys work and the report is branded. Go to Step 4.
+- **4:** keys work but there is no `branding.json` yet. Go to Step 3.
 - **2:** a key is blank or rejected. The kit's `.env` is already open in
   Notepad / TextEdit and the output says which line and where to get the key.
   Tell the student that, one key at a time: paste straight after the `=`, save,
@@ -89,16 +90,28 @@ chat, never type one into a file yourself, never read one back.
 
 ### Step 3: Set the branding
 
-The report is white-label. It reads `branding.json`; if that file is absent it
-falls back to `branding.example.json`, so a fresh clone renders with neutral
-placeholder branding rather than someone else's company.
+The report is white-label: every colour, the logo, the name and the links come
+from `branding.json`. Without it the report says "Your Company" with no logo, so
+`check_setup.py` stops with exit 4 until it exists. Build it from the student's
+own website:
 
-```bash
-cp branding.example.json branding.json
-```
+1. Ask the student for their company website (their own site, not a listing).
+2. Run:
+   ```bash
+   PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/brand_from_website.py <their website>
+   ```
+   It reads the site's brand with Firecrawl (the kit's key), checks the logo
+   loads, picks brand colours dark enough to read on the report's cream
+   background (a dark site's "primary" is often its cream text), and puts a
+   dark site's light logo on its own background colour (`logo_background`).
+3. **Look at the logo it saved** (`.cache/brand_logo.*`), then show the student
+   the name, logo, tagline and colours and ask if that is their brand. Change
+   what they say in `branding.json`; colours stay `#rrggbb`.
+4. Run `scripts/check_setup.py` again: it says `READY`.
 
-Then edit `company_name`, `tagline`, `logo_url`, `website_url`,
-`primary_color`, `accent_color`. Do **not** edit the template to rebrand.
+Exit 3 from the script means the site could not be read: ask for another page,
+or copy `branding.example.json` to `branding.json` and fill it in with them.
+Do **not** edit the template to rebrand.
 
 ### Step 4: First report
 
@@ -264,6 +277,7 @@ Run `"$PY" agent.py --help` if a flag here disagrees with the code; the code win
 | `report/template_engine.py` | Renders Jinja2 → HTML |
 | `report/email_sender.py` | Optional Gmail SMTP delivery |
 | `templates/report.html.j2` | The report template |
+| `scripts/brand_from_website.py` | Builds `branding.json` (name, logo, colours) from the student's website via Firecrawl |
 | `scripts/package.py` | Builds the distribution zip from the git manifest |
 
 ### Data semantics you must not get wrong
@@ -339,7 +353,8 @@ link it and `/api/openapi.json` 404s.
 | Comps look wrong (oversized, waterfront, dormant) | Filters too loose or too tight | `--require`, `--exclude`, `--allow-oceanfront-comps` |
 | Module import error, or `python` opens the Microsoft Store | Ran bare `python` instead of the `.venv` | Always prefix with `PY="$(bash scripts/ensure_env.sh)" &&` and run `"$PY"` |
 | `[setup] FAILED: ...` | No internet, or uv/Python blocked on this machine | Do what the message says, then run the same command again |
-| Report shows someone else's company | No `branding.json` | `cp branding.example.json branding.json` and edit it |
+| `[Branding] No branding.json yet` (the run stops, nothing spent) | The student has not been branded | Ask for their website and run `scripts/brand_from_website.py` (Step 3) |
+| Report says "Your Company" / no logo | No `branding.json` | Ask for the student's website and run `scripts/brand_from_website.py` (Step 3) |
 
 ---
 

@@ -31,6 +31,22 @@ def format_bath(value: float) -> str:
     return str(int(value)) if value == int(value) else str(value)
 
 
+def _hex_rgb(value: str) -> tuple[int, int, int]:
+    h = str(value).lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def rgb(value: str) -> str:
+    """'#1f3c34' → '31, 60, 52', for rgba(var(--brand-rgb), .15) and the chart.
+    config validates every branding colour as #rrggbb before it gets here."""
+    return ", ".join(str(c) for c in _hex_rgb(value))
+
+
+def lighten(value: str, amount: float = 0.25) -> str:
+    """The colour mixed toward white: the light end of the accent gradient."""
+    return "#" + "".join(f"{round(c + (255 - c) * amount):02x}" for c in _hex_rgb(value))
+
+
 # ── Rendering ─────────────────────────────────────────────────────────────
 
 def _whole_dollars(value: float) -> int:
@@ -139,6 +155,8 @@ def render_report(data: ReportData) -> str:
     env.filters["format_currency"] = format_currency
     env.filters["format_currency_k"] = format_currency_k
     env.filters["format_bath"] = format_bath
+    env.filters["rgb"] = rgb
+    env.filters["lighten"] = lighten
     env.globals["revenue_breakdown"] = revenue_breakdown
 
     template = env.get_template("report.html.j2")

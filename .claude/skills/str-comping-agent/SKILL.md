@@ -47,7 +47,17 @@ It finds the kit (next to this folder, Desktop, Documents, Downloads, OneDrive),
 tests each with one real request (AirROI $0.01, Firecrawl free). A pass is remembered for
 24 hours. Both keys are required: nothing is skipped. Act on the exit code:
 
-- **0 `READY`:** go straight to the report.
+- **0 `READY`:** keys work and the report is branded. Go straight to the report.
+- **4, keys work but there is no `branding.json`:** the report would say "Your Company"
+  with no logo. Ask the student for their company website (their own site, not a
+  listing), then run
+  `PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/brand_from_website.py <website>`.
+  It reads their name, logo and colours with Firecrawl and writes `branding.json`. **Look
+  at the logo it saves** (`.cache/brand_logo.*`), then show the student the name, logo,
+  tagline and colours and ask if that is their brand; change what they say in
+  `branding.json` (colours stay `#rrggbb`). No website: copy `branding.example.json` to
+  `branding.json` and fill it in with them. Never edit the template to rebrand. Then run
+  the check again.
 - **2, a key is blank or rejected:** it has already opened the kit's `.env` in Notepad
   (Windows) or TextEdit (Mac) and printed which line and where to get the key. Tell the
   student exactly that, one key at a time: paste the key straight after the `=`, save,

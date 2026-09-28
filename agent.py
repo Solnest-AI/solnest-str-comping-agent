@@ -150,6 +150,18 @@ _CA_POSTAL = re.compile(r"\b[ABCEGHJ-NPRSTVXY]\d[A-Z] ?\d[A-Z]\d\b")
 
 # ── Setup verification ───────────────────────────────────────────────
 
+def _require_branding() -> bool:
+    """False (with what to do) until branding.json exists."""
+    if not config.branding_is_placeholder():
+        return True
+    print("[Branding] No branding.json yet: the report would say 'Your Company' with no logo.")
+    print("NEXT: ask the student for their company website (their own site, not a listing), then run:")
+    print('    PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/brand_from_website.py <their website>')
+    print("Look at the logo it saves, confirm the name, logo and colours with them, then run this again.")
+    print("Nothing has been spent.")
+    return False
+
+
 def _verify_setup() -> bool:
     """Check required API keys are present. Direct to scripts/check_setup.py if not.
 
@@ -719,6 +731,12 @@ Examples:
 
     if getattr(args, "no_cache", False):
         os.environ["AIRROI_CACHE"] = "0"
+
+    # Every student brands the report before the first run: without
+    # branding.json it would ship as "Your Company" with no logo (2026-09-28).
+    # Checked before --render too, and before anything is spent.
+    if not _require_branding():
+        sys.exit(2)
 
     # --render is a pure local operation: no keys, no network, no cost.
     if args.render:
