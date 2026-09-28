@@ -277,7 +277,9 @@ def build_methodology(
         ],
         assumptions=[
             _occupancy_assumption(prop, calculator),
-            "Adjustable listed nights per year (100-365)",
+            # The slider's own range, not a fixed 100-365 it does not offer.
+            f"Adjustable listed nights per year "
+            f"({getattr(calculator, 'days_min', 100)}-{getattr(calculator, 'days_max', 365)})",
             "Revenue shown gross of platform fees, utilities, taxes, and management",
             *_operator_assumptions(calculator),
         ],

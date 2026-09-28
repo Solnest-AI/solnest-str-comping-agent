@@ -1,0 +1,25 @@
+{
+ "brandName": "Solnest AI",
+ "colorScheme": "dark",
+ "colors": {
+  "primary": "#F0EBE1",
+  "secondary": "#A39D8E",
+  "accent": "#C0522B",
+  "background": "#0D0D0B",
+  "textPrimary": "#F0EBE1",
+  "link": "#C0522B"
+ },
+ "components": {
+  "buttonPrimary": {
+   "background": "#12110F"
+  }
+ },
+ "images": {
+  "logo": "https://solnestai.com/_next/image?url=%2Fsolnest-logo.png&w=384&q=75",
+  "favicon": "https://solnestai.com/icon.svg?120f73535e5938f6",
+  "ogImage": "https://solnestai.com/solnest-logo.png",
+  "logoHref": "/",
+  "logoAlt": "Solnest AI"
+ },
+ "logo": "https://solnestai.com/_next/image?url=%2Fsolnest-logo.png&w=384&q=75"
+}

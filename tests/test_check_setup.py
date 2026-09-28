@@ -34,6 +34,9 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(cs, "STAMP", tmp_path / "stamp.json")
     # Hermetic: never adopt a key from this machine's real .env or ~/.claude.json.
     monkeypatch.setattr(cs, "other_copy", lambda name: ("", ""))
+    branding = tmp_path / "branding.json"
+    branding.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(cs, "BRANDING", branding)
     return kit_dir, probes, calls
 
 

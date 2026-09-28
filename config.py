@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -171,6 +172,7 @@ _BRANDING_DEFAULTS = {
     "website_url": "",
     "primary_color": "#1f3c34",
     "accent_color": "#4b7c6b",
+    "logo_background": "",
 }
 
 
@@ -189,7 +191,30 @@ def _load_branding() -> dict:
                 merged.update({k: v for k, v in data.items() if v not in (None, "")})
     except (json.JSONDecodeError, OSError) as e:
         print(f"[config] Could not read {path.name} ({e}); using default branding.")
+    # Branding is scraped from a student's website (scripts/brand_from_website.py)
+    # and lands inside the report's CSS and chart JS: a colour must be #rrggbb and
+    # a link must be http(s), or that field falls back to the default.
+    for key in ("primary_color", "accent_color"):
+        if not _HEX.fullmatch(str(merged.get(key, ""))):
+            print(f"[config] branding {key} {merged.get(key)!r} is not #rrggbb; using the default.")
+            merged[key] = _BRANDING_DEFAULTS[key]
+    if merged.get("logo_background") and not _HEX.fullmatch(str(merged["logo_background"])):
+        merged["logo_background"] = ""
+    for key in ("logo_url", "website_url"):
+        if merged.get(key) and not str(merged[key]).lower().startswith(("https://", "http://")):
+            print(f"[config] branding {key} is not an http(s) link; leaving it out.")
+            merged[key] = ""
     return merged
+
+
+_HEX = re.compile(r"#[0-9a-fA-F]{6}")
+
+
+def branding_is_placeholder() -> bool:
+    """True until branding.json exists: the report would carry the example's
+    placeholder name. The skill asks for the student's website before the
+    first report (scripts/brand_from_website.py)."""
+    return not _BRANDING_PATH.exists()
 
 
 BRANDING: dict = _load_branding()

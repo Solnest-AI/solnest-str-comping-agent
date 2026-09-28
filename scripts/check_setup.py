@@ -15,6 +15,9 @@ Exit codes, each with a line saying what Claude does next:
   2  the kit is set up but a key is missing or rejected: the kit's .env is
      opened for the student to paste into (never into the chat)
   3  no connections kit on this computer, or it was never run
+  4  keys ready, but no branding.json yet: ask the student for their website
+     and run scripts/brand_from_website.py, so the first report carries their
+     name, logo and colours instead of a placeholder
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ sys.path.insert(0, str(ROOT))
 import kit  # noqa: E402
 
 REQUIRED = ("AIRROI_API_KEY", "FIRECRAWL_API_KEY")
+BRANDING = ROOT / "branding.json"
 STAMP = kit.SETUP_STAMP   # agent.py forgets it when a vendor rejects the key mid-run
 FRESH_FOR = 24 * 3600
 
@@ -157,7 +161,15 @@ def main(argv: list[str]) -> int:
     if not bad:
         STAMP.parent.mkdir(parents=True, exist_ok=True)
         STAMP.write_text(json.dumps({"fingerprint": _fingerprint(values), "at": time.time()}), encoding="utf-8")
-        print("[setup] READY: AirROI and Firecrawl both work.")
+        print("[setup] Keys: AirROI and Firecrawl both work.")
+        if not BRANDING.exists():
+            print("[setup] Branding: not set yet. The report would say 'Your Company' with no logo.")
+            print("NEXT: ask the student for their company website (their own site, not a listing), then run:")
+            print('      PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/brand_from_website.py <their website>')
+            print("      Look at the logo it saves and confirm the name, logo and colours with them.")
+            print("      No website? Copy branding.example.json to branding.json and fill it in with them.")
+            return 4
+        print("[setup] READY: keys work and the report is branded.")
         return 0
 
     STAMP.unlink(missing_ok=True)   # a failed live check must not leave an old READY standing

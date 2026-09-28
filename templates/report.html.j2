@@ -20,9 +20,12 @@
       --sol-muted:#6b6b63;
       --sol-card:#ffffff;
       --sol-accent:#d4af37;
-      --sol-gradient-1: linear-gradient(135deg, #1f3c34 0%, #4b7c6b 100%);
-      --sol-gradient-2: linear-gradient(135deg, #4b7c6b 0%, #6b9b88 100%);
-      --sol-gradient-3: linear-gradient(135deg, rgba(31,60,52,0.95) 0%, rgba(75,124,107,0.95) 100%);
+      --brand-rgb:{{ branding.primary_color | rgb }};
+      --accent-rgb:{{ branding.accent_color | rgb }};
+      --sol-sage-light:{{ branding.accent_color | lighten }};
+      --sol-gradient-1: linear-gradient(135deg, var(--sol-forest) 0%, var(--sol-sage) 100%);
+      --sol-gradient-2: linear-gradient(135deg, var(--sol-sage) 0%, var(--sol-sage-light) 100%);
+      --sol-gradient-3: linear-gradient(135deg, rgba(var(--brand-rgb),0.95) 0%, rgba(var(--accent-rgb),0.95) 100%);
     }
 
     * {
@@ -46,8 +49,8 @@
       width: 100%;
       height: 100%;
       background:
-        radial-gradient(circle at 20% 50%, rgba(75,124,107,0.08) 0%, transparent 50%),
-        radial-gradient(circle at 80% 80%, rgba(31,60,52,0.06) 0%, transparent 50%);
+        radial-gradient(circle at 20% 50%, rgba(var(--accent-rgb),0.08) 0%, transparent 50%),
+        radial-gradient(circle at 80% 80%, rgba(var(--brand-rgb),0.06) 0%, transparent 50%);
       pointer-events: none;
       z-index: 0;
     }
@@ -63,29 +66,29 @@
       -webkit-backdrop-filter: blur(20px);
       border: 1px solid rgba(255, 255, 255, 0.3);
       box-shadow:
-        0 8px 32px rgba(31, 60, 52, 0.1),
-        0 2px 8px rgba(31, 60, 52, 0.05),
+        0 8px 32px rgba(var(--brand-rgb), 0.1),
+        0 2px 8px rgba(var(--brand-rgb), 0.05),
         inset 0 1px 0 rgba(255, 255, 255, 0.5);
     }
 
     .glass-card-dark {
-      background: rgba(31, 60, 52, 0.15);
+      background: rgba(var(--brand-rgb), 0.15);
       backdrop-filter: blur(10px);
       -webkit-backdrop-filter: blur(10px);
-      border: 1px solid rgba(75, 124, 107, 0.2);
+      border: 1px solid rgba(var(--accent-rgb), 0.2);
     }
 
     .shadow-luxury {
       box-shadow:
-        0 20px 60px rgba(31, 60, 52, 0.15),
-        0 8px 24px rgba(31, 60, 52, 0.1),
-        0 2px 8px rgba(31, 60, 52, 0.05);
+        0 20px 60px rgba(var(--brand-rgb), 0.15),
+        0 8px 24px rgba(var(--brand-rgb), 0.1),
+        0 2px 8px rgba(var(--brand-rgb), 0.05);
     }
 
     .shadow-soft {
       box-shadow:
-        0 4px 16px rgba(31, 60, 52, 0.08),
-        0 2px 8px rgba(31, 60, 52, 0.04);
+        0 4px 16px rgba(var(--brand-rgb), 0.08),
+        0 2px 8px rgba(var(--brand-rgb), 0.04);
     }
 
     .gradient-text {
@@ -114,8 +117,8 @@
       font-size: 0.875rem;
       transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
       box-shadow:
-        0 4px 16px rgba(31, 60, 52, 0.3),
-        0 2px 8px rgba(31, 60, 52, 0.2);
+        0 4px 16px rgba(var(--brand-rgb), 0.3),
+        0 2px 8px rgba(var(--brand-rgb), 0.2);
       border: none;
       cursor: pointer;
       position: relative;
@@ -140,8 +143,8 @@
     .btn-primary:hover {
       transform: translateY(-2px);
       box-shadow:
-        0 8px 24px rgba(31, 60, 52, 0.4),
-        0 4px 12px rgba(31, 60, 52, 0.3);
+        0 8px 24px rgba(var(--brand-rgb), 0.4),
+        0 4px 12px rgba(var(--brand-rgb), 0.3);
     }
 
     .btn-secondary {
@@ -151,7 +154,7 @@
       border-radius: 1rem;
       font-weight: 600;
       font-size: 0.875rem;
-      border: 2px solid rgba(31, 60, 52, 0.2);
+      border: 2px solid rgba(var(--brand-rgb), 0.2);
       transition: all 0.3s ease;
       cursor: pointer;
     }
@@ -160,7 +163,7 @@
       background: white;
       border-color: var(--sol-forest);
       transform: translateY(-2px);
-      box-shadow: 0 4px 16px rgba(31, 60, 52, 0.15);
+      box-shadow: 0 4px 16px rgba(var(--brand-rgb), 0.15);
     }
 
     .pill{
@@ -175,7 +178,7 @@
       text-transform: uppercase;
       background: var(--sol-gradient-2);
       color: white;
-      box-shadow: 0 4px 12px rgba(75, 124, 107, 0.3);
+      box-shadow: 0 4px 12px rgba(var(--accent-rgb), 0.3);
       border: 1px solid rgba(255, 255, 255, 0.3);
     }
 
@@ -203,7 +206,7 @@
 
     .metric{
       background: linear-gradient(135deg, rgba(255,255,255,0.9) 0%, rgba(255,255,255,0.7) 100%);
-      border: 1px solid rgba(31,60,52,0.12);
+      border: 1px solid rgba(var(--brand-rgb),0.12);
       border-radius: 1rem;
       padding: 1rem;
       line-height: 1.2;
@@ -226,8 +229,8 @@
 
     .metric:hover {
       transform: translateY(-2px);
-      box-shadow: 0 8px 20px rgba(31, 60, 52, 0.12);
-      border-color: rgba(75, 124, 107, 0.3);
+      box-shadow: 0 8px 20px rgba(var(--brand-rgb), 0.12);
+      border-color: rgba(var(--accent-rgb), 0.3);
     }
 
     .metric:hover::before {
@@ -325,16 +328,16 @@
       cursor: pointer;
       border: 3px solid var(--sol-forest);
       box-shadow:
-        0 4px 12px rgba(31,60,52,0.3),
-        0 2px 6px rgba(31,60,52,0.2);
+        0 4px 12px rgba(var(--brand-rgb),0.3),
+        0 2px 6px rgba(var(--brand-rgb),0.2);
       transition: all 0.2s ease;
     }
 
     input[type=range]::-webkit-slider-thumb:hover{
       transform: scale(1.1);
       box-shadow:
-        0 6px 16px rgba(31,60,52,0.4),
-        0 3px 8px rgba(31,60,52,0.3);
+        0 6px 16px rgba(var(--brand-rgb),0.4),
+        0 3px 8px rgba(var(--brand-rgb),0.3);
     }
 
     input[type=range]::-moz-range-thumb{
@@ -345,8 +348,8 @@
       cursor: pointer;
       border: 3px solid var(--sol-forest);
       box-shadow:
-        0 4px 12px rgba(31,60,52,0.3),
-        0 2px 6px rgba(31,60,52,0.2);
+        0 4px 12px rgba(var(--brand-rgb),0.3),
+        0 2px 6px rgba(var(--brand-rgb),0.2);
       transition: all 0.2s ease;
     }
 
@@ -383,7 +386,7 @@
 
     .info-card {
       background: linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(236,231,223,0.5) 100%);
-      border: 1px solid rgba(31,60,52,0.1);
+      border: 1px solid rgba(var(--brand-rgb),0.1);
       border-radius: 1.25rem;
       padding: 1.25rem;
       transition: all 0.3s ease;
@@ -391,16 +394,16 @@
 
     .info-card:hover {
       background: rgba(255,255,255,0.98);
-      box-shadow: 0 8px 24px rgba(31,60,52,0.1);
+      box-shadow: 0 8px 24px rgba(var(--brand-rgb),0.1);
       transform: translateY(-2px);
     }
 
     .highlight-box {
-      background: linear-gradient(135deg, rgba(75,124,107,0.08) 0%, rgba(75,124,107,0.12) 100%);
+      background: linear-gradient(135deg, rgba(var(--accent-rgb),0.08) 0%, rgba(var(--accent-rgb),0.12) 100%);
       border-left: 4px solid var(--sol-sage);
       border-radius: 0.75rem;
       padding: 1.25rem;
-      box-shadow: 0 4px 12px rgba(75,124,107,0.08);
+      box-shadow: 0 4px 12px rgba(var(--accent-rgb),0.08);
     }
 
     .feature-badge {
@@ -411,9 +414,9 @@
       border-radius: 0.5rem;
       font-size: 0.65rem;
       font-weight: 600;
-      background: rgba(75, 124, 107, 0.1);
+      background: rgba(var(--accent-rgb), 0.1);
       color: var(--sol-forest);
-      border: 1px solid rgba(75, 124, 107, 0.2);
+      border: 1px solid rgba(var(--accent-rgb), 0.2);
     }
 
     .subject-card {
@@ -426,8 +429,8 @@
     .subject-card:hover {
       transform: translateY(-6px);
       box-shadow:
-        0 24px 56px rgba(31, 60, 52, 0.2),
-        0 10px 24px rgba(31, 60, 52, 0.1);
+        0 24px 56px rgba(var(--brand-rgb), 0.2),
+        0 10px 24px rgba(var(--brand-rgb), 0.1);
     }
 
     .subject-card .subject-img-wrap {
@@ -504,7 +507,7 @@
       text-transform: uppercase;
       background: linear-gradient(135deg, var(--sol-forest) 0%, var(--sol-sage) 100%);
       color: white;
-      box-shadow: 0 2px 8px rgba(31, 60, 52, 0.25);
+      box-shadow: 0 2px 8px rgba(var(--brand-rgb), 0.25);
     }
 
     .subject-config {
@@ -513,14 +516,14 @@
       gap: 0.5rem;
       margin-top: 1rem;
       padding-top: 1rem;
-      border-top: 1px solid rgba(31, 60, 52, 0.08);
+      border-top: 1px solid rgba(var(--brand-rgb), 0.08);
       font-size: 0.95rem;
       font-weight: 600;
       color: var(--sol-ink);
     }
 
     .subject-config .sep {
-      color: rgba(31, 60, 52, 0.25);
+      color: rgba(var(--brand-rgb), 0.25);
     }
 
     .subject-market {
@@ -577,9 +580,9 @@
       font-weight: 700;
       letter-spacing: 0.06em;
       text-transform: uppercase;
-      background: linear-gradient(135deg, rgba(31,60,52,0.08) 0%, rgba(75,124,107,0.14) 100%);
+      background: linear-gradient(135deg, rgba(var(--brand-rgb),0.08) 0%, rgba(var(--accent-rgb),0.14) 100%);
       color: var(--sol-forest);
-      border: 1px solid rgba(75,124,107,0.2);
+      border: 1px solid rgba(var(--accent-rgb),0.2);
     }
 
     .comp-card {
@@ -591,7 +594,7 @@
 
     .comp-card:hover {
       transform: translateY(-8px);
-      box-shadow: 0 20px 40px rgba(31, 60, 52, 0.15);
+      box-shadow: 0 20px 40px rgba(var(--brand-rgb), 0.15);
     }
 
     .image-overlay {
@@ -618,7 +621,7 @@
     }
 
     .luxury-header {
-      background: linear-gradient(135deg, rgba(31,60,52,0.02) 0%, rgba(75,124,107,0.02) 100%);
+      background: linear-gradient(135deg, rgba(var(--brand-rgb),0.02) 0%, rgba(var(--accent-rgb),0.02) 100%);
     }
 
     .stat-number {
@@ -642,13 +645,18 @@
 
     <!-- 1) Branded Header -->
     <header class="mb-10 rounded-3xl glass-card shadow-luxury overflow-hidden fade-in-up">
-      <div class="luxury-header px-8 py-8 flex flex-col md:flex-row md:items-start md:justify-between gap-6">
-        <div class="flex items-start gap-6">
-          <img
-            src="{{ branding.logo_url }}"
-            alt="{{ branding.company_name }} Logo"
-            class="h-24 md:h-28 w-auto"
-          />
+      <div class="luxury-header px-8 py-8 flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6">
+        <div class="flex flex-col sm:flex-row items-start gap-6">
+          {% if branding.logo_url %}
+          <div class="shrink-0 rounded-2xl{% if branding.logo_background %} px-5 py-4{% endif %}"
+               {% if branding.logo_background %}style="background:{{ branding.logo_background }};"{% endif %}>
+            <img
+              src="{{ branding.logo_url }}"
+              alt="{{ branding.company_name }} Logo"
+              class="h-16 md:h-20 w-auto max-w-[220px] object-contain"
+            />
+          </div>
+          {% endif %}
 
           <div class="pt-2">
             <div class="text-xs font-extrabold tracking-[.3em] uppercase" style="color:var(--sol-sage); letter-spacing: 0.25em;">
@@ -663,20 +671,22 @@
           </div>
         </div>
 
-        <div class="flex items-center gap-3 no-print md:pt-2">
+        <div class="flex items-center gap-3 no-print lg:pt-2">
           <button
             onclick="window.print()"
-            class="btn-primary"
+            class="btn-primary whitespace-nowrap"
           >
             📄 Print / Save PDF
           </button>
+          {% if branding.website_url %}
           <a
             href="{{ branding.website_url }}"
             target="_blank"
             class="btn-secondary"
           >
-            🌐 {{ branding.website_url | replace("https://","") | replace("http://","") }}
+            🌐 {{ branding.website_url | replace("https://","") | replace("http://","") | trim("/") }}
           </a>
+          {% endif %}
         </div>
       </div>
       <div class="accent-line"></div>
@@ -1169,9 +1179,11 @@
       <p class="text-xs text-gray-400 font-medium uppercase tracking-widest">
         {{ branding.company_name }} · {{ branding.tagline }}
       </p>
+      {% if branding.website_url %}
       <p class="text-xs text-gray-300 mt-2">
-        <a href="{{ branding.website_url }}" class="hover:text-sol-forest transition">{{ branding.website_url | replace("https://","") | replace("http://","") }}</a>
+        <a href="{{ branding.website_url }}" class="hover:text-sol-forest transition">{{ branding.website_url | replace("https://","") | replace("http://","") | trim("/") }}</a>
       </p>
+      {% endif %}
       <p class="text-xs text-gray-300 mt-1">
         Report generated {{ report_date }}
       </p>
@@ -1234,8 +1246,8 @@
           {
             label: 'Market top quartile',
             data: {{ seasonal_p75 | tojson }},
-            borderColor: 'rgba(31, 60, 52, 0.22)',
-            backgroundColor: 'rgba(31, 60, 52, 0.10)',
+            borderColor: 'rgba({{ branding.primary_color | rgb }}, 0.22)',
+            backgroundColor: 'rgba({{ branding.primary_color | rgb }}, 0.10)',
             borderWidth: 1,
             borderDash: [4, 4],
             fill: '+1',
@@ -1246,13 +1258,13 @@
           {
             label: 'Market median',
             data: {{ seasonal_data | tojson }},
-            borderColor: '#1f3c34',
-            backgroundColor: 'rgba(31, 60, 52, 0.06)',
+            borderColor: '{{ branding.primary_color }}',
+            backgroundColor: 'rgba({{ branding.primary_color | rgb }}, 0.06)',
             borderWidth: {% if subject_monthly %}2{% else %}3{% endif %},
             fill: {% if seasonal_p25 %}false{% else %}true{% endif %},
             tension: 0.4,
             pointRadius: {% if subject_monthly %}0{% else %}5{% endif %},
-            pointBackgroundColor: '#1f3c34',
+            pointBackgroundColor: '{{ branding.primary_color }}',
             pointBorderColor: 'white',
             pointBorderWidth: 2
           },
@@ -1260,8 +1272,8 @@
           {
             label: 'Market bottom quartile',
             data: {{ seasonal_p25 | tojson }},
-            borderColor: 'rgba(31, 60, 52, 0.22)',
-            backgroundColor: 'rgba(31, 60, 52, 0.10)',
+            borderColor: 'rgba({{ branding.primary_color | rgb }}, 0.22)',
+            backgroundColor: 'rgba({{ branding.primary_color | rgb }}, 0.10)',
             borderWidth: 1,
             borderDash: [4, 4],
             fill: false,
