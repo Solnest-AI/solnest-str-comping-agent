@@ -90,3 +90,37 @@ def find_kit(home: Path | None = None, near: Path = ROOT) -> Path | None:
 
 def kit_value(name: str, kit: Path | None) -> str:
     return read_env(kit / ".env").get(name, "") if kit else ""
+
+
+def set_value(env: Path, name: str, value: str) -> None:
+    """Set NAME=value in the kit's .env: on NAME's LAST line (the one the kit's
+    env_load and read_env use), else appended. Touches no other line and never
+    prints the value. UTF-8, no BOM, LF endings, like the kit writes."""
+    lines = env.read_text(encoding="utf-8-sig").splitlines() if env.exists() else []
+    hits = [i for i, line in enumerate(lines)
+            if (m := _LINE.match(line.strip())) and m.group(1) == name]
+    if hits:
+        lines[hits[-1]] = f"{name}={value}"
+    else:
+        lines.append(f"{name}={value}")
+    env.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+
+
+# ── The 24-hour "keys passed" stamp written by scripts/check_setup.py ──
+SETUP_STAMP = ROOT / ".cache" / "setup_ok.json"
+# What a vendor means by these during a run: the key, not the property.
+KEY_FAILURES = {401: "rejected the key", 402: "is out of credit", 403: "rejected the key"}
+
+
+def key_failure(vendor: str, status: int) -> str:
+    """Empty for an ordinary error. For a key or credit failure: forget the last
+    passed check (so check_setup probes again instead of trusting it) and
+    return the line that tells Claude what to do."""
+    if status not in KEY_FAILURES:
+        return ""
+    try:
+        SETUP_STAMP.unlink()
+    except OSError:
+        pass
+    return (f"[setup] {vendor} {KEY_FAILURES[status]} (HTTP {status}). Not a problem with the "
+            "property. Run: PY=\"$(bash scripts/ensure_env.sh)\" && \"$PY\" scripts/check_setup.py")

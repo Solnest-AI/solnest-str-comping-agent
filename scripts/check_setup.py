@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import time
@@ -34,7 +35,7 @@ sys.path.insert(0, str(ROOT))
 import kit  # noqa: E402
 
 REQUIRED = ("AIRROI_API_KEY", "FIRECRAWL_API_KEY")
-STAMP = ROOT / ".cache" / "setup_ok.json"
+STAMP = kit.SETUP_STAMP   # agent.py forgets it when a vendor rejects the key mid-run
 FRESH_FOR = 24 * 3600
 
 
@@ -81,6 +82,22 @@ def _recently_ok(values: dict[str, str]) -> bool:
     return s.get("fingerprint") == _fingerprint(values) and time.time() - s.get("at", 0) < FRESH_FOR
 
 
+def other_copy(name: str) -> tuple[str, str]:
+    """(value, where) for a key the kit's .env lacks but this computer has
+    elsewhere: this folder's .env, the environment, or what the kit registered
+    in ~/.claude.json. Adopting it into the kit's .env keeps one master copy
+    without asking a student to paste a key they already gave."""
+    value = kit.read_env(ROOT / ".env").get(name, "")
+    if value:
+        return value, "this folder's .env"
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value, "the environment"
+    from config import key_from_connections_kit   # lazy: config loads .env and walks for the kit
+    value = key_from_connections_kit(name)
+    return (value, "~/.claude.json") if value else ("", "")
+
+
 def open_for_paste(path: Path) -> None:
     """Open the file in the plain text editor; the student pastes and saves."""
     try:
@@ -122,6 +139,13 @@ def main(argv: list[str]) -> int:
     env = found / ".env"
     print(f"[setup] Connections kit: {found}")
     values = {n: kit.kit_value(n, found) for n in REQUIRED}
+    for n in REQUIRED:
+        if not values[n]:
+            value, where = other_copy(n)
+            if value:
+                kit.set_value(env, n, value)
+                values[n] = value
+                print(f"[setup] {n}: blank in the kit's .env; copied in from {where} (value not shown).")
     blank = [n for n in REQUIRED if not values[n]]
     results: dict[str, str] = {}
     if not blank and not force and _recently_ok(values):

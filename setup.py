@@ -3,7 +3,7 @@
 
 Run this once before using agent.py:
 
-    python setup.py
+    PY="$(bash scripts/ensure_env.sh)" && "$PY" setup.py
 
 It checks what you already have, prompts only for what's missing, and writes
 the result back to .env. Safe to re-run anytime.
@@ -24,15 +24,14 @@ KEYS = [
         "AirROI",
         True,
         "https://www.airroi.com/api/developer/activate",
-        "Sign up, activate the developer API, copy the key. The ONLY required key.",
+        "Sign up, activate the developer API, copy the key. Required.",
     ),
     (
         "FIRECRAWL_API_KEY",
         "Firecrawl",
-        False,
-        "https://www.firecrawl.dev",
-        "Optional. Only needed for a street address or a Zillow/Realtor link; "
-        "Airbnb URLs work without it. Press Enter to skip.",
+        True,
+        "https://www.firecrawl.dev/app/api-keys",
+        "Required. Turns a street address or a Zillow/Realtor link into a property.",
     ),
     (
         "ANTHROPIC_API_KEY",
@@ -167,11 +166,12 @@ def main() -> int:
     print()
     if missing_required:
         print("Still missing required keys: " + ", ".join(missing_required))
-        print("Re-run `python setup.py` once you have them.")
+        print("Re-run it once you have them:")
+        print('  PY="$(bash scripts/ensure_env.sh)" && "$PY" setup.py')
         return 1
 
     print("You're set. Try a test run:")
-    print('  python agent.py --input "https://www.airbnb.com/rooms/39508095"')
+    print('  PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --input "https://www.airbnb.com/rooms/39508095"')
     return 0
 
 

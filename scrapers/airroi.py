@@ -24,6 +24,7 @@ from typing import Any, Optional
 import httpx
 
 import config
+import kit
 from schema import PropertyBasics
 from . import _cache
 
@@ -63,6 +64,16 @@ class AirROIError(RuntimeError):
         self.status = status
         self.message = message
         self.body = body or {}
+        # A key or credit failure is not about the property, and some callers
+        # swallow this error to degrade gracefully: say so once, loudly.
+        global _KEY_FAILURE_SHOWN
+        hint = kit.key_failure("AirROI", status)
+        if hint and not _KEY_FAILURE_SHOWN:
+            _KEY_FAILURE_SHOWN = True
+            print(hint, file=sys.stderr)
+
+
+_KEY_FAILURE_SHOWN = False
 
 
 # ── HTTP helper ───────────────────────────────────────────────────────
