@@ -295,3 +295,27 @@ def test_vendor_replies_never_echo_the_key(monkeypatch, capsys):
     assert asyncio.run(ps._firecrawl_post("/scrape", {})) == {}
     err = capsys.readouterr().err
     assert "429" in err and "fc-live-456" not in err
+
+
+def test_redaction_happens_before_truncation(monkeypatch, capsys):
+    """A key straddling the 300-character cut must not leak its first half."""
+    import asyncio
+
+    import httpx
+
+    from scrapers import airroi
+    from scrapers import property_search as ps
+
+    key = "fc-" + "k" * 40
+    monkeypatch.setattr(ps.config, "FIRECRAWL_API_KEY", key)
+    body = "x" * 280 + key
+    transport = httpx.MockTransport(lambda req: httpx.Response(500, text=body))
+    real = httpx.AsyncClient
+    monkeypatch.setattr(ps.httpx, "AsyncClient", lambda **kw: real(transport=transport, **kw))
+    asyncio.run(ps._firecrawl_post("/scrape", {}))
+    assert "fc-kkkk" not in capsys.readouterr().err
+
+    akey = "ar-" + "q" * 40
+    monkeypatch.setattr(airroi.config, "AIRROI_API_KEY", akey)
+    msg, _ = airroi._extract_error(["y" * 280 + akey], 400)
+    assert "ar-qqqq" not in msg

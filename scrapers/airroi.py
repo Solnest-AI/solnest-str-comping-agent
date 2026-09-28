@@ -105,9 +105,9 @@ def _extract_error(data: Any, status: int) -> tuple[str, dict]:
 
     if isinstance(data, (list, tuple)):
         msg = "; ".join(str(x) for x in data)
-        return (msg[:300] or f"HTTP {status}"), {"raw": list(data)}
+        return (kit.redact(msg, config.AIRROI_API_KEY)[:300] or f"HTTP {status}"), {"raw": list(data)}
 
-    return (str(data)[:300] or f"HTTP {status}"), {"raw": data}
+    return (kit.redact(str(data), config.AIRROI_API_KEY)[:300] or f"HTTP {status}"), {"raw": data}
 
 
 def _retry_delay(resp: Optional[httpx.Response], attempt: int) -> float:
@@ -160,7 +160,7 @@ async def _request_with_retries(
             data = resp.json()
         except Exception as e:
             raise AirROIError(resp.status_code, f"non-JSON response: {e}",
-                              {"raw_text": resp.text[:300]})
+                              {"raw_text": kit.redact(resp.text, config.AIRROI_API_KEY)[:300]})
 
         if resp.status_code >= 400:
             msg, body = _extract_error(data, resp.status_code)
