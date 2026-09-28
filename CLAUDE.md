@@ -105,6 +105,21 @@ PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --input "https://www.airbnb
 The HTML lands in `output/`. Then do the narrative handoff below. The first
 report is not finished until you have.
 
+### Step 5: Make it work from any Claude Code window (required)
+
+This project's skill only loads when Claude Code is opened on this folder, and
+users will not do that: they cloned it from another window. Without this step a
+later "run comps on ..." never finds the tool and improvises comps from web
+searches instead (measured: no report, $6.48 spent). Install the launcher:
+
+```bash
+PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/install_launcher.py
+```
+
+Then tell the user, in these words: "You're set up. From any Claude Code
+window, just say: run comps on <an Airbnb link, a Zillow link or an address>."
+If the folder is ever moved, run the installer again from its new location.
+
 ---
 
 ## The narrative handoff loop: READ THIS
