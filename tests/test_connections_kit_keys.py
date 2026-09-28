@@ -67,3 +67,33 @@ def test_this_folders_env_wins_over_the_kit(monkeypatch):
     assert config._key("AIRROI_API_KEY") == ("from_env", ".env")
     monkeypatch.delenv("AIRROI_API_KEY")
     assert config._key("AIRROI_API_KEY") == ("from_kit", "connections kit (~/.claude.json)")
+
+
+def test_reads_the_env_beside_the_bundled_stdio_server(tmp_path):
+    """Kit "Path A" only: the key lives in mcp-servers/airroi/.env, not in ~/.claude.json.
+    Windows registers native paths with forward or back slashes; both resolve."""
+    server_dir = tmp_path / "mcp-servers" / "airroi"
+    server_dir.mkdir(parents=True)
+    (server_dir / "server.py").write_text("", encoding="utf-8")
+    (server_dir / ".env").write_text("# comment\nAIRROI_API_KEY=ar_path_a_key\nOTHER=x\n", encoding="utf-8")
+    for script in (str(server_dir / "server.py"), (server_dir / "server.py").as_posix()):
+        p = _write(tmp_path, {"airroi": {"type": "stdio", "command": "python.exe", "args": [script], "env": {}}})
+        assert config.key_from_connections_kit("AIRROI_API_KEY", p) == "ar_path_a_key"
+    assert config.key_from_connections_kit("FIRECRAWL_API_KEY", p) == ""
+
+
+def test_the_header_still_wins_over_the_stdio_env(tmp_path):
+    server_dir = tmp_path / "airroi"
+    server_dir.mkdir()
+    (server_dir / ".env").write_text("AIRROI_API_KEY=ar_stdio\n", encoding="utf-8")
+    p = _write(tmp_path, {**KIT, "airroi": {"command": "python", "args": [str(server_dir / "server.py")]}})
+    assert config.key_from_connections_kit("AIRROI_API_KEY", p) == "ar_kit_key_123"
+
+
+def test_blank_or_missing_stdio_env_is_no_key(tmp_path):
+    server_dir = tmp_path / "airroi"
+    server_dir.mkdir()
+    (server_dir / ".env").write_text("AIRROI_API_KEY=\n", encoding="utf-8")
+    p = _write(tmp_path, {"airroi": {"command": "python", "args": [str(server_dir / "server.py")]},
+                          "gone": {"command": "python", "args": [str(tmp_path / "nope" / "server.py")]}})
+    assert config.key_from_connections_kit("AIRROI_API_KEY", p) == ""

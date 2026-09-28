@@ -48,9 +48,36 @@ def key_from_connections_kit(name: str, claude_json: Path | None = None) -> str:
             elif prefix:
                 value = ""
         value = value or str((server.get("env") or {}).get(name) or "").strip()
+        value = value or _key_beside_stdio_server(server, name)
         # A literal variable name or ${...} is a template, not a key.
         if value and value != name and not value.startswith("$"):
             return value
+    return ""
+
+
+def _key_beside_stdio_server(server: dict, name: str) -> str:
+    """The key from the .env next to a bundled stdio server's script.
+
+    The kit's AirROI "Path A" registers its bundled server (airroi -> python
+    .../mcp-servers/airroi/server.py) and fan-out-env.sh puts the key in that
+    folder's .env, not in ~/.claude.json. Attendees who skipped "Path B"
+    (airroi-official, key in a header) have only this copy. Found 2026-09-27
+    on a Windows laptop with a working key that the agent reported missing.
+    """
+    for arg in server.get("args") or []:
+        if not isinstance(arg, str) or not arg.endswith(".py"):
+            continue
+        env = Path(arg).parent / ".env"
+        try:
+            lines = env.read_text(encoding="utf-8-sig").splitlines()
+        except (OSError, ValueError):
+            continue
+        for line in lines:
+            k, sep, v = line.strip().partition("=")
+            if sep and k.strip() == name:
+                v = v.strip().strip('"').strip("'")
+                if v:
+                    return v
     return ""
 
 
