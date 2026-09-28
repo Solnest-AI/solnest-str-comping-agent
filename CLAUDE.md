@@ -353,6 +353,7 @@ link it and `/api/openapi.json` 404s.
 | Comps look wrong (oversized, waterfront, dormant) | Filters too loose or too tight | `--require`, `--exclude`, `--allow-oceanfront-comps` |
 | Module import error, or `python` opens the Microsoft Store | Ran bare `python` instead of the `.venv` | Always prefix with `PY="$(bash scripts/ensure_env.sh)" &&` and run `"$PY"` |
 | `[setup] FAILED: ...` | No internet, or uv/Python blocked on this machine | Do what the message says, then run the same command again |
+| `[Branding] No branding.json yet` (the run stops, nothing spent) | The student has not been branded | Ask for their website and run `scripts/brand_from_website.py` (Step 3) |
 | Report says "Your Company" / no logo | No `branding.json` | Ask for the student's website and run `scripts/brand_from_website.py` (Step 3) |
 
 ---

@@ -195,3 +195,23 @@ def test_the_css_and_chart_follow_the_brand(brand):
                                        property={"short_address": ""})
     assert f"--sol-forest:{brand[0]}" in css and f"--brand-rgb:{te.rgb(brand[0])}" in css
     assert "31, 60, 52" not in css
+
+
+def test_no_report_runs_before_the_student_is_branded(tmp_path, monkeypatch, capsys):
+    """Neither the paid first pass nor the free re-render may ship 'Your Company'."""
+    import asyncio
+
+    import agent
+
+    monkeypatch.setattr(config, "_BRANDING_PATH", tmp_path / "branding.json")
+    for argv in (["agent.py", "--input", "https://www.airbnb.com/rooms/1"],
+                 ["agent.py", "--render", "output/x.report-data.json"]):
+        monkeypatch.setattr(sys, "argv", argv)
+        with pytest.raises(SystemExit) as e:
+            asyncio.run(agent.main())
+        assert e.value.code == 2
+    out = capsys.readouterr().out
+    assert "brand_from_website.py" in out and "Nothing has been spent" in out
+
+    (tmp_path / "branding.json").write_text("{}", encoding="utf-8")
+    assert agent._require_branding()
