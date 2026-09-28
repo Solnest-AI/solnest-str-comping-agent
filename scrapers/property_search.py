@@ -718,11 +718,12 @@ async def search_for_property(address: str) -> Optional[dict]:
 
 # ── Public: search for hero image only ───────────────────────────────
 
-async def search_hero_image(address: str) -> Optional[str]:
+async def search_hero_image(address: str, accept=None) -> Optional[str]:
     """Last-resort search for just a property photo when no listing was found.
 
     Searches for the address + 'property photo' and returns the first
-    relevant image URL found.
+    relevant image URL found. `accept(url)` filters candidates, so a caller
+    can insist on a photo the report's trusted-host gate will take.
     """
     print(f"[Search] Searching for hero image: {address}")
 
@@ -747,6 +748,8 @@ async def search_hero_image(address: str) -> Optional[str]:
     for r in (data.get("data") or []):
         json_data = r.get("json") or {}
         img = await resolved_hero(json_data.get("hero_image_url"), r.get("metadata"))
+        if img and accept is not None and not accept(img):
+            continue
         if img:
             print(f"[Search] Found hero image: {img[:80]}")
             return img

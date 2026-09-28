@@ -29,6 +29,10 @@ PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py ...
 
 Wherever this file shows `"$PY" something.py`, run it with that prefix.
 
+**Never open, parse or print `~/.claude.json`** (or any other file holding
+keys) to check for the connections kit. It holds the user's keys. `agent.py`
+finds them itself and prints only where they came from.
+
 ### Step 1: Python and dependencies (automatic)
 
 ```bash

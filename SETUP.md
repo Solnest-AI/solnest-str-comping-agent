@@ -48,15 +48,16 @@ per-report API cost.
 
 ## Manual setup
 
-1. Install Python 3.10+ from https://www.python.org/downloads/
-2. Open a terminal in this folder.
+1. You do not need to install Python: step 3 does it (via uv), and never run
+   bare `python` on Windows, where it opens the Microsoft Store.
+2. Open a terminal (Git Bash on Windows) in this folder.
 3. Install dependencies:
    ```bash
-   pip install -r requirements.txt
+   bash scripts/ensure_env.sh   # installs uv, Python 3.13 and everything else
    ```
 4. Add your key. Either run the interactive builder:
    ```bash
-   python setup.py
+   PY="$(bash scripts/ensure_env.sh)" && "$PY" setup.py
    ```
    or copy the template and edit it:
    ```bash
@@ -70,7 +71,7 @@ per-report API cost.
    colors. Both `.env` and `branding.json` are gitignored.
 6. Run it:
    ```bash
-   python agent.py --input "https://www.airbnb.com/rooms/39508095"
+   PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --input "https://www.airbnb.com/rooms/39508095"
    ```
 
 The HTML report drops into `output/`. Open it in any browser.
@@ -81,22 +82,22 @@ The HTML report drops into `output/`. Open it in any browser.
 
 ```bash
 # Airbnb listing URL: best results
-python agent.py --input "https://www.airbnb.com/rooms/39508095"
+PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --input "https://www.airbnb.com/rooms/39508095"
 
 # Plain address (needs Firecrawl)
-python agent.py --input "5005 Valley Drive Unit 13, Sun Peaks BC"
+PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --input "5005 Valley Drive Unit 13, Sun Peaks BC"
 
 # Zillow / Realtor URL (needs Firecrawl)
-python agent.py --input "https://www.zillow.com/homedetails/..."
+PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --input "https://www.zillow.com/homedetails/..."
 
 # Override property details
-python agent.py --input "<address>" --beds 4 --baths 3 --guests 8
+PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --input "<address>" --beds 4 --baths 3 --guests 8
 
 # Email it when done
-python agent.py --input "<address>" --email buyer@example.com
+PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --input "<address>" --email buyer@example.com
 ```
 
-`python agent.py --help` lists every flag. The full table is in `README.md`.
+`"$PY" agent.py --help` lists every flag. The full table is in `README.md`.
 
 ### What you get
 
@@ -132,7 +133,7 @@ Then re-run the agent with --narratives pointing at that file.
 Then:
 
 ```bash
-python agent.py --input "<same input>" --narratives "output/<slug>.narratives.json"
+PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --input "<same input>" --narratives "output/<slug>.narratives.json"
 ```
 
 That is the whole loop. The brief tells Claude exactly what it is allowed to
@@ -144,18 +145,18 @@ write from, so the copy cannot invent numbers or seasons.
 
 | Message | What it means | Fix |
 |---|---|---|
-| `AIRROI_API_KEY is not set` | No `.env`, or the key is blank | `cp .env.example .env` and paste your key, or run `python setup.py` |
+| `AIRROI_API_KEY is not set` | No `.env`, or the key is blank | `cp .env.example .env` and paste your key |
 | `FIRECRAWL_API_KEY is not set` | You passed an address or listing URL without Firecrawl | Add the key, or use an Airbnb URL |
 | `Phase A sanity failed: <6 comps` | Not enough comparable listings nearby | Try `--no-feature-filter`, or a denser market. There is no radius lever: AirROI caps results at 25 and only accepts a 1-10 mile radius, so widening is not possible. |
 | `--narratives file not found` | You used `--narratives` before writing the file | Run once without it to generate the brief |
 | `not valid JSON` | The narratives file has markdown fences or commentary | Write the bare JSON object only |
 | Report shows the wrong company | No `branding.json` | `cp branding.example.json branding.json` and edit it |
-| `ModuleNotFoundError` | Dependencies not installed | `pip install -r requirements.txt` |
+| `ModuleNotFoundError`, or `python` opens the Microsoft Store | Ran bare `python` | Run commands as `PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py ...` |
 
 ### Tests
 
 ```bash
-pip install -r requirements-dev.txt
+bash scripts/ensure_env.sh --dev   # adds pytest + ruff
 pytest -q
 ```
 
