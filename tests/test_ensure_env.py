@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -27,9 +28,25 @@ def test_script_keeps_lf_endings():
     assert "*.sh text eol=lf" in (ROOT / ".gitattributes").read_text(encoding="utf-8")
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
+def _git_bash():
+    """Git's bash, which is what Claude Code runs. On Windows a bare "bash" from
+    Python resolves to System32\\bash.exe, the WSL launcher, before PATH is
+    searched: on CI it failed with "Windows Subsystem for Linux must be updated"."""
+    if sys.platform != "win32":
+        return shutil.which("bash")
+    git = shutil.which("git")
+    if not git:
+        return None
+    for parent in Path(git).resolve().parents:
+        candidate = parent / "bin" / "bash.exe"
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+@pytest.mark.skipif(_git_bash() is None, reason="Git Bash not available")
 def test_script_parses():
-    r = subprocess.run(["bash", "-n", str(SCRIPT)], capture_output=True, timeout=30)
+    r = subprocess.run([_git_bash(), "-n", str(SCRIPT)], capture_output=True, timeout=30)
     assert r.returncode == 0, r.stderr.decode("utf-8", "replace")
 
 
