@@ -729,7 +729,10 @@ def test_ci_hide_loop_hides_a_folder_holding_only_one_of_the_patterns(tmp_path):
     )
     assert run.returncode == 0, run.stderr
     clean = env_file.read_text(encoding="utf-8").split("=", 1)[1].strip().split(":")
-    assert clean == [to_posix(neither)], clean
+    # Git Bash on a Windows runner prepends its own dirs (/mingw64/bin,
+    # /usr/bin, ~/bin) to PATH, so judge only the three dirs made here.
+    ours = {to_posix(d) for d in (only_py, only_uv, neither)}
+    assert [p for p in clean if p in ours] == [to_posix(neither)], clean
 
 
 
