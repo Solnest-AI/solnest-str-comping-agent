@@ -15,6 +15,7 @@ import io
 import os
 import re
 import sys
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from urllib.parse import urlparse
@@ -42,7 +43,7 @@ from adapters.airroi_to_comp import (
     map_batch_for_scorer, to_comp_property, subject_for_scorer,
     subject_performance_from_listing,
 )
-from comp_scorer import rank_comps
+from comp_scorer import bedroom_tolerance, guest_tolerance, rank_comps
 import comp_filters
 import comp_similarity
 
@@ -62,32 +63,25 @@ from report.template_engine import save_report
 from report.email_sender import send_report_email
 
 
-# ── Comp-pool helpers (module scope: the rescue path runs when `selected` is
-#    empty, so these must not be nested inside a conditional) ──────────────
+# ── Comp-pool helpers ─────────────────────────────────────────────────
 
-def max_bed_diff(subject_bedrooms: int) -> int:
-    """Bedroom tolerance, mirroring comp_scorer's hard gate exactly."""
-    if subject_bedrooms <= 4:
-        return 1
-    if subject_bedrooms <= 7:
-        return 2
-    return 3
+# Every report shows exactly this many comps (Phase A and B both check it).
+COMPS_NEEDED = 6
 
 
-def max_guest_diff(subject_guests: int) -> int:
-    """Guest-capacity tolerance, mirroring comp_scorer's hard gate exactly."""
-    if subject_guests <= 6:
-        return 3
-    if subject_guests <= 10:
-        return 4
-    if subject_guests <= 16:
-        return 6
-    return 8
+def _listing_id(c: dict) -> str:
+    """The Airbnb listing id of a raw AirROI listing or a mapped scorer dict."""
+    li = c.get("listing_info") or {}
+    return str(li.get("listing_id") or c.get("airbnbId") or "")
+
+
+def _airroi_currency(prop: PropertyBasics) -> str:
+    """AirROI's currency parameter for this report: CAD comes back as "native"."""
+    return "native" if prop.currency == "CA$" else "usd"
 
 
 def _airbnb_id_to_url(c: dict) -> str:
-    li = c.get("listing_info") or {}
-    aid = li.get("listing_id") or c.get("airbnbId") or c.get("id") or ""
+    aid = _listing_id(c) or c.get("id") or ""
     return f"https://www.airbnb.com/rooms/{aid}" if aid else ""
 
 
@@ -664,7 +658,7 @@ async def _render_only(args) -> None:
             print(f"[Email] Failed: {e}")
 
 
-async def main() -> None:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=f"{config.BRANDING.get('company_name', 'STR')} Income Analysis Report Generator",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -715,8 +709,6 @@ Examples:
     parser.add_argument("--narratives", default=None, metavar="FILE",
                         help="Path to a narratives JSON file (as written by Claude Code from the "
                              "emitted *.narrative-brief.json). Skips any LLM call.")
-    parser.add_argument("--skip-financials", action="store_true",
-                        help="Skip AirROI (dev/testing only — produces an empty rentalizer)")
     parser.add_argument("--hero-url", default=None,
                         help="Manual subject hero image URL (use when MLS scrape is blocked)")
     parser.add_argument("--allow-other-unit", action="store_true",
@@ -726,10 +718,714 @@ Examples:
                         help="Manual realtor.ca listing URL (use when MLS search fails)")
     parser.add_argument("--currency", default=None, choices=["$", "CA$"],
                         help="Override currency (auto-detected from address: $ for US, CA$ for Canada)")
+    return parser
 
+
+# ── Pipeline steps ───────────────────────────────────────────────────
+
+def _apply_currency(args, prop: PropertyBasics) -> None:
+    """CLI override > AirROI country_code (authoritative) > address text."""
+    if args.currency:
+        prop.currency = args.currency
+    elif prop.country_code:
+        prop.currency = "CA$" if prop.country_code.upper() == "CA" else "$"
+    else:
+        prop.currency = _detect_currency(prop.address)
+
+
+def _print_subject(prop: PropertyBasics) -> None:
+    print(f"\n[Subject] {prop.short_address}")
+    print(f"          {prop.bedrooms}BR / {prop.bathrooms}BA / Sleeps {prop.max_guests} / Market: {prop.market}")
+    print(f"          Currency: {prop.currency}")
+    if prop.hero_image_url:
+        print(f"          Hero: {prop.hero_image_url[:80]}")
+
+
+def _stop_if_hero_refused(prop: PropertyBasics) -> None:
+    """Phase A refuses a missing or untrusted subject photo, but it runs after
+    the paid AirROI calls. An address often resolves to a local rental
+    company's site, whose photo is always refused, so check it here, free,
+    before spending anything (Sun Peaks address run, 2026-09-28)."""
+    hero_failures = check_subject_hero(prop.hero_image_url)
+    if not hero_failures:
+        return
+    print("\n[SANITY] Subject photo refused — stopping before any paid AirROI call.")
+    for failure in hero_failures:
+        print(f"  - {failure}")
+    print("  Fix: re-run with --hero-url set to a photo of this property on Airbnb, "
+          "Zillow, Realtor.ca or Redfin (right-click the photo > Copy image address).")
+    sys.exit(2)
+
+
+def _resource_subject_performance(prop: PropertyBasics, candidates_raw: list[dict]) -> None:
+    """Re-read the subject's performance from the comp pool, in the report's currency.
+
+    Step 1's get_listing() call defaults to currency="usd" and cannot pass the
+    right one, because the currency is derived from location_info.country_code
+    IN that same response. So on a Canadian property the subject's money fields
+    came back USD while the comps and the estimate came back CAD, and both were
+    then labelled CA$. Measured on Sun Peaks: own_performance 127,618 USD sat
+    next to revenue_estimate 188,668 CAD, a 1.3737x gap, and the report read as
+    though the property earned 32% below its own potential.
+    The subject is normally inside the comp pool, and that copy is in the SAME
+    currency as everything else, so re-source the performance block from there.
+    Costs nothing: the data is already in hand.
+    """
+    if prop.subject_performance is None or not prop.airroi_listing_id:
+        return
+    for cand in candidates_raw:
+        if _listing_id(cand) == str(prop.airroi_listing_id):
+            recast = subject_performance_from_listing(cand)
+            if recast is not None:
+                was = prop.subject_performance.annual_revenue
+                prop.subject_performance = recast
+                if abs(recast.annual_revenue - was) > 1:
+                    print(f"[AirROI] Subject performance re-sourced from the "
+                          f"comp pool for currency consistency: "
+                          f"{prop.currency}{was:,.0f} -> "
+                          f"{prop.currency}{recast.annual_revenue:,.0f}")
+            return
+    if _airroi_currency(prop) != "usd":
+        print("[AirROI] WARNING: subject not found in the comp pool; its "
+              "performance figures are USD while the report is "
+              f"{prop.currency}. Treat own_performance with caution.",
+              file=sys.stderr)
+
+
+async def _fetch_estimate_and_pool(prop: PropertyBasics) -> tuple[dict, list[dict], RentalizerData]:
+    """Steps 2-3: AirROI estimate + comparables, and the subject's rentalizer."""
+    print("\n--- Step 2: Calling AirROI (estimate + comparables) ---")
+    try:
+        estimate_data, candidates_raw = await run_airroi_pipeline(
+            prop, currency=_airroi_currency(prop),
+        )
+        rev = estimate_data.get("revenue") or 0
+        adr = estimate_data.get("average_daily_rate") or 0
+        occ = estimate_data.get("occupancy") or 0
+        print(f"[AirROI] Estimate: rev ${rev:,.0f} / ADR ${adr:.0f} / Occ {occ:.0%}")
+        print(f"[AirROI] Comp candidates: {len(candidates_raw)}")
+        if _adopt_estimate_location(prop, estimate_data):
+            print(f"[AirROI] Subject located from the estimate: "
+                  f"{prop.latitude:.5f}, {prop.longitude:.5f}")
+        _resource_subject_performance(prop, candidates_raw)
+    except AirROIError as e:
+        print(f"\n[AirROI] Pipeline error: {e}")
+        print("[AirROI] Check address/coordinates; try specifying --beds/--baths/--guests.")
+        sys.exit(1)
+
+    print("\n--- Step 3: Building subject rentalizer ---")
+    rentalizer = _build_rentalizer(estimate_data, prop)
+    implied_rev = rentalizer.adr * 365 * (rentalizer.occupancy_pct / 100)
+    print(f"[Rentalizer] ADR: {prop.currency}{rentalizer.adr:.0f} / Occ: {rentalizer.occupancy_pct:.0f}% / Implied yr rev: {prop.currency}{implied_rev:,.0f}")
+    return estimate_data, candidates_raw, rentalizer
+
+
+def _subject_airbnb_id(prop: PropertyBasics) -> str:
+    m = re.search(r"/rooms/(\d+)", prop.airbnb_url or "")
+    return m.group(1) if m else ""
+
+
+def _normalize_name(text: str) -> str:
+    """Lowercase, strip non-alphanumeric for fuzzy name comparison."""
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+def _drop_subject_from_pool(candidates_raw: list[dict], prop: PropertyBasics,
+                            subject_id: str) -> list[dict]:
+    """AirROI may return the queried property as one of its own "comparables"
+    when the property is itself an active Airbnb listing."""
+    subject_name_norm = _normalize_name(prop.title or prop.short_address)
+    filtered = []
+    for c in candidates_raw:
+        # Pass 1: Airbnb ID match
+        if subject_id and _listing_id(c) == subject_id:
+            continue
+        # Pass 2: Name match — ONLY when we have no listing id to compare on.
+        # Sibling units routinely share a title (9 Nashville listings share
+        # one), so with a known, different id this dropped 33% of the pool.
+        if not subject_id:
+            comp_name_norm = _normalize_name((c.get("listing_info") or {}).get("listing_name") or "")
+            if (len(subject_name_norm) >= 10 and len(comp_name_norm) >= 10
+                    and (subject_name_norm in comp_name_norm
+                         or comp_name_norm in subject_name_norm)):
+                continue
+        filtered.append(c)
+    if len(filtered) < len(candidates_raw):
+        print(f"[Scorer] Filtered subject's own listing out of comp pool "
+              f"({len(candidates_raw)} -> {len(filtered)})")
+    return filtered
+
+
+@dataclass
+class PoolFilters:
+    """What the subject needs from a comp, decided once and applied everywhere
+    a candidate can enter the pool."""
+    drop_on_water: bool
+    required: list[str]
+    lacking: list[str]
+    exclude_terms: list[str]
+
+    def select(self, candidates: list[dict]) -> comp_filters.PoolSelection:
+        return comp_filters.select_comp_pool(
+            candidates, drop_on_water=self.drop_on_water,
+            required_features=self.required, lacking_features=self.lacking,
+            exclude_terms=self.exclude_terms,
+        )
+
+
+def _decide_filters(args, prop: PropertyBasics) -> PoolFilters:
+    """Water proximity + must-have / must-not-have features.
+
+    An oceanfront comp inflates the projection for an inland subject, and a
+    comp without the subject's pool/hot tub is not comparable. Both are
+    decided from AirROI's own amenity list where it exists; host marketing
+    copy never overrules it.
+    """
+    subject_water = comp_filters.classify_water_proximity(
+        prop.title or "", prop.description or "", prop.amenities or [],
+    )
+    if args.subject_on_water:
+        subject_water = comp_filters.WATER_ON
+    drop_on_water = (
+        not args.allow_oceanfront_comps
+        and subject_water == comp_filters.WATER_INLAND
+    )
+
+    if args.require is not None:
+        required = [f.strip() for f in args.require.split(",") if f.strip()]
+    elif args.no_feature_filter:
+        required = []
+    else:
+        required = comp_filters.detect_required_features(
+            prop.title or "", prop.description or "", prop.amenities or [],
+        )
+
+    # The mirror image: premium features the subject does NOT have, so comps
+    # carrying them are left out (or ranked down when too few lack them).
+    lacking = [] if args.no_feature_filter else comp_filters.detect_lacking_features(
+        prop.title or "", prop.description or "", prop.amenities or [],
+        exclude=required,
+    )
+    prop.lacking_features = lacking
+
+    print(f"[Filters] Subject water proximity: {subject_water}"
+          f"{' — dropping on-water comps' if drop_on_water else ''}")
+    if required:
+        print(f"[Filters] Subject requires: {', '.join(required)}")
+    if lacking:
+        print(f"[Filters] Subject lacks: {', '.join(lacking)}")
+    elif not args.no_feature_filter and not comp_filters.subject_features_readable(
+            prop.description, prop.amenities):
+        print("[Filters] Subject amenities could not be read — comps not matched on pool/hot tub/ski access")
+
+    exclude_terms = (
+        [t.strip() for t in args.exclude.split(",") if t.strip()]
+        if args.exclude else []
+    )
+    return PoolFilters(drop_on_water, required, lacking, exclude_terms)
+
+
+def _print_selection(selection: comp_filters.PoolSelection, before_filters: int) -> None:
+    for line in selection.report.lines():
+        print(f"[Filters] {line}")
+    if selection.lacking_dropped:
+        print(f"[Filters] Dropped {len(selection.lacking_dropped)} comps with a feature the "
+              f"subject lacks:")
+        for name, extras in selection.lacking_dropped:
+            print(f"[Filters]     - {name[:50]}  (has: {', '.join(extras)})")
+    for feature in selection.lacking_relaxed:
+        print(f"[Filters] Too few comps without "
+              f"{comp_similarity.PREMIUM.get(feature, (0, feature.replace('_', ' ')))[1]} "
+              f"to leave them out — keeping them, ranked down by the scorer and disclosed")
+    for name in selection.excluded:
+        print(f"[Filters] Excluded by keyword: {name[:50]}")
+    if selection.relaxed:
+        # A filter that empties the pool is worse than no filter. Back off
+        # rather than fail the run, and say so out loud.
+        print(f"[Filters] Only {selection.report.kept - len(selection.excluded)} comps "
+              f"survived filtering (from {before_filters}). Relaxing filters to "
+              f"keep the report usable; --exclude still applies.")
+
+
+@dataclass
+class CompPool:
+    """The filtered comp pool plus what it took to build it."""
+    selection: comp_filters.PoolSelection
+    unfiltered: list[dict]       # every candidate seen, before filters
+    targeted_added: int = 0
+
+
+async def _targeted_search(args, prop: PropertyBasics, filters: PoolFilters,
+                           selection: comp_filters.PoolSelection,
+                           unfiltered: list[dict], subject_id: str) -> list[dict]:
+    """When AirROI's comparables are the wrong KIND, buy one radius search.
+
+    The comparables endpoint takes only location and size, so it can return
+    24 ski-in/ski-out listings for a cabin with no ski access (Sunburst, Sun
+    Peaks, 2026-09-26) and no ranking can fix a pool like that. One radius
+    search ($0.50, max 10 results) asks for listings without the features
+    the subject lacks, with the ones it has; they join the pool and go
+    through the same filters and scoring as everything else.
+
+    Returns the listings that are new to the pool.
+    """
+    reasons, by_type = comp_similarity.targeted_search_reasons(
+        selection.lacking_relaxed, selection.kept, prop.property_type,
+        required_short=comp_similarity.required_shortfall(unfiltered, filters.required))
+    if (not reasons or args.no_feature_filter
+            or prop.latitude is None or prop.longitude is None):
+        return []
+    print(f"[Targeted] {'; '.join(reasons)} — one radius search "
+          f"({comp_similarity.TARGETED_RADIUS_MILES} mi, $0.50) for listings that match")
+    flt = comp_similarity.targeted_search_filter(
+        bedrooms=prop.bedrooms, bed_tolerance=bedroom_tolerance(prop.bedrooms),
+        required=filters.required, lacking=filters.lacking,
+        listing_type=prop.property_type if by_type and not selection.lacking_relaxed else None,
+    )
+    try:
+        found = await search_radius(
+            latitude=float(prop.latitude), longitude=float(prop.longitude),
+            radius_miles=comp_similarity.TARGETED_RADIUS_MILES, filter=flt,
+            sort={"num_reviews": "desc"},
+            currency=_airroi_currency(prop),
+        )
+    except (AirROIError, httpx.HTTPError, asyncio.TimeoutError) as e:
+        print(f"[Targeted] Search failed ({type(e).__name__}) — continuing with "
+              f"AirROI's comparables", file=sys.stderr)
+        found = []
+    have = {_listing_id(c) for c in unfiltered}
+    new = [c for c in found
+           if _listing_id(c) not in have and _listing_id(c) != subject_id]
+    print(f"[Targeted] {len(found)} found, {len(new)} new to the pool")
+    return new
+
+
+async def _build_comp_pool(args, prop: PropertyBasics, candidates_raw: list[dict],
+                           filters: PoolFilters, subject_id: str) -> CompPool:
+    """Filters, then the operator's --exclude, then relax the FILTERS only if
+    the pool went thin. The exclusions survive the relaxation: an earlier
+    version re-read the unfiltered pool and quietly re-admitted the very comps
+    the operator had just removed by hand. See comp_filters.select_comp_pool
+    and tests/test_comp_pool_selection.py."""
+    unfiltered = list(candidates_raw)
+    selection = filters.select(unfiltered)
+    _print_selection(selection, len(unfiltered))
+
+    new = await _targeted_search(args, prop, filters, selection, unfiltered, subject_id)
+    if new:
+        unfiltered = unfiltered + new
+        selection = filters.select(unfiltered)
+        for name, extras in selection.lacking_dropped:
+            print(f"[Filters] (after targeted search) dropped {name[:50]}  "
+                  f"(has: {', '.join(extras)})")
+        for feature in selection.lacking_relaxed:
+            print(f"[Filters] (after targeted search) still too few comps without "
+                  f"{comp_filters.normalize_feature(feature).replace('_', ' ')}; "
+                  f"kept, ranked down and disclosed")
+    return CompPool(selection=selection, unfiltered=unfiltered, targeted_added=len(new))
+
+
+async def _first_usable(candidates: list[dict], need: int, *, log_prefix: str,
+                        ) -> tuple[list[dict], int]:
+    """Walk `candidates` in order and return the first `need` with a live
+    listing page AND a live cover photo, plus how many were probed.
+
+    Liveness is the slowest step in the pipeline and Airbnb throttles it, so
+    probe only as many as there are open slots, then reach further down for
+    replacements. Previously every ranked comp (20+) was probed to fill 6.
+    """
+    usable: list[dict] = []
+    checked = 0
+    while len(usable) < need and checked < len(candidates):
+        batch = candidates[checked:checked + (need - len(usable))]
+        batch_live = await _check_comps_usable(batch)
+        for cand, is_live in zip(batch, batch_live):
+            if is_live:
+                usable.append(cand)
+            else:
+                print(f"{log_prefix}{cand.get('name', '?')[:40]} ({_airbnb_id_to_url(cand)})")
+        checked += len(batch)
+    return usable, checked
+
+
+async def _rescue(live_selected: list[dict], hard_fails: list[dict],
+                  subject_for_scoring: dict) -> None:
+    """When strict scoring + the dead-listing filter leaves <6, dip into the
+    hard-failed pool and pick the closest matches to the subject. Appends to
+    `live_selected` in place."""
+    need = COMPS_NEEDED - len(live_selected)
+    print(f"[Scorer] Rescue pass — need {need} more comp(s) from disqualified pool")
+
+    subj_beds = subject_for_scoring.get("bedrooms") or 0
+    subj_sleeps = subject_for_scoring.get("max_guests") or subject_for_scoring.get("guests") or 0
+    subj_adr = subject_for_scoring.get("adr") or 0
+
+    def _closeness(c: dict) -> float:
+        """Lower = closer to subject."""
+        comp_beds = c.get("bedrooms") or 0
+        comp_sleeps = c.get("sleeps") or c.get("accommodates") or c.get("max_guests") or 0
+        comp_adr = c.get("nightly_rate") or 0  # rate paid, not ttm_avg_rate
+        bed_diff = abs(comp_beds - subj_beds)
+        sleep_diff = abs(comp_sleeps - subj_sleeps) / max(1, subj_sleeps)
+        adr_diff = abs(comp_adr - subj_adr) / max(1, subj_adr)
+        return (bed_diff * 2.0) + sleep_diff + adr_diff
+
+    already_picked_ids = {_listing_id(c) for c in live_selected}
+    rescue_candidates = [c for c in hard_fails
+                         if _listing_id(c) and _listing_id(c) not in already_picked_ids]
+    rescue_candidates.sort(key=_closeness)
+    rescue_liveness = await _check_comps_usable(rescue_candidates)
+
+    bed_tol = bedroom_tolerance(subj_beds or 0)
+    guest_tol = guest_tolerance(subj_sleeps or 0)
+    for cand, is_live in zip(rescue_candidates, rescue_liveness):
+        if len(live_selected) >= COMPS_NEEDED:
+            break
+        if not is_live:
+            continue
+
+        # NEVER rescue past the size gate. A 2BR/sleeps-6 is not a comp
+        # for a 5BR/sleeps-12 subject no matter how thin the pool is.
+        cb = cand.get("bedrooms")
+        cs = cand.get("sleeps") or cand.get("max_guests")
+        if subj_beds and cb is not None and abs(int(cb) - subj_beds) > bed_tol:
+            continue
+        if subj_sleeps and cs is not None and abs(int(cs) - subj_sleeps) > guest_tol:
+            continue
+
+        # Never rescue a dormant or dead listing.
+        cand_occ = float(cand.get("occupancy_pct") or 0)
+        if cand_occ < 25:
+            print(f"[Scorer] Skipping dormant rescue: {cand.get('name','?')[:35]} ({cand_occ:.0f}% occ)")
+            continue
+        if cand.get("l90d_nights_booked") == 0:
+            print(f"[Scorer] Skipping stale rescue: {cand.get('name','?')[:35]} (0 nights booked in 90d)")
+            continue
+
+        fail_reason = (cand.get("hard_fail_reason") or "")[:60]
+        print(f"[Scorer] Rescued [{cand.get('name','?')[:35]}] (was: {fail_reason})")
+        # Keep the provenance. Do NOT wipe hard_fail_reason — the
+        # methodology section discloses that this comp was rescued.
+        cand["rescued"] = True
+        cand["hard_fail"] = False
+        live_selected.append(cand)
+
+
+async def _pick_live_comps(result: dict, subject_for_scoring: dict) -> list[dict]:
+    """The top 6 ranked comps whose listing and photo are live, topped up from
+    the hard-failed pool when the ranking alone cannot fill six."""
+    if not (result["selected"] or result["ranked"] or result["hard_fails"]):
+        return result["selected"]
+    live_selected, probes = await _first_usable(
+        result["ranked"], COMPS_NEEDED,
+        log_prefix="[Scorer] Dropping dead listing or photo: ")
+    print(f"[Scorer] Liveness: {probes} probe(s) to fill {len(live_selected)} slot(s)")
+    if len(live_selected) < COMPS_NEEDED:
+        await _rescue(live_selected, result.get("hard_fails", []), subject_for_scoring)
+    return live_selected
+
+
+async def _widen(prop: PropertyBasics, selected: list[dict], mapped: list[dict],
+                 subject_for_scoring: dict, subject_id: str) -> None:
+    """Fewer than 6 comps: query adjacent bedroom counts. Appends to `selected`."""
+    need = COMPS_NEEDED - len(selected)
+    print(f"\n[Widening] Only {len(selected)} comps — need {need} more. Searching wider area...")
+
+    already_ids = {_listing_id(c) for c in selected}
+    # Also exclude all candidates we already scored (they failed for a reason)
+    already_ids |= {_listing_id(c) for c in mapped}
+    # Never re-admit the subject's own listing through the widening pass.
+    if subject_id:
+        already_ids.add(subject_id)
+
+    # Widen only as far as the scorer will actually accept. Querying ±2 for
+    # a 4BR subject returns 0/25 admissible comps: two wasted API calls
+    # whose ids then occupy `already_ids` slots.
+    tol = bedroom_tolerance(prop.bedrooms)
+    bed_deltas = sorted((d for d in range(-tol, tol + 1) if d and prop.bedrooms + d >= 1), key=abs)
+    has_coords = prop.latitude is not None and prop.longitude is not None
+
+    async def _fetch_wider(beds_delta: int) -> list[dict]:
+        try:
+            where = (dict(latitude=float(prop.latitude), longitude=float(prop.longitude))
+                     if has_coords else dict(address=prop.address))
+            return await get_comparables(
+                **where,
+                bedrooms=prop.bedrooms + beds_delta, baths=prop.bathrooms,
+                guests=max(2, prop.max_guests + int(beds_delta * 2.5)),
+                currency=_airroi_currency(prop),
+            )
+        except Exception as e:
+            print(f"[Widening] {prop.bedrooms + beds_delta}BR query failed: {e}", file=sys.stderr)
+            return []
+
+    wider_candidates = []
+    for batch in await asyncio.gather(*[_fetch_wider(d) for d in bed_deltas]):
+        for c in batch:
+            lid = _listing_id(c)
+            if not lid or lid in already_ids:
+                continue
+            already_ids.add(lid)
+            wider_candidates.append(c)
+
+    if wider_candidates:
+        print(f"[Widening] Found {len(wider_candidates)} new candidates from adjacent bedroom counts")
+        wider_result = rank_comps(subject_for_scoring, map_batch_for_scorer(wider_candidates),
+                                  top_n=need * 2)
+        wider_ranked = wider_result.get("ranked") or []
+        if wider_ranked:
+            wider_urls = [_airbnb_id_to_url(c) for c in wider_ranked]
+            wider_liveness = await _check_liveness(wider_urls)
+            for cand, is_live in zip(wider_ranked, wider_liveness):
+                if len(selected) >= COMPS_NEEDED:
+                    break
+                if is_live:
+                    print(f"[Widening] Added: {cand.get('name', '?')[:40]} ({cand.get('bedrooms')}BR)")
+                    selected.append(cand)
+                else:
+                    print(f"[Widening] Dead listing skipped: {cand.get('name', '?')[:35]}")
+
+    if len(selected) < COMPS_NEEDED:
+        print(f"[Widening] Still only {len(selected)} comps after widening — proceeding with what we have")
+
+
+def _pool_occupancies(mapped: list[dict], subject_id: str) -> list[float]:
+    """Occupancy of every candidate in the pool, not just the six comps.
+
+    Those six are picked for quality and sit near the market's 81st
+    percentile; anchoring to them over-projected by +47% across 125
+    backtested listings. Exclude the subject's own listing so a strong
+    subject cannot inflate its own market baseline.
+    """
+    out = []
+    for cand in mapped:
+        if subject_id and _listing_id(cand) == subject_id:
+            continue
+        occ = cand.get("occupancy_pct")
+        if occ is not None and occ > 0:
+            out.append(float(occ))
+    return out
+
+
+def _monthly_occupancy(rows: list) -> list[float | None]:
+    """Calendar-indexed monthly occupancy (percent) from metrics rows.
+
+    AirROI sends occupancy as a 0-1 fraction; a month with no row stays None.
+    """
+    monthly: list[float | None] = [None] * 12
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        try:
+            mo = int(str(r.get("date") or "").split("-")[1]) - 1
+        except (ValueError, IndexError):
+            continue
+        if not (0 <= mo <= 11):
+            continue
+        occ = r.get("occupancy")
+        v = occ.get("avg") if isinstance(occ, dict) else occ
+        if isinstance(v, (int, float)):
+            monthly[mo] = float(v) * 100 if float(v) <= 1 else float(v)
+    return monthly
+
+
+@dataclass
+class Seasonality:
+    data: list[float] = field(default_factory=list)
+    basis: str = ""
+    p25: list = field(default_factory=list)
+    p75: list = field(default_factory=list)
+    market_occ: list[dict] = field(default_factory=list)
+    missing_months: int = 0
+    subject_monthly: list[float | None] = field(default_factory=list)
+
+
+async def _market_curve(prop: PropertyBasics, rentalizer: RentalizerData,
+                        n_selected: int, out: Seasonality) -> None:
+    """Buy the whole-market curve for $0.11 (/markets/lookup $0.01 + occupancy
+    $0.10) before paying $0.60 for six per-comp metric calls.
+
+    It is cheaper AND better sourced: the six comps are selected for quality
+    and run above the market, which is the bias the occupancy anchor removes
+    from the headline. Verified live on Gatlinburg: 12 monthly rows with
+    p25-p90. Needs coordinates; falls through silently to the per-comp path.
+    """
+    if prop.latitude is None or prop.longitude is None:
+        return
+    try:
+        mkt = await lookup_market(float(prop.latitude), float(prop.longitude))
+        out.market_occ = await get_market_occupancy(mkt)
+        # Count months with REAL data. A no-data month still arrives as a
+        # row, with every percentile identical, so counting rows reported
+        # 12/12 for a market that only reported 9.
+        out.missing_months = market_months_missing(out.market_occ)
+        covered = max(0, len(out.market_occ) - out.missing_months)
+        where = mkt.get("locality") or mkt.get("region") or "market"
+        print(f"[Seasonal] AirROI market curve for {where}: {covered}/12 months"
+              + (f" ({out.missing_months} with no market data, filled from "
+                 f"adjacent months)" if out.missing_months else ""))
+        out.data, out.basis = derive_seasonal_data_with_basis(
+            rentalizer, comp_monthly_data=None,
+            market_occupancy=out.market_occ)
+        if out.data and out.basis == "market":
+            band = market_occupancy_band(out.market_occ)
+            out.p25 = [v for v in band["p25"] if v is not None] and band["p25"] or []
+            out.p75 = [v for v in band["p75"] if v is not None] and band["p75"] or []
+            print(f"[Seasonal] Market curve used — skipping {n_selected} per-comp metric "
+                  f"calls (${0.10 * n_selected:.2f} -> $0.11)")
+        else:
+            out.data = []
+            print("[Seasonal] Market curve too thin — falling back to per-comp metrics")
+    except (AirROIError, httpx.HTTPError, asyncio.TimeoutError) as e:
+        print(f"[Seasonal] Market curve unavailable ({type(e).__name__}) — "
+              "falling back to per-comp metrics", file=sys.stderr)
+        out.data = []
+
+
+async def _subject_monthly(prop: PropertyBasics) -> list[float | None]:
+    """THIS property's own monthly line, to overlay on the market band.
+
+    Only bought when the property actually has a track record: for a
+    pre-purchase comp there is nothing to plot and nothing is invented to fill
+    it. One /listings/metrics/all call, $0.10. Gated on subject_performance,
+    NOT on the market curve: this call is also what tells us how many months
+    the listing has actually been live, which decides whether the calculator
+    may anchor to its trailing year at all.
+    """
+    if prop.subject_performance is None or not prop.airroi_listing_id:
+        return []
+    try:
+        rows = await get_listing_metrics(
+            listing_id=int(prop.airroi_listing_id), num_months=12,
+            currency=_airroi_currency(prop),
+        )
+    except (AirROIError, httpx.HTTPError, asyncio.TimeoutError) as e:
+        print(f"[Seasonal] Subject monthly unavailable ({type(e).__name__}) — "
+              "chart will show the market band only", file=sys.stderr)
+        return []
+    monthly = _monthly_occupancy(rows)
+    open_months = sum(1 for v in monthly if v is not None)
+    prop.subject_performance.months_with_data = open_months
+    print(f"[Seasonal] Subject's own line: {open_months}/12 months with data "
+          f"(months with no data = listing was not open)")
+    if not prop.subject_performance.is_stabilized:
+        print(f"[Seasonal] Subject is NOT stabilized ({open_months}/12 months) — "
+              f"its trailing-12-month figures cover a period it was not listed "
+              f"for, so the projection will anchor to the market instead")
+    return monthly
+
+
+async def _comp_monthly(prop: PropertyBasics, selected: list[dict]) -> list[list[float | None]]:
+    """Per-comp monthly occupancy, $0.10 each. Only when the market curve failed."""
+    async def _one(c: dict) -> list[float | None]:
+        try:
+            listing_id = _listing_id(c) or c.get("id")
+            if not listing_id:
+                return [None] * 12
+            rows = await get_listing_metrics(
+                listing_id=int(listing_id), num_months=12,
+                currency=_airroi_currency(prop),
+            )
+            return _monthly_occupancy(rows)
+        except Exception as e:
+            print(f"[Seasonal] Comp monthly fetch failed: {e}", file=sys.stderr)
+            return [None] * 12
+
+    return list(await asyncio.gather(*[_one(c) for c in selected]))
+
+
+async def _seasonality(prop: PropertyBasics, rentalizer: RentalizerData,
+                       estimate_data: dict, selected: list[dict]) -> Seasonality:
+    """Step 8: the monthly occupancy curve, cheapest good source first."""
+    print("\n--- Step 8: Seasonal occupancy from market data ---")
+    out = Seasonality()
+    await _market_curve(prop, rentalizer, len(selected), out)
+    out.subject_monthly = await _subject_monthly(prop)
+
+    if not out.data:
+        comp_monthly_data = await _comp_monthly(prop, selected) if selected else []
+        # Keep the basis: the methodology names the chart's source from it.
+        out.data, out.basis = derive_seasonal_data_with_basis(
+            rentalizer, comp_monthly_data=comp_monthly_data,
+        )
+
+    # Fallback: derive seasonal occupancy from AirROI's monthly revenue distributions
+    if not out.data:
+        distributions = estimate_data.get("monthly_revenue_distributions") or []
+        if isinstance(distributions, list) and len(distributions) == 12:
+            # Revenue ratios are proportional to occupancy × ADR. Assume ADR
+            # is roughly constant month-to-month, so ratios approximate
+            # relative occupancy. Scale so the average equals annual_occ.
+            avg_ratio = sum(distributions) / 12  # should be ~0.0833
+            if avg_ratio > 0:
+                out.data = [
+                    min(round((ratio / avg_ratio) * rentalizer.occupancy_pct, 1), 95.0)
+                    for ratio in distributions
+                ]
+                out.basis = "revenue_distribution"
+                print("[Seasonal] Derived from AirROI monthly revenue distributions")
+
+    if not out.data:
+        print("[Seasonal] ERROR: no usable monthly data from AirROI.")
+        print("[Seasonal] Cannot deliver report without real seasonal data — exiting.")
+        sys.exit(2)
+    return out
+
+
+_BASIS_LABEL = {
+    "subject":        "the subject's own trailing 12 months",
+    "market_typical": "market median occupancy (no stabilized year of the subject's own)",
+    "market_strong":  "market UPPER QUARTILE (subject beat the market median in every month it ran)",
+    "comp_set":       "comp-set median (no pool or subject history available)",
+}
+
+_SEASONAL_SOURCE = {
+    "market": "AirROI market curve (p50, with p25-p75 band)",
+    "comps": "AirROI per-comp average",
+    "subject": "this property's own monthly history",
+    "revenue_distribution": "AirROI revenue distribution",
+}
+
+
+def _print_calculator(prop: PropertyBasics, calculator, n_pool: int,
+                      season: Seasonality) -> None:
+    labels = {**_BASIS_LABEL, "market_pool": f"market pool median of {n_pool} listings"}
+    print(f"[Calculator] Occ: {calculator.occ_min}-{calculator.occ_max}% (default {calculator.occ_default}%)")
+    print(f"[Calculator]   occupancy basis: {labels.get(calculator.occ_basis, calculator.occ_basis)}")
+    print(f"[Calculator] ADR: {prop.currency}{calculator.adr_min:,} - {prop.currency}{calculator.adr_max:,} (default {prop.currency}{calculator.adr_default:,})")
+    print(f"[Calculator]   rate basis: {labels.get(calculator.adr_basis, calculator.adr_basis)}")
+    print(f"[Calculator] Nights listed default: {calculator.days_default}")
+    print(f"[Seasonal] Source: {_SEASONAL_SOURCE.get(season.basis, 'unknown')}")
+    print(f"[Seasonal] Monthly occ: {[int(v) for v in season.data]}")
+
+
+def _write_report_data(report_data: ReportData) -> None:
+    """Cache the assembled pipeline output so the copy can be improved later
+    without paying for the data again. This is what makes the Claude Code
+    narrative loop free instead of a second full run."""
+    config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    data_path = report_data_path(config.OUTPUT_DIR, report_data.property)
+    data_path.write_text(report_data.model_dump_json(indent=1), encoding="utf-8")
+    print(f"[Data] Pipeline output cached: {data_path.name}")
+
+
+def _maybe_email(args, short_address: str, output_path: Path) -> None:
+    if not args.email:
+        print("\n--- Email skipped (no --email provided) ---")
+        return
+    print(f"\n--- Emailing report to {args.email} ---")
+    try:
+        send_report_email(args.email, short_address, output_path)
+    except Exception as e:
+        print(f"[Email] Failed: {e}")
+        print("[Email] Report was still saved locally.")
+
+
+async def main() -> None:
+    parser = _build_parser()
     args = parser.parse_args()
 
-    if getattr(args, "no_cache", False):
+    if args.no_cache:
         os.environ["AIRROI_CACHE"] = "0"
 
     # Every student brands the report before the first run: without
@@ -755,492 +1451,46 @@ Examples:
     # Step 1: Resolve subject
     print("--- Step 1/10: Resolving subject property ---")
     prop = await _resolve_subject(args)
+    _apply_currency(args, prop)
+    _print_subject(prop)
+    _stop_if_hero_refused(prop)
 
-    # Currency: CLI override > AirROI country_code (authoritative) > address text
-    if args.currency:
-        prop.currency = args.currency
-    elif getattr(prop, "country_code", None):
-        prop.currency = "CA$" if prop.country_code.upper() == "CA" else "$"
-    else:
-        prop.currency = _detect_currency(prop.address)
-
-    print(f"\n[Subject] {prop.short_address}")
-    print(f"          {prop.bedrooms}BR / {prop.bathrooms}BA / Sleeps {prop.max_guests} / Market: {prop.market}")
-    print(f"          Currency: {prop.currency}")
-    if prop.hero_image_url:
-        print(f"          Hero: {prop.hero_image_url[:80]}")
-
-    # Phase A refuses a missing or untrusted subject photo, but it runs after
-    # the paid AirROI calls. An address often resolves to a local rental
-    # company's site, whose photo is always refused, so check it here, free,
-    # before spending anything (Sun Peaks address run, 2026-09-28).
-    hero_failures = check_subject_hero(prop.hero_image_url)
-    if hero_failures and not args.skip_financials:
-        print("\n[SANITY] Subject photo refused — stopping before any paid AirROI call.")
-        for failure in hero_failures:
-            print(f"  - {failure}")
-        print("  Fix: re-run with --hero-url set to a photo of this property on Airbnb, "
-              "Zillow, Realtor.ca or Redfin (right-click the photo > Copy image address).")
-        sys.exit(2)
-
-    # Step 2-3: AirROI pipeline (estimate + comparables)
-    if args.skip_financials:
-        print("\n--- Steps 2-3: AirROI skipped (--skip-financials) ---")
-        estimate_data: dict = {}
-        candidates_raw: list = []
-        rentalizer = RentalizerData(revenue_potential=0, adr=0, occupancy_pct=0)
-    else:
-        # Map internal currency to AirROI param
-        airroi_currency = "native" if prop.currency == "CA$" else "usd"
-
-        print("\n--- Step 2: Calling AirROI (estimate + comparables) ---")
-        try:
-            estimate_data, candidates_raw = await run_airroi_pipeline(
-                prop, currency=airroi_currency,
-            )
-            rev = estimate_data.get("revenue") or 0
-            adr = estimate_data.get("average_daily_rate") or 0
-            occ = estimate_data.get("occupancy") or 0
-            print(f"[AirROI] Estimate: rev ${rev:,.0f} / ADR ${adr:.0f} / Occ {occ:.0%}")
-            print(f"[AirROI] Comp candidates: {len(candidates_raw)}")
-            if _adopt_estimate_location(prop, estimate_data):
-                print(f"[AirROI] Subject located from the estimate: "
-                      f"{prop.latitude:.5f}, {prop.longitude:.5f}")
-
-            # CURRENCY FIX. Step 1's get_listing() call defaults to currency="usd"
-            # and cannot pass the right one, because the currency is derived from
-            # location_info.country_code IN that same response. So on a Canadian
-            # property the subject's money fields came back USD while the comps and
-            # the estimate came back CAD, and both were then labelled CA$.
-            # Measured on Sun Peaks: own_performance 127,618 USD sat next to
-            # revenue_estimate 188,668 CAD, a 1.3737x gap, and the report read as
-            # though the property earned 32% below its own potential.
-            # The subject is normally inside the comp pool, and that copy is in the
-            # SAME currency as everything else, so re-source the performance block
-            # from there. Costs nothing: the data is already in hand.
-            if prop.subject_performance is not None and prop.airroi_listing_id:
-                for cand in candidates_raw:
-                    li = cand.get("listing_info") or {}
-                    if str(li.get("listing_id") or "") == str(prop.airroi_listing_id):
-                        recast = subject_performance_from_listing(cand)
-                        if recast is not None:
-                            was = prop.subject_performance.annual_revenue
-                            prop.subject_performance = recast
-                            if abs(recast.annual_revenue - was) > 1:
-                                print(f"[AirROI] Subject performance re-sourced from the "
-                                      f"comp pool for currency consistency: "
-                                      f"{prop.currency}{was:,.0f} -> "
-                                      f"{prop.currency}{recast.annual_revenue:,.0f}")
-                        break
-                else:
-                    if airroi_currency != "usd":
-                        print("[AirROI] WARNING: subject not found in the comp pool; its "
-                              "performance figures are USD while the report is "
-                              f"{prop.currency}. Treat own_performance with caution.",
-                              file=sys.stderr)
-        except AirROIError as e:
-            print(f"\n[AirROI] Pipeline error: {e}")
-            print("[AirROI] Check address/coordinates; try specifying --beds/--baths/--guests.")
-            sys.exit(1)
-
-        print("\n--- Step 3: Building subject rentalizer ---")
-        rentalizer = _build_rentalizer(estimate_data, prop)
-        implied_rev = rentalizer.adr * 365 * (rentalizer.occupancy_pct / 100)
-        print(f"[Rentalizer] ADR: {prop.currency}{rentalizer.adr:.0f} / Occ: {rentalizer.occupancy_pct:.0f}% / Implied yr rev: {prop.currency}{implied_rev:,.0f}")
-
-    # Step 4 (Airbtics market overlay) REMOVED 2026-09-20. AirROI is now the
-    # single market-data source: two providers meant "the market" silently
-    # meant different things on different client reports, only the AirROI call
-    # carries the p25/p75 percentiles the chart shades as a band, and on a
-    # measured run Airbtics consumed 7.4s of an 11.7s report while supplying
-    # nothing the AirROI market call does not.
+    # Steps 2-3: AirROI estimate + comparables
+    estimate_data, candidates_raw, rentalizer = await _fetch_estimate_and_pool(prop)
 
     # Step 5: Adapt comps + score
     print("\n--- Step 5: Adapter + scorer ---")
+    subject_id = _subject_airbnb_id(prop)
+    n_candidates = len(candidates_raw)
+    candidates_raw = _drop_subject_from_pool(candidates_raw, prop, subject_id)
+    n_subject_removed = n_candidates - len(candidates_raw)
 
-    # Filter the subject's own listing out of the comp pool — AirROI may
-    # return the queried property as one of its own "comparables" when the
-    # property is itself an active Airbnb listing.
-    subject_airbnb_id = ""
-    if prop.airbnb_url:
-        m = re.search(r"/rooms/(\d+)", prop.airbnb_url)
-        if m:
-            subject_airbnb_id = m.group(1)
-
-    def _normalize(text: str) -> str:
-        """Lowercase, strip non-alphanumeric for fuzzy name comparison."""
-        return re.sub(r"[^a-z0-9]", "", (text or "").lower())
-
-    subject_name_norm = _normalize(prop.title or prop.short_address)
-
-    before = len(candidates_raw)
-    filtered = []
-    for c in candidates_raw:
-        # AirROI uses nested structure — extract listing_id
-        li = c.get("listing_info") or {}
-        listing_id = str(li.get("listing_id") or "")
-
-        # Pass 1: Airbnb ID match
-        if subject_airbnb_id and listing_id == subject_airbnb_id:
-            continue
-        # Pass 2: Name match — ONLY when we have no listing id to compare on.
-        # Sibling units routinely share a title (9 Nashville listings share
-        # one), so with a known, different id this dropped 33% of the pool.
-        if not subject_airbnb_id:
-            comp_name_norm = _normalize(li.get("listing_name") or "")
-            if (len(subject_name_norm) >= 10 and len(comp_name_norm) >= 10
-                    and (subject_name_norm in comp_name_norm
-                         or comp_name_norm in subject_name_norm)):
-                continue
-        filtered.append(c)
-    candidates_raw = filtered
-    _funnel_candidates = before
-    _funnel_subject_removed = before - len(candidates_raw)
-    if len(candidates_raw) < before:
-        print(f"[Scorer] Filtered subject's own listing out of comp pool ({before} -> {len(candidates_raw)})")
-
-    _unfiltered_candidates = list(candidates_raw)
-
-    # ── Comp-set filters (water proximity + must-have features) ────────
-    # An oceanfront comp inflates the projection for an inland subject, and a
-    # comp without the subject's pool/hot tub is not comparable. Both are
-    # decided from AirROI's own amenity list where it exists; host marketing
-    # copy never overrules it.
-    subject_water = comp_filters.classify_water_proximity(
-        prop.title or "", prop.description or "", prop.amenities or [],
-    )
-    if args.subject_on_water:
-        subject_water = comp_filters.WATER_ON
-    drop_on_water = (
-        not args.allow_oceanfront_comps
-        and subject_water == comp_filters.WATER_INLAND
-    )
-
-    if args.require is not None:
-        required_features = [f.strip() for f in args.require.split(",") if f.strip()]
-    elif args.no_feature_filter:
-        required_features = []
-    else:
-        required_features = comp_filters.detect_required_features(
-            prop.title or "", prop.description or "", prop.amenities or [],
-        )
-
-    # The mirror image: premium features the subject does NOT have, so comps
-    # carrying them are left out (or ranked down when too few lack them).
-    lacking_features = [] if args.no_feature_filter else comp_filters.detect_lacking_features(
-        prop.title or "", prop.description or "", prop.amenities or [],
-        exclude=required_features,
-    )
-    prop.lacking_features = lacking_features
-
-    print(f"[Filters] Subject water proximity: {subject_water}"
-          f"{' — dropping on-water comps' if drop_on_water else ''}")
-    if required_features:
-        print(f"[Filters] Subject requires: {', '.join(required_features)}")
-    if lacking_features:
-        print(f"[Filters] Subject lacks: {', '.join(lacking_features)}")
-    elif not args.no_feature_filter and not comp_filters.subject_features_readable(
-            prop.description, prop.amenities):
-        print("[Filters] Subject amenities could not be read — comps not matched on pool/hot tub/ski access")
-
-    before_filters = len(candidates_raw)
-    _funnel_before_filters = before_filters
-    exclude_terms = (
-        [t.strip() for t in args.exclude.split(",") if t.strip()]
-        if args.exclude else []
-    )
-    # Filters, then the operator's --exclude, then relax the FILTERS only if
-    # the pool went thin. The exclusions survive the relaxation: an earlier
-    # version re-read the unfiltered pool and quietly re-admitted the very
-    # comps the operator had just removed by hand. See
-    # comp_filters.select_comp_pool and tests/test_comp_pool_selection.py.
-    selection = comp_filters.select_comp_pool(
-        _unfiltered_candidates, drop_on_water=drop_on_water,
-        required_features=required_features, lacking_features=lacking_features,
-        exclude_terms=exclude_terms,
-    )
-    for line in selection.report.lines():
-        print(f"[Filters] {line}")
-    if selection.lacking_dropped:
-        print(f"[Filters] Dropped {len(selection.lacking_dropped)} comps with a feature the "
-              f"subject lacks:")
-        for name, extras in selection.lacking_dropped:
-            print(f"[Filters]     - {name[:50]}  (has: {', '.join(extras)})")
-    for feature in selection.lacking_relaxed:
-        print(f"[Filters] Too few comps without "
-              f"{comp_similarity.PREMIUM.get(feature, (0, feature.replace('_', ' ')))[1]} "
-              f"to leave them out — keeping them, ranked down by the scorer and disclosed")
-    for name in selection.excluded:
-        print(f"[Filters] Excluded by keyword: {name[:50]}")
-    if selection.relaxed:
-        # A filter that empties the pool is worse than no filter. Back off
-        # rather than fail the run, and say so out loud.
-        print(f"[Filters] Only {selection.report.kept - len(selection.excluded)} comps "
-              f"survived filtering (from {before_filters}). Relaxing filters to "
-              f"keep the report usable; --exclude still applies.")
-    # ── Targeted search: when AirROI's comparables are the wrong KIND ──
-    # The comparables endpoint takes only location and size, so it can return
-    # 24 ski-in/ski-out listings for a cabin with no ski access (Sunburst, Sun
-    # Peaks, 2026-09-26) and no ranking can fix a pool like that. One radius
-    # search ($0.50, max 10 results) asks for listings without the features
-    # the subject lacks, with the ones it has; they join the pool and go
-    # through the same filters and scoring as everything else.
-    targeted_added = 0
-    targeted_reasons, by_type = comp_similarity.targeted_search_reasons(
-        selection.lacking_relaxed, selection.kept, prop.property_type,
-        required_short=comp_similarity.required_shortfall(
-            _unfiltered_candidates, required_features))
-    if (targeted_reasons and not args.skip_financials and not args.no_feature_filter
-            and prop.latitude is not None and prop.longitude is not None):
-        print(f"[Targeted] {'; '.join(targeted_reasons)} — one radius search "
-              f"({comp_similarity.TARGETED_RADIUS_MILES} mi, $0.50) for listings that match")
-        flt = comp_similarity.targeted_search_filter(
-            bedrooms=prop.bedrooms, bed_tolerance=max_bed_diff(prop.bedrooms),
-            required=required_features, lacking=lacking_features,
-            listing_type=prop.property_type if by_type and not selection.lacking_relaxed else None,
-        )
-        try:
-            found = await search_radius(
-                latitude=float(prop.latitude), longitude=float(prop.longitude),
-                radius_miles=comp_similarity.TARGETED_RADIUS_MILES, filter=flt,
-                sort={"num_reviews": "desc"},
-                currency=("native" if prop.currency == "CA$" else "usd"),
-            )
-        except (AirROIError, httpx.HTTPError, asyncio.TimeoutError) as e:
-            print(f"[Targeted] Search failed ({type(e).__name__}) — continuing with "
-                  f"AirROI's comparables", file=sys.stderr)
-            found = []
-        have = {str((c.get("listing_info") or {}).get("listing_id") or "")
-                for c in _unfiltered_candidates}
-        new = [c for c in found
-               if str((c.get("listing_info") or {}).get("listing_id") or "") not in have
-               and str((c.get("listing_info") or {}).get("listing_id") or "") != subject_airbnb_id]
-        targeted_added = len(new)
-        print(f"[Targeted] {len(found)} found, {targeted_added} new to the pool")
-        if new:
-            _unfiltered_candidates = _unfiltered_candidates + new
-            _funnel_candidates += targeted_added
-            _funnel_before_filters += targeted_added
-            before_filters += targeted_added
-            selection = comp_filters.select_comp_pool(
-                _unfiltered_candidates, drop_on_water=drop_on_water,
-                required_features=required_features, lacking_features=lacking_features,
-                exclude_terms=exclude_terms,
-            )
-            for name, extras in selection.lacking_dropped:
-                print(f"[Filters] (after targeted search) dropped {name[:50]}  "
-                      f"(has: {', '.join(extras)})")
-            for feature in selection.lacking_relaxed:
-                print(f"[Filters] (after targeted search) still too few comps without "
-                      f"{comp_filters.normalize_feature(feature).replace('_', ' ')}; "
-                      f"kept, ranked down and disclosed")
-    candidates_raw = selection.kept
+    filters = _decide_filters(args, prop)
+    pool = await _build_comp_pool(args, prop, candidates_raw, filters, subject_id)
 
     # Comps kept despite a feature the subject lacks (lacking_relaxed) are
     # marked down by the scorer's two-way premium comparison (comp_similarity).
-    mapped = map_batch_for_scorer(candidates_raw)
-    subject_for_scoring = subject_for_scorer(prop, estimate_data if not args.skip_financials else {})
+    mapped = map_batch_for_scorer(pool.selection.kept)
+    subject_for_scoring = subject_for_scorer(prop, estimate_data)
     # Over-select so we have replacement candidates for any dead Airbnb listings
     result = rank_comps(subject_for_scoring, mapped, top_n=12)
-
-    # Drop any selected comp whose Airbnb URL is gone (HTTP 4xx/5xx).
-    # Walk the ranked list and pick the first 6 with live URLs.
-    if not args.skip_financials and (result["selected"] or result["ranked"] or result["hard_fails"]):
-        # Liveness is the slowest step in the pipeline and Airbnb throttles it.
-        # Probe the top 6 first; only reach further down the ranking for as many
-        # replacements as we actually need. Previously every ranked comp (20+)
-        # was probed to fill 6 slots.
-        ranked = result["ranked"]
-        live_selected = []
-        checked = 0
-        probes = 0
-        while len(live_selected) < 6 and checked < len(ranked):
-            need = 6 - len(live_selected)
-            batch = ranked[checked:checked + need]
-            batch_urls = [_airbnb_id_to_url(c) for c in batch]
-            batch_live = await _check_comps_usable(batch)
-            probes += len(batch)
-            for cand, url, is_live in zip(batch, batch_urls, batch_live):
-                if is_live:
-                    live_selected.append(cand)
-                else:
-                    print(f"[Scorer] Dropping dead listing or photo: {cand.get('name', '?')[:40]} ({url})")
-            checked += len(batch)
-        print(f"[Scorer] Liveness: {probes} probe(s) to fill {len(live_selected)} slot(s)")
-
-        # Rescue pass — when strict scoring + dead-listing filter leaves <6,
-        # dip into the hard-failed pool and pick the closest matches to the
-        # subject.
-        if len(live_selected) < 6:
-            need = 6 - len(live_selected)
-            print(f"[Scorer] Rescue pass — need {need} more comp(s) from disqualified pool")
-
-            subj_beds = subject_for_scoring.get("bedrooms") or 0
-            subj_sleeps = subject_for_scoring.get("max_guests") or subject_for_scoring.get("guests") or 0
-            subj_adr = subject_for_scoring.get("adr") or 0
-
-            def _closeness(c: dict) -> float:
-                """Lower = closer to subject."""
-                comp_beds = c.get("bedrooms") or 0
-                comp_sleeps = c.get("sleeps") or c.get("accommodates") or c.get("max_guests") or 0
-                comp_adr = c.get("nightly_rate") or 0  # rate paid, not ttm_avg_rate
-                bed_diff = abs(comp_beds - subj_beds)
-                sleep_diff = abs(comp_sleeps - subj_sleeps) / max(1, subj_sleeps)
-                adr_diff = abs(comp_adr - subj_adr) / max(1, subj_adr)
-                return (bed_diff * 2.0) + sleep_diff + adr_diff
-
-            already_picked_ids = set()
-            for c in live_selected:
-                li = c.get("listing_info") or {}
-                already_picked_ids.add(str(li.get("listing_id") or c.get("airbnbId") or ""))
-
-            rescue_candidates = []
-            for raw in result.get("hard_fails", []):
-                li = raw.get("listing_info") or {}
-                aid = str(li.get("listing_id") or raw.get("airbnbId") or "")
-                if not aid or aid in already_picked_ids:
-                    continue
-                rescue_candidates.append(raw)
-
-            rescue_candidates.sort(key=_closeness)
-
-            rescue_urls = [_airbnb_id_to_url(c) for c in rescue_candidates]
-            rescue_liveness = await _check_comps_usable(rescue_candidates)
-
-            bed_tol = max_bed_diff(subj_beds or 0)
-            guest_tol = max_guest_diff(subj_sleeps or 0)
-            for cand, url, is_live in zip(rescue_candidates, rescue_urls, rescue_liveness):
-                if len(live_selected) >= 6:
-                    break
-                if not is_live:
-                    continue
-
-                # NEVER rescue past the size gate. A 2BR/sleeps-6 is not a comp
-                # for a 5BR/sleeps-12 subject no matter how thin the pool is.
-                cb = cand.get("bedrooms")
-                cs = cand.get("sleeps") or cand.get("max_guests")
-                if subj_beds and cb is not None and abs(int(cb) - subj_beds) > bed_tol:
-                    continue
-                if subj_sleeps and cs is not None and abs(int(cs) - subj_sleeps) > guest_tol:
-                    continue
-
-                # Never rescue a dormant or dead listing.
-                cand_occ = float(cand.get("occupancy_pct") or 0)
-                if cand_occ < 25:
-                    print(f"[Scorer] Skipping dormant rescue: {cand.get('name','?')[:35]} ({cand_occ:.0f}% occ)")
-                    continue
-                if cand.get("l90d_nights_booked") == 0:
-                    print(f"[Scorer] Skipping stale rescue: {cand.get('name','?')[:35]} (0 nights booked in 90d)")
-                    continue
-
-                fail_reason = (cand.get("hard_fail_reason") or "")[:60]
-                print(f"[Scorer] Rescued [{cand.get('name','?')[:35]}] (was: {fail_reason})")
-                # Keep the provenance. Do NOT wipe hard_fail_reason — the
-                # methodology section discloses that this comp was rescued.
-                cand["rescued"] = True
-                cand["hard_fail"] = False
-                live_selected.append(cand)
-
-        result["selected"] = live_selected
+    result["selected"] = await _pick_live_comps(result, subject_for_scoring)
 
     comp_funnel = {
-        "candidates":      _funnel_candidates,
-        "subject_removed": _funnel_subject_removed,
-        "filtered_out":    max(0, _funnel_before_filters - len(mapped)),
+        "candidates":      n_candidates + pool.targeted_added,
+        "subject_removed": n_subject_removed,
+        "filtered_out":    max(0, len(pool.unfiltered) - len(mapped)),
         "hard_fails":      len(result["hard_fails"]),
         "selected":        len(result["selected"]),
     }
-    if targeted_added:
-        comp_funnel["targeted"] = {"added": targeted_added,
+    if pool.targeted_added:
+        comp_funnel["targeted"] = {"added": pool.targeted_added,
                                    "radius_miles": comp_similarity.TARGETED_RADIUS_MILES}
     print(f"[Scorer] Candidates: {len(mapped)} / Hard fails: {len(result['hard_fails'])} / Passing: {len(result['ranked'])}")
     print(f"[Scorer] Score range: {result['score_range']}")
 
-    # ── Widening pass: if <6 comps, search wider area with relaxed bedrooms ──
-    if not args.skip_financials and len(result["selected"]) < 6:
-        need = 6 - len(result["selected"])
-        print(f"\n[Widening] Only {len(result['selected'])} comps — need {need} more. Searching wider area...")
-
-        airroi_currency = "native" if prop.currency == "CA$" else "usd"
-        already_ids = set()
-        for c in result["selected"]:
-            li = c.get("listing_info") or {}
-            already_ids.add(str(li.get("listing_id") or ""))
-        # Also exclude all candidates we already scored (they failed for a reason)
-        for c in mapped:
-            li = c.get("listing_info") or {}
-            already_ids.add(str(li.get("listing_id") or ""))
-
-        # Never re-admit the subject's own listing through the widening pass.
-        if subject_airbnb_id:
-            already_ids.add(subject_airbnb_id)
-
-        # Widen only as far as the scorer will actually accept. Querying ±2 for
-        # a 4BR subject returns 0/25 admissible comps: two wasted API calls
-        # whose ids then occupy `already_ids` slots.
-        tol = max_bed_diff(prop.bedrooms)
-        wider_candidates = []
-        bed_deltas = [d for d in range(-tol, tol + 1) if d and prop.bedrooms + d >= 1]
-        bed_deltas.sort(key=abs)
-
-        has_coords = (
-            getattr(prop, "latitude", None) is not None
-            and getattr(prop, "longitude", None) is not None
-        )
-
-        async def _fetch_wider(beds_delta: int) -> list[dict]:
-            try:
-                beds_x = prop.bedrooms + beds_delta
-                guests_x = max(2, prop.max_guests + int(beds_delta * 2.5))
-                if has_coords:
-                    return await get_comparables(
-                        latitude=float(prop.latitude), longitude=float(prop.longitude),
-                        bedrooms=beds_x, baths=prop.bathrooms, guests=guests_x,
-                        currency=airroi_currency,
-                    )
-                else:
-                    return await get_comparables(
-                        address=prop.address,
-                        bedrooms=beds_x, baths=prop.bathrooms, guests=guests_x,
-                        currency=airroi_currency,
-                    )
-            except Exception as e:
-                print(f"[Widening] {prop.bedrooms + beds_delta}BR query failed: {e}", file=sys.stderr)
-                return []
-
-        wider_batches = await asyncio.gather(*[_fetch_wider(d) for d in bed_deltas])
-        for batch in wider_batches:
-            for c in batch:
-                li = c.get("listing_info") or {}
-                lid = str(li.get("listing_id") or "")
-                if not lid or lid in already_ids:
-                    continue
-                if subject_airbnb_id and lid == subject_airbnb_id:
-                    continue
-                already_ids.add(lid)
-                wider_candidates.append(c)
-
-        if wider_candidates:
-            print(f"[Widening] Found {len(wider_candidates)} new candidates from adjacent bedroom counts")
-            wider_mapped = map_batch_for_scorer(wider_candidates)
-            wider_result = rank_comps(subject_for_scoring, wider_mapped, top_n=need * 2)
-
-            # Check liveness + fill remaining slots
-            wider_ranked = wider_result.get("ranked") or []
-            if wider_ranked:
-                wider_urls = [_airbnb_id_to_url(c) for c in wider_ranked]
-                wider_liveness = await _check_liveness(wider_urls)
-                for cand, url, is_live in zip(wider_ranked, wider_urls, wider_liveness):
-                    if len(result["selected"]) >= 6:
-                        break
-                    if is_live:
-                        print(f"[Widening] Added: {cand.get('name', '?')[:40]} ({cand.get('bedrooms')}BR)")
-                        result["selected"].append(cand)
-                    else:
-                        print(f"[Widening] Dead listing skipped: {cand.get('name', '?')[:35]}")
-
-        if len(result["selected"]) < 6:
-            print(f"[Widening] Still only {len(result['selected'])} comps after widening — proceeding with what we have")
+    if len(result["selected"]) < COMPS_NEEDED:
+        await _widen(prop, result["selected"], mapped, subject_for_scoring, subject_id)
         # The widening pass pulls from a second, larger query, so the funnel
         # above no longer describes where the delivered set came from. Say so
         # rather than printing a tally that does not add up.
@@ -1271,235 +1521,29 @@ Examples:
 
     # Step 7: Calculator defaults
     print("\n--- Step 7: Deriving calculator defaults ---")
-    # Anchor occupancy to the WHOLE market pool, not the six comps that made
-    # the report. Those six are picked for quality and sit near the market's
-    # 81st percentile; anchoring to them over-projected by +47% across 125
-    # backtested listings. `mapped` is every candidate the market query
-    # returned, before selection. Exclude the subject's own listing so a
-    # strong subject cannot inflate its own market baseline.
-    pool_occupancies = []
-    for cand in mapped:
-        li = cand.get("listing_info") or {}
-        if subject_airbnb_id and str(li.get("listing_id") or "") == subject_airbnb_id:
-            continue
-        occ = cand.get("occupancy_pct")
-        if occ is not None and occ > 0:
-            pool_occupancies.append(float(occ))
-
-    # The derive call itself now happens AFTER Step 8. It needs the market
+    pool_occupancies = _pool_occupancies(mapped, subject_id)
+    # The derive call itself happens AFTER Step 8. It needs the market
     # occupancy curve and the subject's own monthly line to decide whether the
-    # subject's trailing year is real, and both are bought down there. Deriving
-    # here and re-deriving later would render one set of numbers and disclose
-    # the other.
+    # subject's trailing year is real, and both are bought down there.
     print(f"[Calculator] Market pool: {len(pool_occupancies)} listings "
           f"(deferred until the market curve is in)")
 
-    # Step 8: Seasonal data — pull per-comp monthly metrics from AirROI
-    print("\n--- Step 8: Seasonal occupancy from market data ---")
+    season = await _seasonality(prop, rentalizer, estimate_data, result["selected"])
 
-    # COST GATE: /listings/metrics/all is $0.10 per comp ($0.60 for six), and
-    # derive_seasonal_data prioritises Airbtics over these. Fetching them first
-    # and discarding them was 60% of the AirROI bill on every market Airbtics
-    # covers. Try Airbtics first; only pay for per-comp metrics if it came up short.
-    # Before paying $0.60 for six per-comp metric calls, buy
-    # the whole-market curve for $0.11 (/markets/lookup $0.01 + occupancy $0.10).
-    # It is cheaper AND better sourced: the six comps are selected for quality
-    # and run above the market, which is the bias the occupancy anchor removes
-    # from the headline. Verified live on Gatlinburg: 12 monthly rows with
-    # p25-p90. Needs coordinates; falls through silently to the per-comp path.
-    missing_months = 0
-    market_occ: list[dict] = []
-    seasonal_p25: list[float] = []
-    seasonal_p75: list[float] = []
-    seasonal_data: list[float] = []
-    seasonal_basis = ""
-    if (not args.skip_financials
-            and getattr(prop, "latitude", None) is not None
-            and getattr(prop, "longitude", None) is not None):
-        try:
-            mkt = await lookup_market(float(prop.latitude), float(prop.longitude))
-            market_occ = await get_market_occupancy(mkt)
-            # Count months with REAL data. A no-data month still arrives as a
-            # row, with every percentile identical, so counting rows reported
-            # 12/12 for a market that only reported 9.
-            missing_months = market_months_missing(market_occ)
-            covered = max(0, len(market_occ) - missing_months)
-            where = mkt.get("locality") or mkt.get("region") or "market"
-            print(f"[Seasonal] AirROI market curve for {where}: {covered}/12 months"
-                  + (f" ({missing_months} with no market data, filled from "
-                     f"adjacent months)" if missing_months else ""))
-            seasonal_data, seasonal_basis = derive_seasonal_data_with_basis(
-                rentalizer, comp_monthly_data=None,
-                market_occupancy=market_occ)
-            if seasonal_data and seasonal_basis == "market":
-                band = market_occupancy_band(market_occ)
-                seasonal_p25 = [v for v in band["p25"] if v is not None] and band["p25"] or []
-                seasonal_p75 = [v for v in band["p75"] if v is not None] and band["p75"] or []
-                n = len(result["selected"])
-                print(f"[Seasonal] Market curve used — skipping {n} per-comp metric "
-                      f"calls (${0.10 * n:.2f} -> $0.11)")
-            else:
-                seasonal_data = []
-                print("[Seasonal] Market curve too thin — falling back to per-comp metrics")
-        except (AirROIError, httpx.HTTPError, asyncio.TimeoutError) as e:
-            print(f"[Seasonal] Market curve unavailable ({type(e).__name__}) — "
-                  "falling back to per-comp metrics", file=sys.stderr)
-            seasonal_data = []
-
-    # THIS property's own monthly line, to overlay on the market band. Only
-    # bought when the property actually has a track record: for a pre-purchase
-    # comp there is nothing to plot and nothing is invented to fill it.
-    # One /listings/metrics/all call, $0.10.
-    # Gated on subject_performance, NOT on seasonal_data: this call is also
-    # what tells us how many months the listing has actually been live, which
-    # decides whether the calculator may anchor to its trailing year at all.
-    # Skipping it in markets with a thin curve left exactly the properties
-    # most likely to be young with no way to detect that they were.
-    subject_monthly: list[float | None] = []
-    if (prop.subject_performance is not None
-            and prop.airroi_listing_id and not args.skip_financials):
-        try:
-            rows = await get_listing_metrics(
-                listing_id=int(prop.airroi_listing_id), num_months=12,
-                currency=("native" if prop.currency == "CA$" else "usd"),
-            )
-            subject_monthly = [None] * 12
-            for r in rows or []:
-                if not isinstance(r, dict):
-                    continue
-                try:
-                    mo = int(str(r.get("date") or "").split("-")[1]) - 1
-                except (ValueError, IndexError):
-                    continue
-                if not (0 <= mo <= 11):
-                    continue
-                occ = r.get("occupancy")
-                v = occ.get("avg") if isinstance(occ, dict) else occ
-                if isinstance(v, (int, float)):
-                    subject_monthly[mo] = float(v) * 100 if float(v) <= 1 else float(v)
-            open_months = sum(1 for v in subject_monthly if v is not None)
-            prop.subject_performance.months_with_data = open_months
-            print(f"[Seasonal] Subject's own line: {open_months}/12 months with data "
-                  f"(months with no data = listing was not open)")
-            if not prop.subject_performance.is_stabilized:
-                print(f"[Seasonal] Subject is NOT stabilized ({open_months}/12 months) — "
-                      f"its trailing-12-month figures cover a period it was not listed "
-                      f"for, so the projection will anchor to the market instead")
-        except (AirROIError, httpx.HTTPError, asyncio.TimeoutError) as e:
-            print(f"[Seasonal] Subject monthly unavailable ({type(e).__name__}) — "
-                  "chart will show the market band only", file=sys.stderr)
-            subject_monthly = []
-
-    comp_monthly_data: list[list[float | None]] = []
-    if not seasonal_data and not args.skip_financials and result["selected"]:
-        airroi_currency = "native" if prop.currency == "CA$" else "usd"
-
-        async def _fetch_comp_monthly(c: dict) -> list[float | None]:
-            """Fetch per-listing monthly occupancy from AirROI metrics endpoint."""
-            try:
-                li = c.get("listing_info") or {}
-                listing_id = li.get("listing_id") or c.get("airbnbId") or c.get("id")
-                if not listing_id:
-                    return [None] * 12
-                metrics = await get_listing_metrics(
-                    listing_id=int(listing_id),
-                    num_months=12,
-                    currency=airroi_currency,
-                )
-                monthly: list[float | None] = [None] * 12
-                for entry in metrics:
-                    if not isinstance(entry, dict):
-                        continue
-                    date_str = entry.get("date") or ""
-                    try:
-                        mo = int(str(date_str).split("-")[1]) - 1
-                        if 0 <= mo <= 11:
-                            occ_data = entry.get("occupancy") or {}
-                            if isinstance(occ_data, dict):
-                                occ_val = occ_data.get("avg")
-                                if occ_val is not None:
-                                    # AirROI returns 0-1; convert to percent
-                                    occ_pct = float(occ_val) * 100 if float(occ_val) <= 1 else float(occ_val)
-                                    monthly[mo] = occ_pct
-                    except (ValueError, IndexError, AttributeError):
-                        pass
-                return monthly
-            except Exception as e:
-                print(f"[Seasonal] Comp monthly fetch failed: {e}", file=sys.stderr)
-                return [None] * 12
-
-        # Fetch all comps in parallel
-        comp_monthly_data = await asyncio.gather(
-            *[_fetch_comp_monthly(c) for c in result["selected"]]
-        )
-
-    if not seasonal_data:
-        # Keep the basis: the methodology names the chart's source from it,
-        # and the discarding wrapper left this path reported as "".
-        seasonal_data, seasonal_basis = derive_seasonal_data_with_basis(
-            rentalizer,
-            comp_monthly_data=comp_monthly_data,
-        )
-
-    # Fallback: derive seasonal occupancy from AirROI's monthly revenue distributions
-    if not seasonal_data and not args.skip_financials:
-        distributions = estimate_data.get("monthly_revenue_distributions") or []
-        if isinstance(distributions, list) and len(distributions) == 12:
-            annual_occ = rentalizer.occupancy_pct  # e.g., 46%
-            # Revenue ratios are proportional to occupancy × ADR. Assume ADR
-            # is roughly constant month-to-month, so ratios approximate
-            # relative occupancy. Scale so the average equals annual_occ.
-            avg_ratio = sum(distributions) / 12  # should be ~0.0833
-            if avg_ratio > 0:
-                seasonal_data = [
-                    min(round((ratio / avg_ratio) * annual_occ, 1), 95.0)
-                    for ratio in distributions
-                ]
-                seasonal_basis = "revenue_distribution"
-                print("[Seasonal] Derived from AirROI monthly revenue distributions")
-
-    if not seasonal_data:
-        print("[Seasonal] ERROR: no usable monthly data from Airbtics or AirROI.")
-        print("[Seasonal] Cannot deliver report without real seasonal data — exiting.")
-        sys.exit(2)
-
-    # Step 7 (deferred): calculator defaults, now that the market curve and the
-    # subject's own monthly line are both in hand.
     calculator = derive_calculator_defaults(
         comps, rentalizer, prop,
         pool_occupancies=pool_occupancies,
-        market_occupancy=market_occ,
-        subject_monthly=subject_monthly,
+        market_occupancy=season.market_occ,
+        subject_monthly=season.subject_monthly,
     )
-    _basis_label = {
-        "subject":        "the subject's own trailing 12 months",
-        "market_typical": "market median occupancy (no stabilized year of the subject's own)",
-        "market_strong":  "market UPPER QUARTILE (subject beat the market median in every month it ran)",
-        "market_pool":    f"market pool median of {len(pool_occupancies)} listings",
-        "comp_set":       "comp-set median (no pool or subject history available)",
-    }
-    print(f"[Calculator] Occ: {calculator.occ_min}-{calculator.occ_max}% (default {calculator.occ_default}%)")
-    print(f"[Calculator]   occupancy basis: {_basis_label.get(calculator.occ_basis, calculator.occ_basis)}")
-    print(f"[Calculator] ADR: {prop.currency}{calculator.adr_min:,} - {prop.currency}{calculator.adr_max:,} (default {prop.currency}{calculator.adr_default:,})")
-    print(f"[Calculator]   rate basis: {_basis_label.get(calculator.adr_basis, calculator.adr_basis)}")
-    print(f"[Calculator] Nights listed default: {calculator.days_default}")
-
-    source = {"market": "AirROI market curve (p50, with p25-p75 band)",
-              "comps": "AirROI per-comp average",
-              "subject": "this property's own monthly history",
-              "revenue_distribution": "AirROI revenue distribution"}.get(
-                  seasonal_basis, "unknown")
-    print(f"[Seasonal] Source: {source}")
-    print(f"[Seasonal] Monthly occ: {[int(v) for v in seasonal_data]}")
+    _print_calculator(prop, calculator, len(pool_occupancies), season)
 
     # Derive the season labels from THIS market's actual revenue distribution
     # rather than the hardcoded BC-ski calendar. Must happen BEFORE narratives
     # are generated, or the prose falls back to month-free text while the
     # header shows the real season.
-    peak_label, shoulder_label = derive_season_labels(
-        (estimate_data or {}).get("monthly_revenue_distributions"),
-        seasonal_data,
-    )
+    monthly_distribution = estimate_data.get("monthly_revenue_distributions")
+    peak_label, shoulder_label = derive_season_labels(monthly_distribution, season.data)
     if peak_label:
         print(f"[Seasonal] {peak_label}")
 
@@ -1509,8 +1553,8 @@ Examples:
         prop, rentalizer, comps, calculator,
         peak_season_label=peak_label,
         shoulder_season_label=shoulder_label,
-        monthly_distribution=(estimate_data or {}).get("monthly_revenue_distributions"),
-        seasonal_data=seasonal_data,
+        monthly_distribution=monthly_distribution,
+        seasonal_data=season.data,
         narratives_file=args.narratives,
         output_dir=config.OUTPUT_DIR,
         input_ref=args.input,
@@ -1523,10 +1567,10 @@ Examples:
     methodology = build_methodology(
         prop, comps, peak_label, shoulder_label, calculator=calculator,
         comp_funnel=comp_funnel,
-        market_months_missing=missing_months,
-        seasonal_basis=seasonal_basis,
-        lacking_features=selection.lacking_acted,
-        lacking_relaxed=selection.lacking_relaxed,
+        market_months_missing=season.missing_months,
+        seasonal_basis=season.basis,
+        lacking_features=pool.selection.lacking_acted,
+        lacking_relaxed=pool.selection.lacking_relaxed,
     )
 
     print("\n--- Step 10: Rendering HTML report (to staging) ---")
@@ -1538,10 +1582,10 @@ Examples:
         narratives=narratives,
         methodology=methodology,
         report_date=date.today().strftime("%B %d, %Y"),
-        seasonal_data=seasonal_data,
-        seasonal_p25=seasonal_p25,
-        seasonal_p75=seasonal_p75,
-        subject_monthly=subject_monthly,
+        seasonal_data=season.data,
+        seasonal_p25=season.p25,
+        seasonal_p75=season.p75,
+        subject_monthly=season.subject_monthly,
     )
 
     # The Phase A gate ran before this calculator existed, so it only ever saw
@@ -1558,26 +1602,9 @@ Examples:
             print(f"  - {f}", file=sys.stderr)
         sys.exit(1)
 
-    # Cache the assembled pipeline output so the copy can be improved later
-    # without paying for the data again. This is what makes the Claude Code
-    # narrative loop free instead of a second full run.
-    config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    data_path = report_data_path(config.OUTPUT_DIR, prop)
-    data_path.write_text(report_data.model_dump_json(indent=1), encoding="utf-8")
-    print(f"[Data] Pipeline output cached: {data_path.name}")
-
+    _write_report_data(report_data)
     output_path = await _render_and_gate(report_data, slug)
-
-    # Email
-    if args.email:
-        print(f"\n--- Emailing report to {args.email} ---")
-        try:
-            send_report_email(args.email, prop.short_address, output_path)
-        except Exception as e:
-            print(f"[Email] Failed: {e}")
-            print("[Email] Report was still saved locally.")
-    else:
-        print("\n--- Email skipped (no --email provided) ---")
+    _maybe_email(args, prop.short_address, output_path)
 
     print()
     print("=" * 62)

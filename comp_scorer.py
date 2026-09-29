@@ -484,6 +484,26 @@ def _score_distance(comp: dict, subject: dict) -> tuple:
 
 # ── Main scoring function ──────────────────────────────────────────────────
 
+def bedroom_tolerance(subject_bedrooms: int) -> int:
+    """How many bedrooms a comp may differ by before the size gate fails it."""
+    if subject_bedrooms <= 4:
+        return 1
+    if subject_bedrooms <= 7:
+        return 2
+    return 3  # 8+ BR properties: allow ±3
+
+
+def guest_tolerance(subject_guests: int) -> int:
+    """How many guests a comp's capacity may differ by before the gate fails it."""
+    if subject_guests <= 6:
+        return 3
+    if subject_guests <= 10:
+        return 4
+    if subject_guests <= 16:
+        return 6
+    return 8  # 17+ guest properties: allow ±8
+
+
 def score_comp(
     comp: dict,
     subject_signals: dict,
@@ -531,12 +551,7 @@ def score_comp(
 
     # 2. Bedroom count mismatch — scale tolerance with property size
     if subject_bedrooms is not None and comp_bedrooms is not None:
-        if subject_bedrooms <= 4:
-            max_bed_diff = 1
-        elif subject_bedrooms <= 7:
-            max_bed_diff = 2
-        else:
-            max_bed_diff = 3  # 8+ BR properties: allow ±3
+        max_bed_diff = bedroom_tolerance(subject_bedrooms)
         bed_diff = abs(comp_bedrooms - subject_bedrooms)
         if bed_diff > max_bed_diff:
             hard_fail = True
@@ -547,14 +562,7 @@ def score_comp(
 
     # 3. Guest capacity mismatch — scale tolerance with property size
     if subject_guests is not None and comp_sleeps is not None:
-        if subject_guests <= 6:
-            max_guest_diff = 3
-        elif subject_guests <= 10:
-            max_guest_diff = 4
-        elif subject_guests <= 16:
-            max_guest_diff = 6
-        else:
-            max_guest_diff = 8  # 17+ guest properties: allow ±8
+        max_guest_diff = guest_tolerance(subject_guests)
         guest_diff = abs(comp_sleeps - subject_guests)
         if guest_diff > max_guest_diff:
             hard_fail = True

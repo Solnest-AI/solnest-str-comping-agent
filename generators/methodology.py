@@ -1,18 +1,11 @@
 """Build the methodology section dynamically from property + comp data."""
 
 from markupsafe import escape
+
+from comp_scorer import bedroom_tolerance
 from schema import (
     PropertyBasics, CompProperty, MethodologyData, CalculatorDefaults,
 )
-
-
-def _bed_tolerance(bedrooms: int) -> int:
-    """Mirror comp_scorer's bedroom gate so the stated criteria match reality."""
-    if bedrooms <= 4:
-        return 1
-    if bedrooms <= 7:
-        return 2
-    return 3
 
 
 def _occupancy_assumption(
@@ -194,12 +187,10 @@ def build_methodology(
     lacking_features: list[str] | tuple = (),
     lacking_relaxed: list[str] | tuple = (),
 ) -> MethodologyData:
-    tol = _bed_tolerance(prop.bedrooms)
-    bed_low = max(0, prop.bedrooms - tol)
-    bed_high = prop.bedrooms + tol
-    bed_range = "studio" if bed_high == 0 else (
-        f"{bed_low}-{bed_high} bedroom" if bed_low != bed_high else f"{bed_low} bedroom"
-    )
+    # The same tolerance the scorer's size gate applies, so the stated
+    # criteria match what actually happened.
+    tol = bedroom_tolerance(prop.bedrooms)
+    bed_range = f"{max(0, prop.bedrooms - tol)}-{prop.bedrooms + tol} bedroom"
 
     criteria = [f"{bed_range.capitalize()} properties in {prop.market}"]
 
