@@ -15,7 +15,8 @@ load_dotenv(_env_path, override=True)
 
 
 def _get(key: str, default: str = "") -> str:
-    return os.getenv(key, default)
+    """A setting, or the default when it is unset or blank (`NARRATIVE_MODEL=`)."""
+    return (os.getenv(key) or "").strip() or default
 
 
 def key_from_connections_kit(name: str, claude_json: Path | None = None) -> str:
@@ -34,6 +35,8 @@ def key_from_connections_kit(name: str, claude_json: Path | None = None) -> str:
         servers = json.loads(path.read_text(encoding="utf-8")).get("mcpServers") or {}
     except (OSError, ValueError, AttributeError):
         return ""
+    if not isinstance(servers, dict):
+        return ""
     host, header, prefix = {
         "AIRROI_API_KEY": ("airroi.com", "X-API-KEY", ""),
         "FIRECRAWL_API_KEY": ("firecrawl.dev", "Authorization", "bearer "),
@@ -44,13 +47,14 @@ def key_from_connections_kit(name: str, claude_json: Path | None = None) -> str:
         if not isinstance(server, dict):
             continue
         value = ""
-        if host in (server.get("url") or ""):
-            value = str((server.get("headers") or {}).get(header) or "").strip()
+        url, headers, env = server.get("url"), server.get("headers"), server.get("env")
+        if isinstance(url, str) and host in url:
+            value = str((headers if isinstance(headers, dict) else {}).get(header) or "").strip()
             if prefix and value.lower().startswith(prefix):
                 value = value[len(prefix):].strip()
             elif prefix:
                 value = ""
-        value = value or str((server.get("env") or {}).get(name) or "").strip()
+        value = value or str((env if isinstance(env, dict) else {}).get(name) or "").strip()
         value = value or _key_beside_stdio_server(server, name)
         # A literal variable name or ${...} is a template, not a key.
         if value and value != name and not value.startswith("$"):
@@ -67,7 +71,8 @@ def _key_beside_stdio_server(server: dict, name: str) -> str:
     (airroi-official, key in a header) have only this copy. Found 2026-09-27
     on a Windows laptop with a working key that the agent reported missing.
     """
-    for arg in server.get("args") or []:
+    args = server.get("args")
+    for arg in args if isinstance(args, list) else []:
         if not isinstance(arg, str) or not arg.endswith(".py"):
             continue
         value = kit.read_env(Path(arg).parent / ".env").get(name, "")
@@ -105,13 +110,6 @@ AIRROI_BASE_URL: str = _get("AIRROI_BASE_URL", "https://api.airroi.com")
 FIRECRAWL_API_KEY, FIRECRAWL_KEY_SOURCE = _key("FIRECRAWL_API_KEY")
 FIRECRAWL_BASE_URL: str = _get("FIRECRAWL_BASE_URL", "https://api.firecrawl.dev/v1")
 
-# ── Airbtics (optional market-level overlay) ──
-AIRBTICS_API_KEY: str = _get("AIRBTICS_API_KEY")
-AIRBTICS_BASE_URL: str = _get(
-    "AIRBTICS_BASE_URL",
-    "https://crap0y5bx5.execute-api.us-east-2.amazonaws.com/prod",
-)
-
 # ── Anthropic (narrative generation) ──
 ANTHROPIC_API_KEY: str = _get("ANTHROPIC_API_KEY")
 # Default is the current-generation Sonnet. Measured on a real report:
@@ -130,12 +128,6 @@ OUTPUT_DIR: Path = Path(_get("OUTPUT_DIR", "./output"))
 
 # ── HTTP ──
 HTTP_TIMEOUT: int = 30
-
-# ── Ski resort seasonal template (Jan-Dec occupancy %) ──
-# Used when AirROI / Airbtics monthly data is unavailable
-SKI_RESORT_SEASONAL_TEMPLATE: list[float] = [
-    82, 85, 78, 45, 38, 42, 48, 52, 40, 35, 50, 75
-]
 
 
 def ensure_firecrawl_configured() -> None:

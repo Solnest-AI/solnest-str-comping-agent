@@ -164,7 +164,8 @@ def test_filters():
 def _render_header(branding: dict) -> str:
     import jinja2
     env = jinja2.Environment(autoescape=True)
-    env.filters.update(rgb=te.rgb, lighten=te.lighten, format_bath=te.format_bath)
+    env.filters.update(rgb=te.rgb, lighten=te.lighten, format_bath=te.format_bath,
+                       safe_url=te.safe_url)
     start = TEMPLATE.index("<!-- 1) Branded Header -->")
     end = TEMPLATE.index("</header>", start) + len("</header>")
     return env.from_string(TEMPLATE[start:end]).render(

@@ -170,7 +170,8 @@ def required_shortfall(pool: list, required, minimum: int = 10) -> list[str]:
     survived filtering, and the filters relaxed, dropping the hot-tub
     requirement. The targeted search only ran because pool was also short;
     this is the reason that should have fired on its own."""
-    return [f for f in required
+    canon = [comp_filters.normalize_feature(f) for f in required]
+    return [f for f in canon
             if sum(1 for c in pool if comp_filters.comp_has_feature(c, f)) < minimum]
 
 
@@ -180,6 +181,8 @@ def targeted_search_reasons(lacking_relaxed, kept: list, subject_type: Optional[
     is one of the reasons. Sunburst (Sun Peaks, 2026-09-26): 24 of AirROI's
     25 comparables were ski-in/ski-out for a cabin with no ski access, so no
     amount of ranking could produce a like-for-like set."""
+    required_short = [comp_filters.normalize_feature(f) for f in required_short]
+    lacking_relaxed = [comp_filters.normalize_feature(f) for f in lacking_relaxed]
     reasons = [f"too few comparables with {PREMIUM.get(f, (0, f.replace('_', ' ')))[1]}"
                for f in required_short]
     reasons += [f"too few comparables without {PREMIUM.get(f, (0, f.replace('_', ' ')))[1]}"
@@ -201,10 +204,17 @@ def targeted_search_filter(*, bedrooms: int, bed_tolerance: int, required=(), la
     same size band, its must-have features, none of the ones it lacks, and
     actually operating (the scorer's own 20% occupancy and 3-review floors).
     No revenue filter and no revenue sort: picking by earnings would bias the
-    comp set upward."""
+    comp set upward.
+
+    `required` / `lacking` may be raw --require spellings ("hot tub", "Pool");
+    they are normalized here, since an unrecognised key used to be dropped
+    from the search without a word. A studio (0 bedrooms) searches from 0."""
+    required = [comp_filters.normalize_feature(f) for f in required]
+    lacking = [comp_filters.normalize_feature(f) for f in lacking]
+    floor = 0 if bedrooms == 0 else 1
     flt: dict = {
         "room_type": {"eq": "entire_home"},
-        "bedrooms": {"range": [max(1, bedrooms - bed_tolerance), bedrooms + bed_tolerance]},
+        "bedrooms": {"range": [max(floor, bedrooms - bed_tolerance), bedrooms + bed_tolerance]},
         "ttm_adjusted_occupancy": {"gte": 0.2},
         "num_reviews": {"gte": 3},
     }

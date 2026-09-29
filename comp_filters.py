@@ -160,8 +160,12 @@ _ON_WATER_TEXT_STRONG: tuple[str, ...] = (
     r"\bdirect\s+(?:beach|ocean|gulf|water|lake)\s+access\b",
 )
 _ON_WATER_TEXT_TITLE: tuple[str, ...] = (
+    # A `*-front` word naming a place, not the stay ("Waterfront Park",
+    # "Riverfront District", "Harbourfront Market"), is not a waterfront claim.
     r"\b(?:ocean|beach|lake|gulf|river|water|bay|bayou|canal|creek|harbou?r|"
-    r"sea|surf|dock)\s*-?\s*front\b",
+    r"sea|surf|dock)\s*-?\s*front\b"
+    r"(?!\s+(?:parks?|markets?|districts?|plazas?|trails?|streets?|st|drive|dr|"
+    r"avenue|ave|road|rd|walk|boardwalk|square|mall|shops|promenade)\b)",
     # "Private Beach Access" is beach ACCESS, not a private beach. The old
     # classifier read it as on-water and dropped good comps.
     r"\bprivate\s+beach\b(?!\s*access)",
@@ -277,9 +281,16 @@ def strip_html(text: Optional[str]) -> str:
 # that stop the search. Commas count as boundaries so that the very common
 # "No smoking, no pets, pool and hot tub included" is NOT read as a negation.
 _NEGATION_WINDOW = 45
+# Deliberately absent: bare "non" ("non-smoking" is a house rule, not a missing
+# amenity), "never" ("never want to leave the hot tub"), and the contractions
+# can't/won't/couldn't/wouldn't ("you won't want to leave the hot tub"). Only
+# the be/do/have contractions negate a listing's contents. "not only / not to
+# mention / not just" introduce an amenity rather than deny it.
 _NEGATION_RE = re.compile(
-    r"(?:\b(?:no|not|non|without|lack|lacks|lacking|nor|never|none|cannot|"
-    r"exclude|excludes|excluding|unfortunately|sadly|sorry)\b|\w+n['’]t\b)"
+    r"(?:\b(?:no|not(?!\s+(?:only|to\s+mention|just)\b)|without|lack|lacks|"
+    r"lacking|nor|none|cannot|exclude|excludes|excluding|unfortunately|sadly|"
+    r"sorry)\b"
+    r"|\b(?:do|does|did|is|are|was|were|has|have|had)n['’]t\b)"
     r"[^.;,!?]{0,%d}$" % _NEGATION_WINDOW
 )
 
@@ -302,6 +313,13 @@ def _text_matches(text: str, patterns: Iterable[str]) -> bool:
             if not _is_negated(text, m.start()):
                 return True
     return False
+
+
+def text_has_keyword(text: str, keywords: Iterable[str]) -> bool:
+    """Any un-negated whole-word occurrence of a plain `keyword` in `text`
+    (already HTML-stripped and lowercased, see strip_html). Every occurrence is
+    checked, not just the first, so "no sauna ... private sauna" still counts."""
+    return _text_matches(text, [r"\b" + re.escape(kw) + r"\b" for kw in keywords])
 
 
 # ── Amenity handling ──────────────────────────────────────────────────────

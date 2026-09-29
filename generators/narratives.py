@@ -45,7 +45,6 @@ from generators.narrative_brief import (
     NARRATIVE_INPUT_SCHEMA,
     NARRATIVE_LIST_FIELDS,
     NARRATIVE_RULES,
-    _own_performance,
     nightly_rate_stats,
     build_narrative_brief,
     comp_occupancy_line,
@@ -53,8 +52,10 @@ from generators.narrative_brief import (
     months_from_label,
     narrative_brief_path,
     narratives_output_path,
-    report_data_path,
+    occupancy_band_text,
     occupancy_stats,
+    own_performance,
+    report_data_path,
     share_from_label,
     write_narrative_brief,
     rerun_command,
@@ -109,10 +110,9 @@ class NarrativeFileError(ValueError):
     """
 
 
-# The file loader is stricter than the tool call about the two list fields.
-# The tool call has a model filling a validated schema plus a three-attempt
-# retry loop behind it; a hand-written file has neither, and a missing list
-# renders as a silent hole in the report rather than an error.
+# Everything the schema requires, prose blocks and both lists. A missing list
+# renders as a silent hole in the report rather than an error, so the file
+# loader and the API path both reject it.
 _FILE_REQUIRED = NARRATIVE_FIELDS + NARRATIVE_LIST_FIELDS
 
 _LIST_ITEM_KEYS = {
@@ -121,10 +121,7 @@ _LIST_ITEM_KEYS = {
 }
 _LIST_EXPECTED_LEN = {"amenity_badges": 4, "positioning_cards": 3}
 
-_KNOWN_KEYS = set(_FILE_REQUIRED) | {
-    "peak_season_label",
-    "shoulder_season_label",
-}
+_KNOWN_KEYS = set(_FILE_REQUIRED)
 
 
 def _validate_narrative_data(data: dict, source: str) -> list[str]:
@@ -221,7 +218,14 @@ def load_narratives_from_file(
         )
 
     try:
-        raw = p.read_text(encoding="utf-8")
+        # utf-8-sig: Notepad and PowerShell's `>` write a BOM that json.loads
+        # rejects as "Unexpected UTF-8 BOM".
+        raw = p.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as e:
+        raise NarrativeFileError(
+            f"{p.resolve()} is not UTF-8 text ({e.reason} at byte {e.start}). "
+            f"Save the file as UTF-8 (in Notepad: Save As, Encoding: UTF-8)."
+        ) from e
     except OSError as e:
         raise NarrativeFileError(f"could not read {p.resolve()}: {e}") from e
 
@@ -304,7 +308,7 @@ def _build_prompt(
     if occ_stats:
         season_facts.append(
             f"- Comp-set adjusted occupancy: median {occ_stats['median']:.0f}%, "
-            f"range {occ_stats['low']:.0f}-{occ_stats['high']:.0f}% across {occ_stats['n']} properties"
+            f"range {occupancy_band_text(occ_stats['low'], occ_stats['high'])} across {occ_stats['n']} properties"
         )
     season_block = "\n".join(season_facts)
 
@@ -330,7 +334,7 @@ def _build_prompt(
     rules_block = "\n".join(f"- {r}" for r in NARRATIVE_RULES)
 
     # Same facts the Claude Code brief gets, so the two paths cannot drift.
-    _own = _own_performance(prop, occupancy_stats(comps))
+    _own = own_performance(prop, occupancy_stats(comps))
     if _own is None:
         subject_facts = (
             "- No trailing performance history (not yet listed, or too new). "
@@ -338,11 +342,16 @@ def _build_prompt(
             "measured result."
         )
     else:
+        # A young listing's occupancy and open nights cover months it did not
+        # exist (rule 11): withhold them rather than print them with a caveat.
+        stabilized = _own["is_stabilized"]
         subject_facts = "\n".join([
             f"- NOTE: {_own['_note']}",
             f"- Trailing 12 months revenue: ${_own['annual_revenue']:,.0f} (fees included)",
-            f"- Trailing 12 months adjusted occupancy: {_own['occupancy_pct']:.0f}%",
-            f"- Nights booked: {_own['nights_booked']} of {_own['nights_listed']} open nights",
+            *([f"- Trailing 12 months adjusted occupancy: {_own['occupancy_pct']:.0f}%"]
+              if stabilized else []),
+            (f"- Nights booked: {_own['nights_booked']} of {_own['nights_listed']} open nights"
+             if stabilized else f"- Nights booked: {_own['nights_booked']}"),
             (f"- Rate paid per booked night: ${_own['nightly_rate']:,.0f} (fees excluded)"
              if _own.get("nightly_rate") else "- Rate paid per booked night: unknown"),
             f"- POSITION vs comp median: {_own['position_vs_comp_median'] or 'unknown'}",
@@ -492,16 +501,18 @@ async def _generate_via_api(
             data = _extract_tool_input(message)
             if data is None:
                 raise ValueError("no tool_use block in response")
+            # The forced tool call does not enforce the schema: a model can
+            # still return an empty string or a short list. Same checks the
+            # file loader runs, and a failure retries.
+            problems = _validate_narrative_data(data, "API response")
+            if problems:
+                raise ValueError("; ".join(problems))
             return _parse_narratives(data, peak_label, shoulder_label)
 
         except (json.JSONDecodeError, ValueError) as e:
             print(f"[Narratives] Response parse error (attempt {attempt + 1}/3): {e}")
-        except anthropic.APIError as e:
-            print(f"[Narratives] API error (attempt {attempt + 1}/3): {e}")
-            if attempt < 2:
-                await asyncio.sleep(2 ** attempt)
         except Exception as e:
-            print(f"[Narratives] Unexpected error (attempt {attempt + 1}/3): {e}")
+            print(f"[Narratives] API error (attempt {attempt + 1}/3): {e}")
             if attempt < 2:
                 await asyncio.sleep(2 ** attempt)
 
@@ -523,7 +534,7 @@ async def generate_narratives(
     seasonal_data: Optional[list[float]] = None,
     narratives_file: Optional[PathLike] = None,
     output_dir: Optional[PathLike] = None,
-    input_ref: str = "",
+    input_ref: str = "",  # accepted for callers that still pass it; unused
     write_brief: bool = True,
 ) -> Narratives:
     """Produce the report's narrative copy.
@@ -579,7 +590,6 @@ async def generate_narratives(
                 shoulder_season_label=shoulder_label,
                 monthly_distribution=monthly_distribution,
                 seasonal_data=seasonal_data,
-                input_ref=input_ref,
             )
         except OSError as e:
             # A brief that cannot be written is a lost convenience, not a lost
@@ -599,7 +609,6 @@ def emit_narrative_brief(
     shoulder_season_label: str = "",
     monthly_distribution: Optional[list[float]] = None,
     seasonal_data: Optional[list[float]] = None,
-    input_ref: str = "",
     announce: bool = True,
 ) -> Path:
     """Write `<slug>.narrative-brief.json` into `output_dir` and print the loop.
@@ -617,7 +626,6 @@ def emit_narrative_brief(
         shoulder_season_label=shoulder_season_label,
         monthly_distribution=monthly_distribution,
         seasonal_data=seasonal_data,
-        input_ref=input_ref,
         narratives_path=str(narr_path.resolve()),
         data_path=str(report_data_path(out, prop)),
     )
@@ -670,11 +678,11 @@ def _template_positioning_summary(
     This used to open every report with "sits in a premium tier ... competes
     with the top of the STR market". Printed on a listing at 23.6% adjusted
     occupancy against a comp median of 59.9% (Four Corners, 2026-09-25).
-    The position comes from _own_performance, the same comparison the brief
+    The position comes from own_performance, the same comparison the brief
     hands the pass-two writer, so both passes rank the subject identically.
     """
     base = f"A {prop.bedrooms}-bedroom, {prop.max_guests}-guest property in {prop.market}"
-    own = _own_performance(prop, occ)
+    own = own_performance(prop, occ)
     if own is None:
         return (
             f"{base} with no Airbnb track record in AirROI, so every figure in "
@@ -739,6 +747,18 @@ def _template_guests_description(prop: PropertyBasics, comps: list[CompProperty]
             f"before marketing to the full count.")
 
 
+def _template_guest_profile(prop: PropertyBasics) -> str:
+    """Guest segments implied by capacity alone; nothing about the market."""
+    guests = prop.max_guests
+    if guests <= 2:
+        segment = "couples and solo travellers"
+    elif guests <= 4:
+        segment = "couples, small families and small groups of friends"
+    else:
+        segment = "larger groups, such as extended families and several couples travelling together"
+    return f"Target guest profile: {segment}, sized to the {guests}-guest capacity."
+
+
 def template_narratives(
     prop: PropertyBasics,
     comps: Optional[list[CompProperty]] = None,
@@ -775,10 +795,9 @@ def template_narratives(
             f"booking curve rather than a fixed calendar."
         )
     if occ_line:
-        peak_sentence += (
-            f" Across the full year {occ_line}, and the peak window is where "
-            f"the top of that range is set."
-        )
+        # The comp figures are ANNUAL adjusted occupancy: they say nothing
+        # about what any comp did inside the peak window.
+        peak_sentence += f" Across the full year {occ_line}."
     else:
         peak_sentence += (
             " Rate strategy should follow the market's own booking curve rather "
@@ -788,23 +807,19 @@ def template_narratives(
     # ---- shoulder season -------------------------------------------------
     if shoulder_months:
         shoulder_sentence = (
-            f"The shoulder window ({shoulder_months}) is where occupancy, not "
-            f"rate, decides the year."
+            f"The shoulder window ({shoulder_months}) is the rest of the year "
+            f"outside the peak."
         )
     else:
-        shoulder_sentence = (
-            "Outside the peak window, occupancy rather than rate decides the year."
-        )
+        shoulder_sentence = "The months outside the peak window make up the shoulder season."
     if occ and occ["high"] > occ["low"]:
         shoulder_sentence += (
-            f" The spread between the strongest and weakest comp is "
-            f"{occ['high'] - occ['low']:.0f} points of occupancy, which is the "
-            f"size of the addressable gap."
+            f" Across the full year the strongest and weakest comp differ by "
+            f"{occ['high'] - occ['low']:.0f} points of occupancy."
         )
     else:
         shoulder_sentence += (
-            " Amenity and listing-quality work is the lever that closes the gap "
-            "to the stronger operators in the set."
+            " Amenity and listing-quality work is a lever on off-peak occupancy."
         )
 
     # ---- amenity upside --------------------------------------------------
@@ -822,9 +837,8 @@ def template_narratives(
         )
     if occ:
         amenity_upside += (
-            f" With comp occupancy spanning {occ['low']:.0f}-{occ['high']:.0f}%, "
-            f"the difference between an average and a top-quartile listing here "
-            f"is measurable, not theoretical."
+            f" Comp occupancy spans {occupancy_band_text(occ['low'], occ['high'])}, "
+            f"so the listings in this set do not all perform alike."
         )
 
     # ---- positioning -----------------------------------------------------
@@ -845,11 +859,7 @@ def template_narratives(
     comp_list = list(comps or [])
     return Narratives(
         positioning_summary=_template_positioning_summary(prop, comp_list, occ),
-        guest_profile=(
-            f"Target guest profile: groups sized to the {prop.max_guests}-guest "
-            f"capacity: family and multi-couple travel, plus the holiday and "
-            f"event demand that {prop.market} draws."
-        ),
+        guest_profile=_template_guest_profile(prop),
         amenity_upside=amenity_upside,
         amenity_badges=[
             {"emoji": "✨", "text": "Amenity Differentiation"},
@@ -886,7 +896,3 @@ def template_narratives(
         shoulder_season_label=shoulder_season_label or "",
     )
 
-
-# Kept so anything still importing the old private name keeps working. The copy
-# is the default path now, not a fallback, hence the rename.
-_fallback_narratives = template_narratives

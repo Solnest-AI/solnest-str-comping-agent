@@ -368,7 +368,9 @@ def test_headline_potential_falls_back_when_percentiles_are_absent():
         {"revenue": 100_000.0, "average_daily_rate": 500.0, "occupancy": 0.5},
         _prop(None),
     )
-    assert r.revenue_potential > 100_000, "must still produce a ceiling"
+    # No p75 means no measured ceiling. The estimate itself is the only real
+    # number; the old `* 1.3` was a figure nobody measured, shown as p75.
+    assert r.revenue_potential == 100_000
 
 
 def test_brief_tells_the_writer_what_the_potential_actually_is():
@@ -424,7 +426,7 @@ def test_interpolated_months_are_disclosed():
     sp = CABIN.model_copy(update={"months_with_data": 3})
     m = build_methodology(_prop(sp), _comps(),
                           calculator=_defaults(sp, CABIN_MONTHLY),
-                          market_months_missing=3)
+                          market_months_missing=3, seasonal_basis="market")
     blob = " ".join(m.data_sources)
     assert "3 of 12" in blob and "not measured" in blob
 

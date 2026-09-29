@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;800;900&display=swap" rel="stylesheet">
 
@@ -96,16 +96,6 @@
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
-    }
-
-    @keyframes borderGlow {
-      0%, 100% { opacity: 0.5; }
-      50% { opacity: 1; }
-    }
-
-    .border-glow {
-      position: relative;
-      overflow: hidden;
     }
 
     .btn-primary {
@@ -651,7 +641,7 @@
           <div class="shrink-0 rounded-2xl{% if branding.logo_background %} px-5 py-4{% endif %}"
                {% if branding.logo_background %}style="background:{{ branding.logo_background }};"{% endif %}>
             <img
-              src="{{ branding.logo_url }}"
+              src="{{ branding.logo_url | safe_url }}"
               alt="{{ branding.company_name }} Logo"
               class="h-16 md:h-20 w-auto max-w-[220px] object-contain"
             />
@@ -678,9 +668,9 @@
           >
             📄 Print / Save PDF
           </button>
-          {% if branding.website_url %}
+          {% if branding.website_url | safe_url %}
           <a
-            href="{{ branding.website_url }}"
+            href="{{ branding.website_url | safe_url }}"
             target="_blank"
             class="btn-secondary"
           >
@@ -702,17 +692,17 @@
             {{ narratives.positioning_summary }}
           </p>
         </div>
-        {% if property.listing_url %}
+        {% if property.listing_url | safe_url %}
         <a
-          href="{{ property.listing_url }}"
+          href="{{ property.listing_url | safe_url }}"
           target="_blank"
           class="no-print btn-secondary"
         >
           🔗 View Listing
         </a>
-        {% elif property.airbnb_url %}
+        {% elif property.airbnb_url | safe_url %}
         <a
-          href="{{ property.airbnb_url }}"
+          href="{{ property.airbnb_url | safe_url }}"
           target="_blank"
           class="no-print btn-secondary"
         >
@@ -725,13 +715,13 @@
         <div class="lg:col-span-2 subject-card shadow-soft glass-card">
           <div class="subject-img-wrap">
             <img
-              src="{{ property.hero_image_url }}"
+              src="{{ property.hero_image_url | safe_url }}"
               alt="{{ property.short_address }} hero image"
               onerror="this.onerror=null; this.src='https://placehold.co/1200x800/f7f3ee/1f3c34?text=Subject+Image';"
             />
           </div>
 
-          {% if property.airbnb_url %}
+          {% if property.airbnb_url | safe_url %}
           {# ── Airbnb listing card ── #}
           <div class="subject-card-body">
             <div class="subject-card-title">
@@ -764,7 +754,7 @@
               {{ property.market }}
             </div>
           </div>
-          <a href="{{ property.airbnb_url }}" target="_blank" class="no-print subject-card-link">
+          <a href="{{ property.airbnb_url | safe_url }}" target="_blank" class="no-print subject-card-link">
             View on Airbnb &rarr;
           </a>
 
@@ -793,8 +783,8 @@
               {{ property.market }}
             </div>
           </div>
-          {% if property.listing_url %}
-          <a href="{{ property.listing_url }}" target="_blank" class="no-print subject-card-link">
+          {% if property.listing_url | safe_url %}
+          <a href="{{ property.listing_url | safe_url }}" target="_blank" class="no-print subject-card-link">
             View Listing &rarr;
           </a>
           {% endif %}
@@ -1063,7 +1053,7 @@
         <div class="comp-card avoid-break flex flex-col rounded-2xl overflow-hidden shadow-soft glass-card">
           <div class="image-overlay">
             <img
-              src="{{ comp.image_url }}"
+              src="{{ comp.image_url | safe_url }}"
               alt="{{ comp.name }}"
               class="w-full h-48 object-cover"
               onerror="this.onerror=null; this.src='https://placehold.co/900x600/f7f3ee/1f3c34?text=Comp+Image';"
@@ -1110,7 +1100,7 @@
               {% endif %}
             </div>
           </div>
-          <a href="{{ comp.airbnb_url }}" target="_blank"
+          <a href="{{ comp.airbnb_url | safe_url }}" target="_blank"
              class="block w-full text-center text-sm font-bold py-3 text-white transition-all hover:opacity-90"
              style="background:var(--sol-gradient-1);">View Listing →</a>
         </div>
@@ -1179,9 +1169,9 @@
       <p class="text-xs text-gray-400 font-medium uppercase tracking-widest">
         {{ branding.company_name }} · {{ branding.tagline }}
       </p>
-      {% if branding.website_url %}
+      {% if branding.website_url | safe_url %}
       <p class="text-xs text-gray-300 mt-2">
-        <a href="{{ branding.website_url }}" class="hover:text-sol-forest transition">{{ branding.website_url | replace("https://","") | replace("http://","") | trim("/") }}</a>
+        <a href="{{ branding.website_url | safe_url }}" class="hover:text-sol-forest transition">{{ branding.website_url | replace("https://","") | replace("http://","") | trim("/") }}</a>
       </p>
       {% endif %}
       <p class="text-xs text-gray-300 mt-1">

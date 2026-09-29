@@ -14,9 +14,6 @@ Phase B — post-render. Runs on the rendered HTML string/file.
 Blocking semantics: Phase A or Phase B failure raises SanityFailure and the
 agent exits with code 2. Staging-path pattern in agent.py ensures the user
 never sees a broken HTML file.
-
-Legacy: `run_sanity_checks(data)` preserved as a warnings-only wrapper for
-backward compat / diagnostics.
 """
 
 from __future__ import annotations
@@ -26,6 +23,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 
 import httpx
 from bs4 import BeautifulSoup
@@ -65,7 +63,7 @@ _TRUSTED_HERO_HOSTS = (
 
 # ── HTTP helpers ──────────────────────────────────────────────────────
 
-async def _head_ok(client: httpx.AsyncClient, url: str, *, accept_302: bool = True) -> tuple[str, bool, int]:
+async def _head_ok(client: httpx.AsyncClient, url: str) -> tuple[str, bool, int]:
     """HEAD request. Returns (url, ok, status_code)."""
     if not url:
         return url, False, 0
@@ -79,7 +77,7 @@ async def _head_ok(client: httpx.AsyncClient, url: str, *, accept_302: bool = Tr
         # 429 = rate-limited but URL exists (server processed the request).
         # Airbnb throttles when we check the same URLs twice in quick succession;
         # treat as alive rather than blocking the report.
-        ok = status < 400 or (accept_302 and status in (301, 302)) or status == 429
+        ok = status < 400 or status == 429
         return url, ok, status
     except Exception:
         return url, False, 0
@@ -133,7 +131,7 @@ def _check_comp_fields(comp: CompProperty) -> list[str]:
 # Revenue-plausibility band, calibrated on 200 live AirROI records.
 #
 # The identity that actually holds is:
-#     ttm_revenue ≈ (ttm_avg_rate × nights_booked) + cleaning/guest fees
+#     ttm_revenue = room revenue + cleaning/guest fees
 # so revenue / room_revenue is a FEE MULTIPLIER and is >= 1 by construction.
 # Observed on live data: min 0.784, median 1.192, p99 1.587, max 1.592.
 #
@@ -148,27 +146,30 @@ _REVENUE_RATIO_MAX = 2.50
 
 
 def _check_revenue_sanity(comp: CompProperty) -> Optional[str]:
-    """Check annual_revenue against room revenue (ADR × nights booked).
+    """Check annual_revenue against measured room revenue.
 
     Returns a failure string only when the relationship is impossible on the
     AirROI contract, which means we have corrupted the mapping somewhere.
+
+    Room revenue is `ttm_revpar x ttm_total_days` (CompProperty.room_revenue).
+    Without it there is nothing honest to compare against: ttm_avg_rate is not
+    the rate paid (off by -13.8% to +18.9%), so multiplying it by nights would
+    make this gate judge that noise instead of our mapping. No room revenue, no
+    check.
     """
     if comp.nights_booked <= 0 or comp.annual_revenue <= 0:
         return None  # handled by the field check
-    # Measured room revenue when we have it. adr x nights is only a fallback:
-    # ttm_avg_rate missed the rate paid by up to 19%, which is noise this gate
-    # should not be judging.
-    room_revenue = comp.room_revenue or (comp.adr * comp.nights_booked)
-    if room_revenue <= 0:
+    room_revenue = comp.room_revenue
+    if not room_revenue or room_revenue <= 0:
         return None
     ratio = comp.annual_revenue / room_revenue
     if ratio < _REVENUE_RATIO_MIN:
         return (f"[{comp.name}] annual_revenue (${comp.annual_revenue:,.0f}) is below "
-                f"{_REVENUE_RATIO_MIN:.0%} of ADR×booked nights (${room_revenue:,.0f}) — "
+                f"{_REVENUE_RATIO_MIN:.0%} of room revenue (${room_revenue:,.0f}) — "
                 f"mapping error or stale data")
     if ratio > _REVENUE_RATIO_MAX:
         return (f"[{comp.name}] annual_revenue (${comp.annual_revenue:,.0f}) exceeds "
-                f"{_REVENUE_RATIO_MAX:.0%} of ADR×booked nights (${room_revenue:,.0f}) — "
+                f"{_REVENUE_RATIO_MAX:.0%} of room revenue (${room_revenue:,.0f}) — "
                 f"mapping error suspected")
     return None
 
@@ -183,10 +184,20 @@ def check_subject_hero(url: str) -> list[str]:
     """
     if not url:
         return ["Subject hero_image_url is empty"]
-    host = url.split("://", 1)[-1].split("/", 1)[0].lower()
-    if not any(t in host for t in _TRUSTED_HERO_HOSTS):
+    # hostname, not a substring of the netloc: "evilmuscache.com" and
+    # "muscache.com@evil.com" both contain a trusted name.
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+    except ValueError:
+        parts, host = None, ""
+    trusted = (
+        parts is not None and parts.scheme in ("http", "https")
+        and any(host == t or host.endswith("." + t) for t in _TRUSTED_HERO_HOSTS)
+    )
+    if not trusted:
         return [
-            f"Subject hero from untrusted source: {host} "
+            f"Subject hero from untrusted source: {host or url} "
             f"(expected {', '.join(_TRUSTED_HERO_HOSTS)})"
         ]
     if "/maps/api/staticmap" in url.lower():
@@ -217,6 +228,16 @@ def validate_calculator_defaults(calc) -> list[str]:
             continue
         if not (a <= b <= c):
             failures.append(f"calculator {lo}<={mid}<={hi} violated: {a}, {b}, {c}")
+
+    d_lo, d_mid, d_hi = (getattr(calc, f, None)
+                         for f in ("days_min", "days_default", "days_max"))
+    if None not in (d_lo, d_mid, d_hi) and not (d_lo <= d_mid <= d_hi):
+        failures.append(f"calculator days_min<=days_default<=days_max violated: "
+                        f"{d_lo}, {d_mid}, {d_hi}")
+    for field in ("occ_min", "occ_default", "occ_max"):
+        v = getattr(calc, field, None)
+        if isinstance(v, (int, float)) and v > 100:
+            failures.append(f"calculator.{field} is over 100%: {v}")
     return failures
 
 
@@ -233,8 +254,13 @@ async def run_phase_a(data: ReportData) -> list[str]:
     n = len(data.comps)
     if n < 6:
         failures.append(
-            f"Only {n} comps — need 6 for a complete report. "
+            f"Only {n} comps — need exactly 6 for a complete report. "
             f"The widening pass should have searched adjacent markets/bedrooms."
+        )
+    elif n > 6:
+        failures.append(
+            f"{n} comps — need exactly 6 for a complete report. "
+            f"The selection step should have trimmed the set to 6."
         )
 
     # 2. Per-comp field completeness
@@ -271,14 +297,14 @@ async def run_phase_a(data: ReportData) -> list[str]:
         url_meta: list[tuple[str, str]] = []  # (kind, url)
 
         if prop.hero_image_url:
-            url_tasks.append(_head_ok(client, prop.hero_image_url, accept_302=True))
+            url_tasks.append(_head_ok(client, prop.hero_image_url))
             url_meta.append(("subject hero", prop.hero_image_url))
         for c in data.comps:
             if c.image_url:
-                url_tasks.append(_head_ok(client, c.image_url, accept_302=True))
+                url_tasks.append(_head_ok(client, c.image_url))
                 url_meta.append((f"comp hero [{c.name[:40]}]", c.image_url))
             if c.airbnb_url:
-                url_tasks.append(_head_ok(client, c.airbnb_url, accept_302=True))
+                url_tasks.append(_head_ok(client, c.airbnb_url))
                 url_meta.append((f"comp airbnb url [{c.name[:40]}]", c.airbnb_url))
 
         results = await asyncio.gather(*url_tasks, return_exceptions=True)
@@ -356,7 +382,7 @@ async def run_phase_b(html_path: Path) -> list[str]:
             timeout=20,
         ) as client:
             results = await asyncio.gather(
-                *[_head_ok(client, u, accept_302=True) for u in img_urls],
+                *[_head_ok(client, u) for u in img_urls],
                 return_exceptions=True,
             )
         for u, r in zip(img_urls, results):
@@ -396,14 +422,3 @@ def write_failure_report(
     print(f"\n  Full failure log: {path.resolve()}", file=sys.stderr)
     return path
 
-
-# ── Legacy warnings-only wrapper (for diagnostics) ────────────────────
-
-async def run_sanity_checks(data: ReportData) -> list[str]:
-    """Legacy non-blocking sanity check. Returns list of warnings.
-
-    Preserved for backwards compat in any caller that expects a warning list
-    rather than blocking behavior. New code should call `run_phase_a()` and
-    treat a non-empty return as blocking.
-    """
-    return await run_phase_a(data)

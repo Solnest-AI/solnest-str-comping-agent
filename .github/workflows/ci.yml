@@ -83,7 +83,14 @@ jobs:
           keep=""
           IFS=':' read -ra parts <<< "$PATH"
           for p in "${parts[@]}"; do
-            if ls "$p"/python* "$p"/python*.exe "$p"/uv "$p"/uv.exe >/dev/null 2>&1; then
+            # Any one match hides the directory. `ls a b c d` only succeeded
+            # when every pattern matched, so a folder holding just python.exe
+            # was left on PATH.
+            hide=0
+            for name in 'python*' uv uv.exe; do
+              if compgen -G "$p/$name" >/dev/null; then hide=1; break; fi
+            done
+            if [ "$hide" = 1 ]; then
               case "$p" in /usr/bin|/bin|/c/Windows*|/c/WINDOWS*) keep="$keep:$p" ;; *) echo "hiding $p" ;; esac
             else
               keep="$keep:$p"
@@ -110,7 +117,9 @@ jobs:
       - name: The skill's command form, setup.py through a pipe, stdin at EOF
         run: |
           export PATH="$CLEAN_PATH"
-          PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --help | head -3
+          PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --help > help.out
+          head -3 help.out
+          rm -f help.out
           "$PY" setup.py < /dev/null > setup.out 2>&1 || true
           ! grep -q Traceback setup.out || { cat setup.out; exit 1; }
           rm -f .env

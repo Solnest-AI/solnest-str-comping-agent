@@ -16,6 +16,7 @@ never touches a skill of the same name that it did not write.
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -25,15 +26,32 @@ PROJECT_SKILL = ROOT / ".claude" / "skills" / "str-comping-agent" / "SKILL.md"
 MARKER = "<!-- installed by solnest-str-comping-agent/scripts/install_launcher.py -->"
 
 
+def _yaml_scalar_value(raw: str) -> str:
+    """The text a one-line YAML scalar means, so it can be quoted once."""
+    raw = raw.strip()
+    if len(raw) >= 2 and raw[0] == raw[-1] == '"':
+        try:
+            return json.loads(raw)
+        except ValueError:
+            return raw[1:-1]
+    if len(raw) >= 2 and raw[0] == raw[-1] == "'":
+        return raw[1:-1].replace("''", "'")
+    return raw
+
+
 def launcher_text(root: Path = ROOT) -> str:
     source = PROJECT_SKILL.read_text(encoding="utf-8")
     m = re.search(r"^description:\s*(.+)$", source, re.MULTILINE)
     if not m:
         raise SystemExit(f"no description in {PROJECT_SKILL}")
+    # Double-quoted, JSON-escaped: the description holds "quoted phrases" and
+    # colons, either of which ends or breaks a plain YAML scalar and would leave
+    # the launcher's front matter unparseable.
+    description = json.dumps(_yaml_scalar_value(m.group(1)), ensure_ascii=False)
     home = root.as_posix()   # C:/Users/... works in Git Bash, PowerShell and Python
     return f"""---
 name: str-comping-agent
-description: {m.group(1).strip()}
+description: {description}
 ---
 {MARKER}
 

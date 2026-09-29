@@ -30,12 +30,12 @@ from . import _cache
 
 
 # ── Retry policy ──────────────────────────────────────────────────────
-# Transport-level retries (connect/read failures before a response exists) are
-# handled by httpx itself. Status-level retries (429 + 5xx, where a response
-# DID arrive) are handled by the loop in _request_with_retries.
+# One loop, _request_with_retries, retries both transport failures (no response
+# arrived) and 429/5xx (one did). There is deliberately no httpx transport with
+# retries=: a custom transport makes httpx ignore HTTP(S)_PROXY, and its connect
+# retries would multiply with this loop's.
 
-TRANSPORT_RETRIES = 3          # httpx.AsyncHTTPTransport(retries=...)
-STATUS_RETRY_ATTEMPTS = 3      # extra attempts after the first, on 429/5xx
+STATUS_RETRY_ATTEMPTS = 3      # extra attempts after the first, on transport errors and 429/5xx
 RETRY_BACKOFF_BASE = 0.5       # seconds; doubles each attempt
 RETRY_BACKOFF_MAX = 8.0        # cap on a single computed backoff sleep
 RETRY_AFTER_MAX = 10.0         # cap on an honoured Retry-After header; a comp
@@ -71,17 +71,8 @@ class AirROIError(RuntimeError):
 # ── HTTP helper ───────────────────────────────────────────────────────
 
 def _new_client(timeout: Optional[float] = None) -> httpx.AsyncClient:
-    """AsyncClient with transport-level retries enabled.
-
-    Any client that talks to AirROI should come from here — a bare
-    httpx.AsyncClient() is single-attempt and dies on the first connection
-    reset.
-    """
-    transport = httpx.AsyncHTTPTransport(retries=TRANSPORT_RETRIES)
-    return httpx.AsyncClient(
-        timeout=timeout if timeout is not None else config.HTTP_TIMEOUT,
-        transport=transport,
-    )
+    """AsyncClient with the module's timeout. Honours HTTP(S)_PROXY."""
+    return httpx.AsyncClient(timeout=timeout if timeout is not None else config.HTTP_TIMEOUT)
 
 
 def _extract_error(data: Any, status: int) -> tuple[str, dict]:
@@ -132,24 +123,24 @@ async def _request_with_retries(
     url: str,
     params: dict,
     headers: dict,
+    json_body: Optional[dict] = None,
 ) -> dict:
-    """GET with backoff on 429/5xx and httpx.HTTPError wrapped into AirROIError."""
-    last_status: Optional[int] = None
-    last_msg = ""
-    last_body: dict = {}
+    """GET (POST when json_body is given) with backoff on transport errors and
+    429/5xx; httpx.HTTPError is wrapped into AirROIError."""
+    method = "GET" if json_body is None else "POST"
 
     for attempt in range(STATUS_RETRY_ATTEMPTS + 1):
         try:
-            resp = await client.get(url, params=params, headers=headers)
+            resp = await client.request(
+                method, url, params=params or None, json=json_body, headers=headers,
+            )
         except httpx.HTTPError as e:
-            # Transport failed (timeout / connect reset / read error). httpx
-            # already retried the connection TRANSPORT_RETRIES times.
-            last_status, last_msg = NO_HTTP_STATUS, f"{type(e).__name__}: {e}"
-            last_body = {"transport_error": type(e).__name__}
+            # Transport failed (timeout / connect reset / read error).
             if attempt < STATUS_RETRY_ATTEMPTS:
                 await asyncio.sleep(_retry_delay(None, attempt))
                 continue
-            raise AirROIError(NO_HTTP_STATUS, last_msg, last_body) from e
+            raise AirROIError(NO_HTTP_STATUS, f"{type(e).__name__}: {e}",
+                              {"transport_error": type(e).__name__}) from e
 
         if resp.status_code in RETRY_STATUS_CODES and attempt < STATUS_RETRY_ATTEMPTS:
             await asyncio.sleep(_retry_delay(resp, attempt))
@@ -158,20 +149,55 @@ async def _request_with_retries(
         kit.check_key_status("AirROI", resp.status_code)   # no fallback may absorb this
         try:
             data = resp.json()
-        except Exception as e:
+        except ValueError as e:
             raise AirROIError(resp.status_code, f"non-JSON response: {e}",
                               {"raw_text": kit.redact(resp.text, config.AIRROI_API_KEY)[:300]})
 
         if resp.status_code >= 400:
-            msg, body = _extract_error(data, resp.status_code)
-            raise AirROIError(resp.status_code, msg, body)
+            msg, err_body = _extract_error(data, resp.status_code)
+            raise AirROIError(resp.status_code, msg, err_body)
+        if not isinstance(data, dict):
+            raise AirROIError(resp.status_code, f"unexpected {type(data).__name__} response, expected an object")
 
         return data
 
-    # Unreachable in practice — the loop either returns or raises — but keep a
-    # deterministic failure rather than falling off the end with None.
-    raise AirROIError(last_status if last_status is not None else NO_HTTP_STATUS,
-                      last_msg or "retries exhausted", last_body)
+
+# Response keys that hold the rows a caller paid for. Present but empty means
+# AirROI had nothing (or hiccuped), which must not be pinned in the cache for 24h.
+_ROW_KEYS = ("listings", "results", "comparable_listings")
+
+
+def _cacheable(data: dict) -> bool:
+    return bool(data) and all(data.get(k) for k in _ROW_KEYS if k in data)
+
+
+async def _call(
+    endpoint: str,
+    params: dict,
+    body: Optional[dict],
+    client: Optional[httpx.AsyncClient],
+) -> dict:
+    config.ensure_airroi_configured()
+    headers = {"X-API-KEY": config.AIRROI_API_KEY}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    url = config.AIRROI_BASE_URL.rstrip("/") + endpoint
+
+    # Every call below this line costs money. Serve a same-day repeat from disk.
+    cache_key = params if body is None else body
+    cached = _cache.get("airroi", endpoint, cache_key)
+    if cached is not None:
+        return cached
+
+    if client is None:
+        async with _new_client() as c:
+            data = await _request_with_retries(c, url, params, headers, body)
+    else:
+        data = await _request_with_retries(client, url, params, headers, body)
+
+    if _cacheable(data):
+        _cache.put("airroi", endpoint, cache_key, data)
+    return data
 
 
 async def _get(
@@ -180,29 +206,8 @@ async def _get(
     client: Optional[httpx.AsyncClient] = None,
 ) -> dict:
     """GET from AirROI with auth header. Raises AirROIError on failure."""
-    config.ensure_airroi_configured()
-
-    headers = {
-        "X-API-KEY": config.AIRROI_API_KEY,
-    }
-    url = config.AIRROI_BASE_URL.rstrip("/") + endpoint
-
-    # Strip None params
     params = {k: v for k, v in params.items() if v is not None}
-
-    # Every call below this line costs money. Serve a same-day repeat from disk.
-    cached = _cache.get("airroi", endpoint, params)
-    if cached is not None:
-        return cached
-
-    if client is None:
-        async with _new_client() as c:
-            data = await _request_with_retries(c, url, params, headers)
-    else:
-        data = await _request_with_retries(client, url, params, headers)
-
-    _cache.put("airroi", endpoint, params, data)
-    return data
+    return await _call(endpoint, params, None, client)
 
 
 async def _post(
@@ -210,41 +215,15 @@ async def _post(
     body: dict,
     client: Optional[httpx.AsyncClient] = None,
 ) -> dict:
-    """POST to AirROI with auth header. Cached like _get: these cost money too.
+    """POST to AirROI with auth header. Same retry, key-failure and cache path
+    as _get: these cost money too.
 
     The /markets/metrics/* family is POST-only and needs the market wrapped as
     {"market": {...}} — sending the fields at the top level returns a 422 saying
     "market must not be null", which reads like a missing-argument error rather
     than a shape error.
     """
-    config.ensure_airroi_configured()
-    headers = {"X-API-KEY": config.AIRROI_API_KEY, "Content-Type": "application/json"}
-    url = config.AIRROI_BASE_URL.rstrip("/") + endpoint
-
-    cached = _cache.get("airroi", endpoint, body)
-    if cached is not None:
-        return cached
-
-    async def _send(c: httpx.AsyncClient) -> dict:
-        resp = await c.post(url, json=body, headers=headers)
-        if resp.status_code >= 400:
-            kit.check_key_status("AirROI", resp.status_code)   # no fallback may absorb this
-            try:
-                payload = resp.json()
-            except ValueError:
-                payload = {}
-            msg, detail = _extract_error(payload, resp.status_code)
-            raise AirROIError(resp.status_code, msg, detail)
-        return resp.json()
-
-    if client is None:
-        async with _new_client() as c:
-            data = await _send(c)
-    else:
-        data = await _send(client)
-
-    _cache.put("airroi", endpoint, body, data)
-    return data
+    return await _call(endpoint, {}, body, client)
 
 
 # ── Public: market-level metrics ─────────────────────────────────────

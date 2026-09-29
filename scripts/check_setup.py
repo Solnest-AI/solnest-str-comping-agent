@@ -12,8 +12,10 @@ for a check every time. Nothing here ever prints a key.
 
 Exit codes, each with a line saying what Claude does next:
   0  ready
-  2  the kit is set up but a key is missing or rejected: the kit's .env is
-     opened for the student to paste into (never into the chat)
+  2  a key is not working. Blank or rejected: the kit's .env is opened for the
+     student to paste into (never into the chat). Out of credit: top up at the
+     vendor, the key is fine. Rate limited, vendor error or unreachable: not a
+     key problem, wait and run the check again; no editor is opened
   3  no connections kit on this computer, or it was never run
   4  keys ready, but no branding.json yet: ask the student for their website
      and run scripts/brand_from_website.py, so the first report carries their
@@ -64,6 +66,8 @@ def _probe(url: str, headers: dict, params: dict | None = None) -> str:
         return "rejected"
     if r.status_code == 402:
         return "no credit"
+    if r.status_code == 429:
+        return "rate limited"
     return f"error {r.status_code}"
 
 
@@ -173,15 +177,34 @@ def main(argv: list[str]) -> int:
         return 0
 
     STAMP.unlink(missing_ok=True)   # a failed live check must not leave an old READY standing
-    kit.add_blank_lines(env, bad)   # atomic: the kit's .env is the master copy
-    print(f"[setup] Opening {env} for the student.")
+    # Only a blank or rejected key is fixed by pasting one. Out of credit, rate
+    # limiting and vendor errors say nothing against the key: opening Notepad
+    # for those sends the student to replace a working key.
+    needs_key = [n for n in bad if results[n] in ("blank", "rejected")]
+    if needs_key:
+        try:
+            kit.add_blank_lines(env, needs_key)   # atomic: the kit's .env is the master copy
+        except (ValueError, OSError) as e:
+            print(f"[setup] Could not add the blank key line(s) to the kit's .env: {e}")
+        print(f"[setup] Opening {env} for the student.")
     for n in bad:
-        print(f"  {n}: paste the key straight after the = sign on the {n}= line. Get it at {WHERE[n]}")
-    print("NEXT: tell the student exactly that, one key at a time, and to save the file and say 'saved'.")
-    print("      Keys go in the file, never in the chat. Then run this check again.")
-    if any(results[n] == "unreachable" for n in bad):
-        print("      A vendor was unreachable: check the internet connection before blaming the key.")
-    if not no_open:
+        if n in needs_key:
+            print(f"  {n}: paste the key straight after the = sign on the {n}= line. Get it at {WHERE[n]}")
+        elif results[n] == "no credit":
+            print(f"  {n}: the key is fine but the vendor account is out of credit. "
+                  f"Top up at {WHERE[n]}; no new key needed.")
+        else:
+            print(f"  {n}: the vendor answered '{results[n]}', which is not a key problem. "
+                  f"Wait a minute, then run this check again; the key stays as it is.")
+    if needs_key:
+        print("NEXT: tell the student exactly that, one key at a time, and to save the file and say 'saved'.")
+        print("      Keys go in the file, never in the chat. Then run this check again.")
+    if any(results[n] == "no credit" for n in bad):
+        print("NEXT: tell the student which account is out of credit and to top it up at the vendor; "
+              "the key stays. Then run this check again.")
+    if any(results[n] in ("rate limited", "unreachable") or results[n].startswith("error") for n in bad):
+        print("NEXT: no key change needed. Check the internet connection, wait a minute, run this check again.")
+    if needs_key and not no_open:
         open_for_paste(env)
     return 2
 

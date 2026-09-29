@@ -20,6 +20,7 @@ Run: pytest tests/test_narratives.py -v
 
 import asyncio
 import json
+import math
 import re
 import statistics
 import sys
@@ -150,8 +151,8 @@ def _run(coro):
 def test_tool_call_and_file_loader_share_one_schema():
     """The forced tool call, the brief and the loader must not drift apart."""
     assert N.NARRATIVE_TOOL["input_schema"] is NARRATIVE_INPUT_SCHEMA
-    assert NARRATIVE_INPUT_SCHEMA["required"] == NARRATIVE_FIELDS
-    # The loader is stricter on purpose: a hand-written file has no retry loop.
+    # The two lists are required too: a missing one renders as a hole.
+    assert NARRATIVE_INPUT_SCHEMA["required"] == NARRATIVE_FIELDS + NARRATIVE_LIST_FIELDS
     assert set(N._FILE_REQUIRED) == set(NARRATIVE_FIELDS) | set(NARRATIVE_LIST_FIELDS)
 
 
@@ -189,8 +190,11 @@ def test_template_copy_quotes_only_real_comp_occupancy(market):
     # Occupancy percentages are the only "NN%" the copy emits. The spread
     # sentence prints a difference in points, so allow that value too.
     spread = round(stats["high"] - stats["low"])
+    # Bounds are rounded INWARD (low up, high down), so the copy never claims
+    # a band wider than the comps actually covered.
     allowed = {
         round(stats["low"]), round(stats["high"]), round(stats["median"]), spread,
+        math.ceil(stats["low"]), math.floor(stats["high"]),
     }
     for pct in re.findall(r"(\d+)%", blob):
         assert int(pct) in allowed, (

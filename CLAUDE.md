@@ -67,10 +67,12 @@ AirROI is the comp data, Firecrawl is street addresses. Act on its exit code:
 
 - **0 `READY`:** keys work and the report is branded. Go to Step 4.
 - **4:** keys work but there is no `branding.json` yet. Go to Step 3.
-- **2:** a key is blank or rejected. The kit's `.env` is already open in
-  Notepad / TextEdit and the output says which line and where to get the key.
-  Tell the student that, one key at a time: paste straight after the `=`, save,
-  say "saved". Run the check again.
+- **2:** a key is not working. Blank or rejected: the kit's `.env` is already
+  open in Notepad / TextEdit and the output says which line and where to get
+  the key. Tell the student that, one key at a time: paste straight after the
+  `=`, save, say "saved". Out of credit: top up at the vendor, the key stays.
+  Rate limited, vendor error or unreachable: no key change, wait and re-run.
+  Run the check again.
 - **3:** no kit on this computer, or it was never run. Set it up for them:
   clone `https://github.com/Solnest-AI/str-secrets-connections` into this
   folder's parent (skip if it is already there), read its `CONNECTIONS.md` and
@@ -248,7 +250,7 @@ specifically. Fix the JSON and re-run.
 | `--hero-url URL` | Supply the hero photo when the listing scrape is blocked, or when the run stops with "Subject photo refused" |
 | `--allow-other-unit` | Accept a listing for a different unit at the same street address. The address search stops before AirROI and asks otherwise; only pass it after the user confirms that unit is a fair stand-in |
 | `--listing-url URL` | Link the report's "View Listing" button |
-| `--skip-financials` | Dev only. Skips AirROI, produces an empty estimate |
+| `--render DATA_JSON` | Re-render a report from its `*.report-data.json`, no AirROI calls. Pair with `--narratives` |
 
 Run `"$PY" agent.py --help` if a flag here disagrees with the code; the code wins.
 

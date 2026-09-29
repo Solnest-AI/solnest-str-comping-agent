@@ -22,7 +22,7 @@ from adapters.airroi_to_comp import (
     to_comp_property,
 )
 from comp_scorer import detect_subject_signals, score_comp
-from generators.narrative_brief import _comp_row, _own_performance, nightly_rate_stats
+from generators.narrative_brief import _comp_row, nightly_rate_stats, own_performance
 from generators.narratives import template_narratives
 from schema import CompProperty, PropertyBasics, SubjectPerformance
 from validators.sanity import _check_revenue_sanity
@@ -139,7 +139,7 @@ def test_brief_subject_rate_is_the_rate_paid():
                             room_revenue=18_041)
     prop = PropertyBasics(address="a", short_address="a", market="m", bedrooms=3,
                           bathrooms=2.5, max_guests=10, subject_performance=sp)
-    own = _own_performance(prop, {"median": 60})
+    own = own_performance(prop, {"median": 60})
     assert "adr" not in own
     assert own["nightly_rate"] == round(18_041 / 82)
 

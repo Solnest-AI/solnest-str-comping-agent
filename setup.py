@@ -103,8 +103,7 @@ def prompt(label: str, required: bool, where: str, hint: str, current: str) -> s
     print(f"   Where: {where}")
     print(f"   {hint}")
     if current:
-        masked = current[:6] + "…" + current[-4:] if len(current) > 12 else "***"
-        print(f"   Current: {masked}")
+        print("   Current: set")
         suffix = " (Enter to keep current)"
     else:
         suffix = " (Enter to skip)" if not required else ""

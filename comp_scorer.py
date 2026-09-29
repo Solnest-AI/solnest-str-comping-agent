@@ -55,21 +55,15 @@ MIN_NIGHTS_LISTED = 180         # a property blocked over half the year is a
 
 # ── Amenity keyword maps ───────────────────────────────────────────────────
 
+# Text fallback for signals that also have an amenity vocabulary. Only read for
+# a subject whose amenity list is NOT AirROI-shaped (see detect_subject_signals);
+# an AirROI-shaped list answers by exact membership alone. Signals comp_filters
+# decides itself (pool, hot tub, ski access, sauna, EV charger) are not here.
 AMENITY_SIGNALS = {
-    "hot_tub":    ["hot tub", "hot-tub", "hottub", "jacuzzi", "jetted tub"],
-    "pool":       ["pool", "swimming pool", "indoor pool", "outdoor pool"],
-    "ski_in_out": ["ski-in", "ski in", "ski out", "ski-out", "ski access", "ski-access"],
-    "sauna":      ["sauna"],
     "games_room": ["game room", "games room", "game-room", "billiard", "pool table",
                    "foosball", "ping pong", "arcade"],
     "views":      ["mountain view", "lake view", "ocean view", "valley view",
                    "panoramic view", "scenic view", "overlook", "viewpoint"],
-    "village":    ["village", "central", "downtown", "village core", "village access",
-                   "walk to village", "steps from village"],
-    # NOTE: "sauna" intentionally excluded — it has its own dedicated signal
-    # above with a higher weight (+2). Including it here would double-count.
-    "wellness":   ["cold plunge", "steam room", "yoga", "wellness", "spa"],
-    "ev_charger": ["ev charger", "electric vehicle", "tesla charger", "ev charging"],
     "gym":        ["gym", "fitness center", "exercise room", "workout room", "home gym"],
     "fireplace":  ["fireplace", "fire place", "wood stove", "gas fireplace"],
 }
@@ -105,16 +99,11 @@ TEXT_ONLY_SIGNALS: dict[str, tuple[str, ...]] = {
 }
 
 
-LUXURY_KEYWORDS = [
-    "luxurious", "luxury", "premium", "high-end", "upscale",
-    "designer", "executive", "boutique", "elite", "grand",
-]
-
-PROFESSIONAL_MGMT_KEYWORDS = [
-    "managed by", "hosted by", "property management", "vacation rental company",
-    "professional host", "premier host", "management group", "hospitality",
-    "rental agency", "guest services",
-]
+# Whole words only, matched in the listing's title and description. "grand"
+# (Grandview Dr, grandkids), "premium finishes", "executive", "elite", "designer"
+# and "boutique" are ordinary host copy; the luxury flag hard-fails every comp
+# priced under 55% of the subject, so it fires only on unambiguous claims.
+_LUXURY_RE = re.compile(r"\b(?:luxurious|luxury|high[- ]end|upscale)\b")
 
 # Review sentiment keywords for subject quality detection
 POSITIVE_REVIEW_KEYWORDS = [
@@ -139,43 +128,44 @@ def detect_subject_signals(subject: dict) -> dict:
     Detect quality signals from subject property data.
     Returns a dict of signal_name -> True/False plus quality_tier.
     """
-    searchable = " ".join([
-        subject.get("title", ""),
-        subject.get("description", ""),
-        " ".join(subject.get("amenities", [])),
-        subject.get("configuration", ""),
-    ]).lower()
+    import comp_filters  # local: comp_filters imports this module
+    title = subject.get("title", "") or ""
+    description = subject.get("description", "") or ""
+    amenities = subject.get("amenities") or []
+    # Title and description only, never the address or the amenity list: the
+    # description subject_for_scorer builds carries the street ("Grandview Dr").
+    listing_text = comp_filters.strip_html(f"{title} . {description}")
+    text = comp_filters.strip_html(" . ".join(
+        [title, description, subject.get("configuration") or ""]
+        + [a for a in amenities if isinstance(a, str)]))
 
     signals = {}
 
-    # Luxury flag
-    signals["luxury"] = any(kw in searchable for kw in LUXURY_KEYWORDS)
-
-    # Professional management flag
-    signals["professional_mgmt"] = any(kw in searchable for kw in PROFESSIONAL_MGMT_KEYWORDS)
+    signals["luxury"] = bool(_LUXURY_RE.search(listing_text))
 
     # Amenity signals. The subject's own amenity list uses the same AirROI
-    # vocabulary when it came from a listing lookup; fall back to text otherwise.
-    subject_amenities = set(subject.get("amenities") or [])
+    # vocabulary when it came from a listing lookup, and then answers by exact
+    # membership alone: "Fireplace guards" is not a fireplace and the host
+    # copy does not overrule the list. Only a list that is not AirROI-shaped
+    # (a scraped subject) falls back to negation-guarded text.
+    subject_amenities = set(amenities)
+    authoritative = comp_filters.amenity_list_is_authoritative(amenities)
     for signal, vocab in AMENITY_VOCAB_SIGNALS.items():
-        signals[signal] = bool(subject_amenities & set(vocab)) or any(
-            kw in searchable for kw in AMENITY_SIGNALS.get(signal, [])
-        )
+        signals[signal] = bool(subject_amenities & set(vocab)) or (
+            not authoritative
+            and comp_filters.text_has_keyword(text, AMENITY_SIGNALS.get(signal, ())))
     for signal, keywords in TEXT_ONLY_SIGNALS.items():
-        signals[signal] = any(kw in searchable for kw in keywords)
+        signals[signal] = comp_filters.text_has_keyword(text, keywords)
 
     # The features comp_filters can read from text are decided the way the
     # filters decide them: amenity list or negation-guarded text, so "no pool"
     # is not a pool here while it is a lacking pool in the filter. Whether
     # there was anything to read decides if absence means "lacks".
-    import comp_filters  # local: comp_filters imports this module
-    title = subject.get("title", "") or ""
-    description = subject.get("description", "") or ""
     for feature in comp_filters.SUPPORTED_FEATURES:
         signals[feature] = comp_filters.listing_mentions_feature(
-            title, description, subject.get("amenities") or [], feature)
+            title, description, amenities, feature)
     signals["features_readable"] = comp_filters.subject_features_readable(
-        description, subject.get("amenities") or [])
+        description, amenities)
 
     # Review sentiment analysis (from Apify subject reviews)
     reviews = subject.get("reviews", [])
@@ -241,7 +231,7 @@ def _score_physical_match(
     breakdown = []
 
     # Bedroom proximity
-    if subject_bedrooms and comp_bedrooms:
+    if subject_bedrooms is not None and comp_bedrooms is not None:
         if comp_bedrooms == subject_bedrooms:
             score += 3
             breakdown.append(f"+3 Exact bedroom match ({comp_bedrooms}BR)")
@@ -277,20 +267,19 @@ def _score_financial_match(
         adr_diff_pct = abs(comp_adr - subject_adr) / subject_adr
         if adr_diff_pct <= 0.10:
             score += 3
-            breakdown.append(f"+3 ADR within 10% of subject (CA${comp_adr:.0f})")
+            breakdown.append(f"+3 ADR within 10% of subject ({comp_adr:.0f})")
         elif adr_diff_pct <= 0.20:
             score += 2
-            breakdown.append(f"+2 ADR within 20% of subject (CA${comp_adr:.0f})")
+            breakdown.append(f"+2 ADR within 20% of subject ({comp_adr:.0f})")
         elif adr_diff_pct <= 0.35:
             score += 1
-            breakdown.append(f"+1 ADR within 35% of subject (CA${comp_adr:.0f})")
+            breakdown.append(f"+1 ADR within 35% of subject ({comp_adr:.0f})")
     return score, breakdown
 
 
 def _score_quality_match(
     comp_rating: Optional[float],
     comp_reviews: int,
-    comp_occ: Optional[float],
     subject_signals: dict,
     comp: Optional[dict] = None,
 ) -> tuple:
@@ -384,19 +373,16 @@ def _score_amenity_match(text: str, subject_signals: dict,
     score, breakdown = comp_similarity.score_premium(
         subject_signals, has, mentions, subject_signals.get("features_readable", True))
 
+    import comp_filters  # local: comp_filters imports this module
+    plain = comp_filters.strip_html(text)
     for signal, (label, points) in _TEXT_POINTS.items():
         if not subject_signals.get(signal):
             continue
-        for kw in TEXT_ONLY_SIGNALS.get(signal, ()):
-            if not re.search(r"\b" + re.escape(kw) + r"\b", text):
-                continue
-            # Negation guard: "no village access", "not in the village"
-            window = text[max(0, text.find(kw) - 40):text.find(kw)]
-            if re.search(r"\b(no|not|without|dont|don't|lacks?)\b", window):
-                continue
+        # Judged at each match, so "no village access ... steps from village"
+        # counts and a negator before a different occurrence does not veto it.
+        if comp_filters.text_has_keyword(plain, TEXT_ONLY_SIGNALS.get(signal, ())):
             score += points
             breakdown.append(f"+{points} {label}")
-            break
 
     return score, breakdown
 
@@ -504,6 +490,76 @@ def guest_tolerance(subject_guests: int) -> int:
     return 8  # 17+ guest properties: allow ±8
 
 
+def _hard_fail_reason(
+    comp: dict,
+    subject_signals: dict,
+    subject_adr: Optional[float],
+    subject_bedrooms: Optional[int],
+    subject_guests: Optional[int],
+    comp_adr: Optional[float],
+    comp_bedrooms: Optional[int],
+    comp_sleeps: Optional[int],
+    comp_reviews: int,
+    comp_booked: Optional[int],
+) -> str:
+    """Why this comp is not admissible, or "" when it is. Gates run in order
+    and the FIRST failing one is the reason reported."""
+
+    # 1. Luxury subject → comp must be in top 60% of ADR range
+    if subject_signals.get("luxury") and subject_adr and comp_adr:
+        luxury_adr_floor = subject_adr * 0.55
+        if comp_adr < luxury_adr_floor:
+            return (
+                f"Luxury subject (ADR {subject_adr:.0f}) — "
+                f"comp ADR {comp_adr:.0f} is below luxury floor {luxury_adr_floor:.0f}"
+            )
+
+    # 2. Bedroom count mismatch — scale tolerance with property size
+    if subject_bedrooms is not None and comp_bedrooms is not None:
+        max_bed_diff = bedroom_tolerance(subject_bedrooms)
+        if abs(comp_bedrooms - subject_bedrooms) > max_bed_diff:
+            return (
+                f"Bedroom mismatch: subject has {subject_bedrooms}BR, "
+                f"comp has {comp_bedrooms}BR (max ±{max_bed_diff} allowed)"
+            )
+
+    # 3. Guest capacity mismatch — scale tolerance with property size
+    if subject_guests is not None and comp_sleeps is not None:
+        max_guest_diff = guest_tolerance(subject_guests)
+        if abs(comp_sleeps - subject_guests) > max_guest_diff:
+            return (
+                f"Guest capacity mismatch: subject sleeps {subject_guests}, "
+                f"comp sleeps {comp_sleeps} (max ±{max_guest_diff} allowed)"
+            )
+
+    # 4. Dormant / dead listings are not comparable operators. A comp that
+    #    booked nothing in the trailing 90 days tells you about a failed
+    #    listing, not about the market the client is buying into.
+    adj_occ = _parse_pct(comp.get("occupancy_pct"))
+    l90 = comp.get("l90d_nights_booked")
+    if adj_occ is not None and adj_occ < MIN_ADJUSTED_OCCUPANCY:
+        return (
+            f"Dormant listing: {adj_occ:.0f}% adjusted occupancy "
+            f"(floor {MIN_ADJUSTED_OCCUPANCY}%) — not a comparable operator"
+        )
+    if l90 == 0 and comp_booked is not None and comp_booked < 60:
+        return (
+            "Dead listing: 0 nights booked in the last 90 days and "
+            f"only {comp_booked} in the trailing year"
+        )
+    if comp.get("nights_listed") is not None and comp["nights_listed"] < MIN_NIGHTS_LISTED:
+        return (
+            f"Part-time rental: listed only {comp['nights_listed']} of 365 nights "
+            f"(floor {MIN_NIGHTS_LISTED}) — occupancy is not comparable"
+        )
+    if comp_reviews < MIN_REVIEWS and comp.get("rating_is_unrated"):
+        return (
+            f"Insufficient history: {comp_reviews} reviews and no rating — "
+            "unreliable data point"
+        )
+    return ""
+
+
 def score_comp(
     comp: dict,
     subject_signals: dict,
@@ -523,8 +579,6 @@ def score_comp(
       - hard_fail_reason: str
     """
     breakdown = []
-    hard_fail = False
-    hard_fail_reason = ""
 
     text = comp_searchable_text(comp)
     # The rate the comp was actually paid, never AirROI's ttm_avg_rate (off by
@@ -532,78 +586,18 @@ def score_comp(
     comp_adr = _parse_adr(comp.get("nightly_rate")) or None
     comp_bedrooms = _parse_int(comp.get("bedrooms"))
     comp_sleeps = _parse_int(comp.get("sleeps")) or _parse_int(comp.get("max_guests"))
-    comp_occ = _parse_pct(comp.get("occupancy_pct"))
     comp_reviews = _parse_int(comp.get("reviews")) or _parse_int(comp.get("review_count")) or 0
     comp_rating = None if comp.get("rating_is_unrated") else _parse_float(comp.get("rating"))
     comp_booked = _parse_int(comp.get("nights_booked"))
 
-    # ── Hard disqualifiers ─────────────────────────────────────────────────
+    # Distance is a fact about the pair, not a score: a hard-failed comp that the
+    # rescue pass later admits still needs its distance_km.
+    dist_pts, dist_lines = _score_distance(comp, subject or {})
 
-    # 1. Luxury subject → comp must be in top 60% of ADR range
-    if subject_signals.get("luxury") and subject_adr and comp_adr:
-        luxury_adr_floor = subject_adr * 0.55
-        if comp_adr < luxury_adr_floor:
-            hard_fail = True
-            hard_fail_reason = (
-                f"Luxury subject (ADR CA${subject_adr:.0f}) — "
-                f"comp ADR CA${comp_adr:.0f} is below luxury floor CA${luxury_adr_floor:.0f}"
-            )
-
-    # 2. Bedroom count mismatch — scale tolerance with property size
-    if subject_bedrooms is not None and comp_bedrooms is not None:
-        max_bed_diff = bedroom_tolerance(subject_bedrooms)
-        bed_diff = abs(comp_bedrooms - subject_bedrooms)
-        if bed_diff > max_bed_diff:
-            hard_fail = True
-            hard_fail_reason = (
-                f"Bedroom mismatch: subject has {subject_bedrooms}BR, "
-                f"comp has {comp_bedrooms}BR (max ±{max_bed_diff} allowed)"
-            )
-
-    # 3. Guest capacity mismatch — scale tolerance with property size
-    if subject_guests is not None and comp_sleeps is not None:
-        max_guest_diff = guest_tolerance(subject_guests)
-        guest_diff = abs(comp_sleeps - subject_guests)
-        if guest_diff > max_guest_diff:
-            hard_fail = True
-            hard_fail_reason = (
-                f"Guest capacity mismatch: subject sleeps {subject_guests}, "
-                f"comp sleeps {comp_sleeps} (max ±{max_guest_diff} allowed)"
-            )
-
-    # 4. Dormant / dead listings are not comparable operators. A comp that
-    #    booked nothing in the trailing 90 days tells you about a failed
-    #    listing, not about the market the client is buying into.
-    if not hard_fail:
-        adj_occ = comp_occ if comp_occ is not None else None
-        l90 = comp.get("l90d_nights_booked")
-        if adj_occ is not None and adj_occ < MIN_ADJUSTED_OCCUPANCY:
-            hard_fail = True
-            hard_fail_reason = (
-                f"Dormant listing: {adj_occ:.0f}% adjusted occupancy "
-                f"(floor {MIN_ADJUSTED_OCCUPANCY}%) — not a comparable operator"
-            )
-        elif l90 == 0 and comp_booked is not None and comp_booked < 60:
-            hard_fail = True
-            hard_fail_reason = (
-                "Dead listing: 0 nights booked in the last 90 days and "
-                f"only {comp_booked} in the trailing year"
-            )
-        elif (comp.get("nights_listed") is not None
-              and comp["nights_listed"] < MIN_NIGHTS_LISTED):
-            hard_fail = True
-            hard_fail_reason = (
-                f"Part-time rental: listed only {comp['nights_listed']} of 365 nights "
-                f"(floor {MIN_NIGHTS_LISTED}) — occupancy is not comparable"
-            )
-        elif comp_reviews < MIN_REVIEWS and comp.get("rating_is_unrated"):
-            hard_fail = True
-            hard_fail_reason = (
-                f"Insufficient history: {comp_reviews} reviews and no rating — "
-                "unreliable data point"
-            )
-
-    if hard_fail:
+    hard_fail_reason = _hard_fail_reason(
+        comp, subject_signals, subject_adr, subject_bedrooms, subject_guests,
+        comp_adr, comp_bedrooms, comp_sleeps, comp_reviews, comp_booked)
+    if hard_fail_reason:
         comp["score"] = 0
         comp["category_scores"] = {}
         comp["score_breakdown"] = []
@@ -635,7 +629,7 @@ def score_comp(
     breakdown.extend(lines)
 
     # Category 3: Quality match
-    pts, lines = _score_quality_match(comp_rating, comp_reviews, comp_occ, subject_signals, comp)
+    pts, lines = _score_quality_match(comp_rating, comp_reviews, subject_signals, comp)
     category_scores["quality"] = pts
     breakdown.extend(lines)
 
@@ -662,9 +656,8 @@ def score_comp(
 
     # Category 6: Proximity — the strongest comparability signal there is,
     # and previously absent entirely.
-    pts, lines = _score_distance(comp, subject or {})
-    category_scores["distance"] = pts
-    breakdown.extend(lines)
+    category_scores["distance"] = dist_pts
+    breakdown.extend(dist_lines)
 
     # ── Category minimum thresholds ────────────────────────────────────────
 
@@ -703,24 +696,6 @@ def _parse_adr(adr_str) -> float:
         return float(cleaned)
     except ValueError:
         return 0.0
-
-
-def _parse_currency(val) -> Optional[float]:
-    """Parse 'CA$54.2K' or 'CA$54,200' or 54200 into float."""
-    if val is None:
-        return None
-    if isinstance(val, (int, float)):
-        return float(val)
-    cleaned = str(val).replace("CA$", "").replace("$", "").replace(",", "").strip()
-    if cleaned.upper().endswith("K"):
-        try:
-            return float(cleaned[:-1]) * 1000
-        except ValueError:
-            return None
-    try:
-        return float(cleaned)
-    except ValueError:
-        return None
 
 
 def _parse_int(val) -> Optional[int]:
@@ -786,7 +761,7 @@ def rank_comps(subject: dict, comps: list, top_n: int = 6) -> dict:
     neg_sent = subject_signals.get("review_sentiment_negative", 0)
 
     print(f"[scorer] Subject signals: {[k for k, v in subject_signals.items() if v and v is not True or v is True]}", file=sys.stderr)
-    print(f"[scorer] Subject ADR: CA${subject_adr:.0f}", file=sys.stderr)
+    print(f"[scorer] Subject ADR: {subject_adr:.0f}", file=sys.stderr)
     print(f"[scorer] Subject config: {subject_bedrooms}BR / sleeps {subject_guests}", file=sys.stderr)
     print(f"[scorer] Subject quality tier: {quality_tier} (sentiment: +{pos_sent}/-{neg_sent})", file=sys.stderr)
     print(f"[scorer] Subject superhost: {subject_signals.get('superhost', False)}", file=sys.stderr)
@@ -815,10 +790,13 @@ def rank_comps(subject: dict, comps: list, top_n: int = 6) -> dict:
 
     # Deterministic ordering. Score ties were previously resolved by input
     # order, so 18 of 20 input shuffles changed the delivered comp set.
-    # Tie-break: closer rate paid to subject, then closer distance, then more
-    # reviews. The rate paid, not adr_raw (ttm_avg_rate, off by up to 19%).
+    # Tie-break: closer rate paid to subject (neutral when the subject's rate is
+    # unknown, else the cheapest comp would win every tie), then closer
+    # distance, then more reviews. The rate paid, not adr_raw (ttm_avg_rate,
+    # off by up to 19%).
     def _tiebreak(c):
-        adr_gap = abs((c.get("nightly_rate") or 0) - (subject_adr or 0)) / max(subject_adr or 1, 1)
+        adr_gap = (abs((c.get("nightly_rate") or 0) - subject_adr) / subject_adr
+                   if subject_adr else 0.0)
         dist = c.get("distance_km")
         return (
             -c["score"],
@@ -883,7 +861,6 @@ def rank_comps(subject: dict, comps: list, top_n: int = 6) -> dict:
         "selected":          selected,
         "averages":          averages,
         "score_range":       score_range,
-        "needs_more_comps":  len(selected) < top_n,
     }
 
 

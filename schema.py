@@ -108,10 +108,13 @@ class SubjectPerformance(BaseModel):
 
     @property
     def revenue_per_booked_night(self) -> float:
-        """Fee-INCLUSIVE rate basis, matching how comp cards report revenue."""
+        """Fee-INCLUSIVE rate basis, matching how comp cards report revenue.
+
+        0.0 when nothing was booked. Never `adr`: AirROI's ttm_avg_rate is not
+        a rate anyone paid, and callers read 0 as "no figure"."""
         if self.nights_booked:
             return self.annual_revenue / self.nights_booked
-        return self.adr
+        return 0.0
 
 
 class PropertyBasics(BaseModel):
@@ -251,7 +254,7 @@ class CalculatorDefaults(BaseModel):
     days_min: int = 100
     days_max: int = 365
     days_default: int = 365
-    days_step: int = 5
+    days_step: int = 1
     occ_range_text: str = ""
     adr_range_text: str = ""
     # Where each default came from, so the report can disclose its basis

@@ -3,6 +3,7 @@
 from markupsafe import escape
 
 from comp_scorer import bedroom_tolerance
+from comp_similarity import TARGETED_RADIUS_MILES
 from schema import (
     PropertyBasics, CompProperty, MethodologyData, CalculatorDefaults,
 )
@@ -106,6 +107,8 @@ def _operator_assumptions(calculator: "CalculatorDefaults | None") -> list[str]:
     ]
 
 
+_KM_PER_MILE = 1.609344
+
 _FEATURE_WORDS = {"pool": "pool", "hot_tub": "hot tub", "sauna": "sauna",
                   "ski_in_out": "ski-in/ski-out access", "ev_charger": "EV charger"}
 # With the article, for "N comparables have ___".
@@ -168,8 +171,9 @@ def _comp_funnel_line(funnel: dict | None) -> str:
     targeted = funnel.get("targeted") or {}
     targeted_line = (
         f" AirROI's own comparables were mostly a different kind of listing, so a "
-        f"targeted search within {targeted.get('radius_miles', 10)} miles for listings "
-        f"matching this one's features added {targeted['added']} candidates."
+        f"targeted search within "
+        f"{targeted.get('radius_miles', TARGETED_RADIUS_MILES) * _KM_PER_MILE:.0f} km "
+        f"for listings matching this one's features added {targeted['added']} candidates."
         if targeted.get("added") else "")
     return (f"{total} candidate listings considered, {selected} selected{tail}."
             f"{widened}{targeted_line}")
@@ -248,9 +252,11 @@ def build_methodology(
 
     # AirROI reports a month with no market activity as a row of zeros. Those
     # points are filled from their neighbours so the chart does not draw a false
-    # 0% shoulder season, which means they are modelled and must say so.
+    # 0% shoulder season, which means they are modelled and must say so. Only
+    # the market curve is ever interpolated: the comp and subject curves come
+    # from other sources, so a market gap count says nothing about them.
     interpolation_note = []
-    if market_months_missing:
+    if market_months_missing and seasonal_basis == "market":
         interpolation_note.append(
             f"<strong>Interpolated months:</strong> {market_months_missing} of 12 "
             f"months had no reported market activity; those points on the "

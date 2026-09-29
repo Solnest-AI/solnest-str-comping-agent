@@ -338,39 +338,48 @@ def parse_airbnb_html(html: str, url: str) -> PropertyBasics:
 
     # Strategy 1: __NEXT_DATA__
     next_data = _extract_from_next_data(html)
-    if next_data:
+    listing_superhost = None
+    if isinstance(next_data, dict):
         try:
-            # Navigate the nested Airbnb data structure
-            props = next_data.get("props", {}).get("pageProps", {})
+            # Navigate the nested Airbnb data structure. Any level can be null.
+            props = ((next_data.get("props") or {}).get("pageProps")) or {}
             listing = (
-                props.get("listingData", {}).get("listing", {})
-                or props.get("listing", {})
+                (props.get("listingData") or {}).get("listing")
+                or props.get("listing")
+                or {}
             )
             if listing:
-                title = listing.get("name", "")
-                bedrooms = listing.get("bedrooms", 0)
-                bathrooms = listing.get("bathrooms", 0)
-                max_guests = listing.get("personCapacity", 0) or listing.get("guestCapacity", 0)
+                title = listing.get("name") or ""
+                bedrooms = listing.get("bedrooms") or 0
+                bathrooms = listing.get("bathrooms") or 0
+                max_guests = listing.get("personCapacity") or listing.get("guestCapacity") or 0
                 rating = listing.get("avgRating")
                 review_count = listing.get("reviewsCount")
-                location_text = listing.get("locationTitle", "") or listing.get("city", "")
+                location_text = listing.get("locationTitle") or listing.get("city") or ""
+                listing_superhost = listing.get("isSuperhost")
 
-                photos = listing.get("photos", [])
-                if photos:
-                    image_url = photos[0].get("large", "") or photos[0].get("picture", "")
-        except (KeyError, TypeError, IndexError):
+                photos = listing.get("photos") or []
+                if photos and isinstance(photos[0], dict):
+                    image_url = photos[0].get("large") or photos[0].get("picture") or ""
+        except (AttributeError, KeyError, TypeError, IndexError):
             pass
 
     # Strategy 2: ld+json
     if not title:
         ld = _extract_from_ld_json(html)
         if ld:
-            title = ld.get("name", "")
-            description = ld.get("description", "")
-            image_url = image_url or (ld.get("image", [""])[0] if isinstance(ld.get("image"), list) else ld.get("image", ""))
-            addr = ld.get("address", {})
+            title = ld.get("name") or ""
+            description = ld.get("description") or ""
+            image = ld.get("image")
+            if isinstance(image, list):
+                image = image[0] if image else ""
+            if isinstance(image, dict):      # schema.org ImageObject
+                image = image.get("url") or image.get("contentUrl") or ""
+            image_url = image_url or (image if isinstance(image, str) else "")
+            addr = ld.get("address")
             if isinstance(addr, dict):
-                location_text = f"{addr.get('addressLocality', '')}, {addr.get('addressRegion', '')}"
+                parts = (addr.get("addressLocality"), addr.get("addressRegion"))
+                location_text = ", ".join(p for p in parts if p and isinstance(p, str))
 
     # Strategy 3: Meta tags fallback
     meta = _extract_meta(html)
@@ -411,14 +420,18 @@ def parse_airbnb_html(html: str, url: str) -> PropertyBasics:
                 bedrooms = 0   # studio = 0 bedrooms by convention
 
         # Bathrooms: "1 private bath" / "1 shared bath" / "1 half-bath" / "2.5 baths"
-        # Allow any optional adjective(s) between the number and "bath".
+        # Allow any optional adjective(s) between the number and "bath". Half
+        # baths count 0.5 each and are taken out first so "half" is not read as
+        # an adjective of a full bath.
         if not bathrooms:
+            half_baths = r"(\d+)\s+half[\s\-]?baths?"
+            half_matches = re.findall(half_baths, og_title, re.I)
             bath_match = re.search(
                 r"(\d+(?:\.\d+)?)\s+(?:[a-z\-]+\s+){0,2}bath",
-                og_title, re.I,
+                re.sub(half_baths, "", og_title, flags=re.I), re.I,
             )
-            if bath_match:
-                bathrooms = float(bath_match.group(1))
+            bathrooms = (float(bath_match.group(1)) if bath_match else 0.0) \
+                + 0.5 * sum(int(h) for h in half_matches)
 
     title = title or og_title
 
@@ -449,34 +462,43 @@ def parse_airbnb_html(html: str, url: str) -> PropertyBasics:
     # Strategy 3c: Review count fallback — Airbnb shows "N reviews" in
     # several places on the page. Parse the most common pattern.
     if review_count is None:
-        review_matches = re.findall(r"(\d+)\s+reviews?\b", html, re.I)
+        review_matches = re.findall(r"(\d[\d,]*)\s+reviews?\b", html, re.I)
         if review_matches:
             # Take the largest plausible count (listing-level, not per-section)
-            candidates = [int(r) for r in review_matches if 1 <= int(r) <= 5000]
+            counts = [int(r.replace(",", "")) for r in review_matches]
+            candidates = [c for c in counts if 1 <= c <= 5000]
             if candidates:
                 review_count = max(candidates)
 
-    # Strategy 3d: Superhost detection — Airbnb marks Superhosts prominently
-    is_superhost = bool(re.search(r"superhost", html, re.I))
+    # Strategy 3d: Superhost detection. The word "superhost" is on nearly every
+    # page (badge legend, filters, other hosts), so read the flag itself: the
+    # listing's own when the page data has it, else a true-valued JSON key.
+    if listing_superhost is not None:
+        is_superhost = listing_superhost is True
+    else:
+        is_superhost = bool(re.search(r'"is_?superhost"\s*:\s*true', html, re.I))
 
     # Strategy 3e: Latitude/longitude — Airbnb embeds these in the page even
     # though it hides the exact street address. AirROI accepts lat/lng directly,
     # which is the cleanest geocode path for Airbnb-URL inputs.
     latitude: float | None = None
     longitude: float | None = None
-    coord_match = re.search(
-        r'"lat"\s*:\s*([-\d.]+)\s*,\s*"lng"\s*:\s*([-\d.]+)', html
+    coord_patterns = (
+        r'"lat"\s*:\s*([-\d.]+)\s*,\s*"lng"\s*:\s*([-\d.]+)',
+        r'"latitude"\s*:\s*([-\d.]+)[^}]{0,80}?"longitude"\s*:\s*([-\d.]+)',
     )
-    if not coord_match:
-        coord_match = re.search(
-            r'"latitude"\s*:\s*([-\d.]+)[^}]{0,80}?"longitude"\s*:\s*([-\d.]+)', html
-        )
-    if coord_match:
-        try:
-            latitude = float(coord_match.group(1))
-            longitude = float(coord_match.group(2))
-        except (TypeError, ValueError):
-            pass
+    for pattern in coord_patterns:
+        for coord_match in re.finditer(pattern, html):
+            try:
+                lat, lng = float(coord_match.group(1)), float(coord_match.group(2))
+            except ValueError:
+                continue
+            # (0, 0) is a placeholder, not a place; out-of-range is not a coordinate.
+            if (lat, lng) != (0.0, 0.0) and -90 <= lat <= 90 and -180 <= lng <= 180:
+                latitude, longitude = lat, lng
+                break
+        if latitude is not None:
+            break
 
     # Determine market. The og:title city is passed as the preferred hint —
     # it is Airbnb's own label for the listing's town.

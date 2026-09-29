@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from generators.calculator import occupancy_band_text
 from schema import (
     CalculatorDefaults,
     CompProperty,
@@ -59,7 +60,8 @@ NARRATIVE_FIELDS: list[str] = [
 ]
 
 # The two structured blocks. The template iterates both, so an absent or
-# malformed list renders as a hole in the report rather than an error.
+# malformed list renders as a hole in the report rather than an error. Required
+# by the schema for that reason.
 NARRATIVE_LIST_FIELDS: list[str] = ["amenity_badges", "positioning_cards"]
 
 # JSON-Schema for the whole object. Handed verbatim to the Anthropic tool call
@@ -97,7 +99,7 @@ NARRATIVE_INPUT_SCHEMA: dict = {
             },
         },
     },
-    "required": NARRATIVE_FIELDS,
+    "required": NARRATIVE_FIELDS + NARRATIVE_LIST_FIELDS,
 }
 
 # What each field is for, in one line. The API path gets this as prose inside
@@ -186,8 +188,10 @@ NARRATIVE_RULES: list[str] = [
 # Season-label parsing
 #
 # derive_season_labels() returns strings shaped like:
-#   "Peak Season (Jul-Oct) — 45% of annual revenue"
+#   "Peak Season (Jul-Oct): 45% of annual revenue"
 #   "Shoulder Season (Nov-Jun)"
+# The share is absent when the season was read off occupancy rather than a
+# revenue distribution.
 # We reuse those rather than recomputing, so the prompt, the brief, the
 # template copy, the methodology and the report all quote one number.
 # --------------------------------------------------------------------------
@@ -197,7 +201,7 @@ _SHARE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%\s+of annual revenue")
 
 
 def months_from_label(label: str) -> str:
-    """Extract "Jul-Oct" from "Peak Season (Jul-Oct) — 45% of annual revenue"."""
+    """Extract "Jul-Oct" from "Peak Season (Jul-Oct): 45% of annual revenue"."""
     if not label:
         return ""
     match = _MONTHS_RE.search(label)
@@ -205,7 +209,7 @@ def months_from_label(label: str) -> str:
 
 
 def share_from_label(label: str) -> Optional[float]:
-    """Extract 45.0 from "... — 45% of annual revenue". None when absent."""
+    """Extract 45.0 from "...: 45% of annual revenue". None when absent."""
     if not label:
         return None
     match = _SHARE_RE.search(label)
@@ -255,7 +259,7 @@ def comp_occupancy_line(stats: Optional[dict]) -> str:
     return (
         f"the {stats['n']}-property comp set books at a median adjusted "
         f"occupancy of {stats['median']:.0f}% "
-        f"(observed range {stats['low']:.0f}-{stats['high']:.0f}%)"
+        f"(observed range {occupancy_band_text(stats['low'], stats['high'])})"
     )
 
 
@@ -268,7 +272,7 @@ def _round(value, digits: int = 1):
     return None if value is None else round(float(value), digits)
 
 
-def _own_performance(prop, occ_summary: Optional[dict]) -> Optional[dict]:
+def own_performance(prop, occ_summary: Optional[dict]) -> Optional[dict]:
     """The subject's OWN measured trailing 12 months, or None if unlisted.
 
     AirROI returns this on get_listing() for any already-listed property. It
@@ -364,7 +368,6 @@ def build_narrative_brief(
     shoulder_season_label: str = "",
     monthly_distribution: Optional[list[float]] = None,
     seasonal_data: Optional[list[float]] = None,
-    input_ref: str = "",
     narratives_path: str = "",
     data_path: str = "",
 ) -> dict:
@@ -404,7 +407,7 @@ def build_narrative_brief(
             "amenities": list(prop.amenities or []),
             "lacks_features": list(getattr(prop, "lacking_features", None) or []),
             "description": prop.description,
-            "own_performance": _own_performance(prop, occ),
+            "own_performance": own_performance(prop, occ),
         },
         "revenue_estimate": {
             "_note": (
@@ -426,7 +429,9 @@ def build_narrative_brief(
             "_note": (
                 "Derived from this market's own monthly revenue distribution. "
                 "Empty labels mean the season is UNKNOWN here — in that case do "
-                "not name any months at all."
+                "not name any months at all. peak_share_of_annual_revenue_pct is "
+                "null when the months were read off occupancy rather than a "
+                "revenue distribution: then quote no revenue share."
             ),
             "peak_season_label": peak_season_label or "",
             "shoulder_season_label": shoulder_season_label or "",
@@ -495,7 +500,7 @@ def _output_example(prop: PropertyBasics, occ: Optional[dict]) -> dict:
     # Placeholders never nest: a bracket inside a bracket reads as a typo and
     # invites the writer to leave one of them in.
     occ_hint = (
-        f"Any occupancy figure must sit inside {occ['low']:.0f}-{occ['high']:.0f}%."
+        f"Any occupancy figure must sit inside {occupancy_band_text(occ['low'], occ['high'])}."
         if occ
         else "The comp set gave no occupancy, so quote no occupancy figure."
     )
@@ -526,8 +531,8 @@ def _output_example(prop: PropertyBasics, occ: Optional[dict]) -> dict:
 # --------------------------------------------------------------------------
 
 def slugify(text: str, max_len: int = 60) -> str:
-    """Filename-safe slug. Mirrors `report.template_engine._slugify` so the
-    brief lands beside the report under the same name."""
+    """Filename-safe slug. The one slug function: `report.template_engine`
+    imports it, so the brief lands beside the report under the same name."""
     s = re.sub(r"[^A-Za-z0-9]+", "-", (text or "").strip()).strip("-")
     if len(s) > max_len:
         s = s[:max_len].rstrip("-")

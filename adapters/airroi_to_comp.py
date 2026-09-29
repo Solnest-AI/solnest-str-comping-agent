@@ -15,9 +15,10 @@ so to_comp_property() can still read listing_info, location_info, etc. after sco
 
 from __future__ import annotations
 
-import re
+import math
 from typing import Optional
 
+import comp_filters
 from schema import CompProperty, PropertyBasics, SubjectPerformance
 
 
@@ -85,11 +86,6 @@ _BADGE_PRIORITY = [
     "Patio or balcony", "Elevator", "Free parking on premises",
 ]
 
-# Kept for backward compatibility with importers. Badge building is now an
-# ALLOWLIST (_BADGE_PRIORITY), not a denylist, so a comp with no premium
-# amenity shows fewer badges instead of junk ones.
-_SKIP_AMENITIES: set[str] = set()
-
 _TEXT_SIGNAL_PATTERNS: list[tuple[tuple[str, ...], str, str]] = [
     # Free-text signals ONLY for things with no amenity-vocabulary key.
     # "sauna" is here because it appears in 0 of the 136 real amenity strings.
@@ -98,6 +94,8 @@ _TEXT_SIGNAL_PATTERNS: list[tuple[tuple[str, ...], str, str]] = [
     # The "luxury/premium/executive" signal is deliberately gone — it fired on
     # 61/125 comps purely from host-written marketing adjectives. Objective
     # host_info.professional_management and guest_favorite replace it.
+    # Ski-in/Out and Sauna are decided by comp_filters (_BADGE_FILTER_FEATURE); their
+    # keywords here only record what they cover.
     (("ski-in", "ski in", "ski out", "ski/out", "ski access"),
      "Ski-in/Out", "\U0001F3BF"),
     (("sauna", "cold plunge", "steam room"),
@@ -108,14 +106,8 @@ _TEXT_SIGNAL_PATTERNS: list[tuple[tuple[str, ...], str, str]] = [
      "Village", "\U0001F4CD"),
 ]
 
-
-def _strip_html(text: str) -> str:
-    """Drop HTML tags before text-signal matching.
-
-    AirROI descriptions contain markup and `space</b><br` was matching the
-    old bare "spa" token.
-    """
-    return re.sub(r"<[^>]+>", " ", text or "")
+# Text-signal badge label -> the comp_filters feature that decides it.
+_BADGE_FILTER_FEATURE = {"Ski-in/Out": "ski_in_out", "Sauna": "sauna"}
 
 
 def _flatten_amenities(raw: Optional[list]) -> list[str]:
@@ -164,10 +156,19 @@ def _amenities_to_badges(
             labels.append(label)
             emojis.append(emoji)
 
-    # Pass 1: text signals from name/description, word-boundary matched.
-    text_lower = _strip_html(text_context or "").lower()
+    # Pass 1: text signals from name/description, word-boundary matched and
+    # negation-guarded. Ski access and sauna are decided by comp_filters'
+    # `listing_mentions_feature`, the same test that decides whether a comp
+    # carries a feature the subject lacks, so a card never advertises
+    # "no sauna" or "not ski-in/ski-out" as a selling point.
+    text_lower = comp_filters.strip_html(text_context)
     for keywords, label, emoji in _TEXT_SIGNAL_PATTERNS:
-        if any(re.search(r"\b" + re.escape(k) + r"\b", text_lower) for k in keywords):
+        feature = _BADGE_FILTER_FEATURE.get(label)
+        if feature:
+            found = comp_filters.listing_mentions_feature("", text_context, amenity_list, feature)
+        else:
+            found = comp_filters.text_has_keyword(text_lower, keywords)
+        if found:
             _add(label, emoji)
 
     amenities_set = set(amenity_list) if isinstance(amenity_list, list) else set()
@@ -277,7 +278,7 @@ def market_occupancy_ceiling(mapped: list[dict]) -> float:
                  if r.get("occupancy_pct") is not None)
     if not occ:
         return DEFAULT_OCC_CEILING
-    p75 = occ[min(len(occ) - 1, (3 * len(occ)) // 4)] / 100.0
+    p75 = occ[math.ceil(0.75 * len(occ)) - 1] / 100.0
     return max(OCC_CEILING_FLOOR, min(OCC_CEILING_CAP, p75))
 
 
@@ -330,13 +331,17 @@ def map_for_scorer(airroi_listing: dict) -> dict:
     # ttm_available_days is UNSOLD nights (365 - days_reserved), NOT open
     # inventory. Verified invariant, holds 200/200. Never use it as a
     # denominator and never call it "available".
+    # A missing field stays None: defaulting to 365 / 0 invented "open
+    # year-round" and "barely booked" for a comp that told us nothing, and the
+    # scorer skips those checks for None. The live corpus has none missing.
     total   = pm.get("ttm_total_days")
     blocked = pm.get("ttm_blocked_days")
     booked  = pm.get("ttm_days_reserved")
-    total   = int(total) if total is not None else 365
-    blocked = int(blocked) if blocked is not None else 0
-    m["nights_booked"] = int(booked) if booked is not None else 0
-    m["nights_listed"] = max(0, total - blocked)          # open inventory
+    total   = int(total) if total is not None else None
+    blocked = int(blocked) if blocked is not None else None
+    m["nights_booked"] = int(booked) if booked is not None else None
+    m["nights_listed"] = (max(0, total - blocked)         # open inventory
+                          if total is not None and blocked is not None else None)
     m["nights_unsold"] = pm.get("ttm_available_days")     # reference only
     m["total_days"]    = total
     m["blocked_days"]  = blocked
@@ -349,12 +354,13 @@ def map_for_scorer(airroi_listing: dict) -> dict:
     # card falls back to revenue per booked night instead of a guess.
     revpar_raw = pm.get("ttm_revpar")
     m["room_revenue"] = (float(revpar_raw) * total
-                         if revpar_raw and float(revpar_raw) > 0 else None)
+                         if total is not None and revpar_raw and float(revpar_raw) > 0
+                         else None)
     # The rate guests actually paid. Every price comparison uses this, never
     # adr: the scorer skips its price checks when this is None rather than
     # fall back to the field it replaces.
     m["nightly_rate"] = (m["room_revenue"] / m["nights_booked"]
-                         if m["room_revenue"] and m["nights_booked"] > 0 else None)
+                         if m["room_revenue"] and (m["nights_booked"] or 0) > 0 else None)
 
     # Occupancy: prefer ADJUSTED (booked / open inventory). Raw ttm_occupancy
     # divides by 365 and so understates any listing that was blocked off.
@@ -380,7 +386,7 @@ def map_for_scorer(airroi_listing: dict) -> dict:
     m["min_nights"] = (airroi_listing.get("booking_settings") or {}).get("min_nights")
 
     rev_potential = _derive_revenue_potential(
-        annual_rev, m["nightly_rate"], m["nights_listed"],
+        annual_rev, m["nightly_rate"], m["nights_listed"] or 0,
         cleaning_fee=m["cleaning_fee"], avg_los=m["avg_length_of_stay"],
     )
     m["revenue_potential_raw"] = rev_potential

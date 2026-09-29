@@ -292,6 +292,7 @@ def test_vendor_replies_never_echo_the_key(monkeypatch, capsys):
     assert "ar-live-123" not in str(airroi.AirROIError(400, "bad request for key ar-live-123"))
 
     monkeypatch.setattr(ps.config, "FIRECRAWL_API_KEY", "fc-live-456")
+    monkeypatch.setattr(ps, "_RETRY_DELAY", 0)
     transport = httpx.MockTransport(lambda req: httpx.Response(429, text="slow down fc-live-456"))
     real = httpx.AsyncClient
     monkeypatch.setattr(ps.httpx, "AsyncClient", lambda **kw: real(transport=transport, **kw))
@@ -311,6 +312,7 @@ def test_redaction_happens_before_truncation(monkeypatch, capsys):
 
     key = "fc-" + "k" * 40
     monkeypatch.setattr(ps.config, "FIRECRAWL_API_KEY", key)
+    monkeypatch.setattr(ps, "_RETRY_DELAY", 0)
     body = "x" * 280 + key
     transport = httpx.MockTransport(lambda req: httpx.Response(500, text=body))
     real = httpx.AsyncClient

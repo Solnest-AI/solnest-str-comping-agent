@@ -11,7 +11,6 @@ Usage:
 
 import argparse
 import asyncio
-import io
 import os
 import re
 import sys
@@ -19,12 +18,6 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from urllib.parse import urlparse
-
-# Force UTF-8 output on Windows (cp1252 can't encode emoji in listing names)
-if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 # Ensure project root is on sys.path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -62,11 +55,24 @@ from validators.sanity import (
 from report.template_engine import save_report
 from report.email_sender import send_report_email
 
+# Force UTF-8 output on Windows (cp1252 can't encode emoji in listing names).
+# reconfigure() keeps line buffering; a fresh TextIOWrapper did not, so a piped
+# run held its whole log in a buffer and lost it if the run was killed.
+for _stream in (sys.stdout, sys.stderr):
+    if _stream.encoding and _stream.encoding.lower() != "utf-8":
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 
 # ── Comp-pool helpers ─────────────────────────────────────────────────
 
 # Every report shows exactly this many comps (Phase A and B both check it).
 COMPS_NEEDED = 6
+
+
+def _file_slug(market: str | None) -> str:
+    """The market as a safe filename part. --market is free text, and a "/" or
+    ":" in it made the failure-report write raise and hide the real failure."""
+    return re.sub(r"[^A-Za-z0-9]+", "-", market or "").strip("-") or "report"
 
 
 def _listing_id(c: dict) -> str:
@@ -92,9 +98,10 @@ async def _check_liveness(urls: list[str]) -> list[bool]:
             return False
         try:
             r = await client.head(url)
-            # 429 = throttled but the listing exists; do not drop a good comp
-            # just because Airbnb rate-limited our probe.
-            return r.status_code < 300 or r.status_code in (301, 302, 429)
+            # Redirects are live (they are not followed here). 429 = throttled
+            # but the listing exists; do not drop a good comp just because
+            # Airbnb rate-limited our probe.
+            return r.status_code < 400 or r.status_code == 429
         except Exception:
             return False
 
@@ -137,6 +144,11 @@ _CA_PROVINCES = {
     "AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE",
     "QC", "SK", "YT",
 }
+# Written out, as property sites often do ("Whistler, British Columbia, Canada").
+_CA_WORDS = re.compile(
+    r"\b(CANADA|BRITISH COLUMBIA|ALBERTA|SASKATCHEWAN|MANITOBA|ONTARIO|QU[EÉ]BEC|"
+    r"NEW BRUNSWICK|NOVA SCOTIA|PRINCE EDWARD ISLAND|NEWFOUNDLAND|YUKON|NUNAVUT|"
+    r"NORTHWEST TERRITORIES)\b")
 # Canadian postal code: letter-digit-letter, optional space, digit-letter-digit.
 # No US ZIP or state abbreviation has this shape.
 _CA_POSTAL = re.compile(r"\b[ABCEGHJ-NPRSTVXY]\d[A-Z] ?\d[A-Z]\d\b")
@@ -224,163 +236,225 @@ def _detect_currency(address: str) -> str:
             return "CA$"
         if cleaned in _US_STATES:
             return "$"
+    # Checked after the abbreviations so "Ontario, CA" (California) stays USD.
+    if _CA_WORDS.search(address.upper()):
+        return "CA$"
     return "$"
 
 
 # ── Input type detection ──────────────────────────────────────────────
 
+# Any Airbnb domain (airbnb.com, .ca, .com.au, .co.uk, .de, fr.airbnb.ca ...)
+# and the /rooms/plus/<id> form. The old pattern knew .com, .ca and .co.xx
+# only, so an airbnb.com.au link went to Firecrawl instead of AirROI.
+_AIRBNB_ROOM = re.compile(r"^https?://(?:[\w-]+\.)*airbnb\.[a-z.]+/rooms/(?:plus/)?(\d+)", re.I)
+
+
 def _is_airbnb_url(value: str) -> bool:
-    return bool(re.match(r"https?://(www\.)?airbnb\.(com|ca|co\.\w+)/rooms/", value or ""))
+    return bool(re.match(r"^https?://(?:[\w-]+\.)*airbnb\.[a-z.]+/rooms/", value or "", re.I))
+
+
+def _airbnb_room_id(value: str) -> str:
+    m = _AIRBNB_ROOM.match(value or "")
+    return m.group(1) if m else ""
+
+
+def _as_int(value) -> int:
+    """AirROI and scraped listings send counts as 3, 3.0 or "3.0"."""
+    try:
+        return int(float(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 # ── Interactive fallback ──────────────────────────────────────────────
 
 def _ask_number(prompt: str, cast, *, attempts: int = 3):
-    """Prompt until the answer parses. A typo here used to raise ValueError and
-    abort the run AFTER the paid AirROI calls had already been made."""
+    """Prompt until the answer parses; None after `attempts` bad answers.
+    A typo here used to raise ValueError and abort the run AFTER the paid
+    AirROI calls had already been made."""
     for remaining in range(attempts - 1, -1, -1):
-        raw = input(prompt) or "0"
+        raw = input(prompt).strip()
         try:
-            return cast(raw)
+            value = cast(raw)
+            if value > 0:
+                return value
         except (TypeError, ValueError):
-            if remaining:
-                print(f"    '{raw}' is not a number, try again ({remaining} left).")
-    print(f"    Giving up on '{prompt.strip()}', using 0.")
-    return cast("0")
+            pass
+        if remaining:
+            print(f"    '{raw}' is not a usable number, try again ({remaining} left).")
+    return None
 
 
 def _prompt_missing_details(prop: PropertyBasics) -> PropertyBasics:
     """Interactively ask for missing critical property details."""
     if prop.bedrooms <= 0:
-        prop.bedrooms = _ask_number("  Number of bedrooms: ", int)
+        prop.bedrooms = _ask_number("  Number of bedrooms: ", int) or 0
     if prop.bathrooms <= 0:
-        prop.bathrooms = _ask_number("  Number of bathrooms: ", float)
+        prop.bathrooms = _ask_number("  Number of bathrooms: ", float) or 0
     if prop.max_guests <= 0:
-        prop.max_guests = _ask_number("  Max guests: ", int)
+        prop.max_guests = _ask_number("  Max guests: ", int) or 0
     if not prop.market or prop.market == "Unknown Market":
-        prop.market = input("  Market/city name (e.g. Sun Peaks): ") or "Unknown Market"
+        prop.market = input("  Market/city name (e.g. Sun Peaks): ").strip() or "Unknown Market"
     return prop
+
+
+def _missing_details(prop: PropertyBasics) -> list[str]:
+    missing = []
+    if prop.bedrooms <= 0:   missing.append("--beds")
+    if prop.bathrooms <= 0:  missing.append("--baths")
+    if prop.max_guests <= 0: missing.append("--guests")
+    if not prop.market or prop.market == "Unknown Market":
+        missing.append("--market")
+    return missing
+
+
+def _require_details(prop: PropertyBasics) -> None:
+    """Every path ends here, before anything is spent. The Airbnb path used to
+    return early and skip it, so a listing AirROI sent without a size ran the
+    paid comp search on 0BR / sleeps 0."""
+    missing = _missing_details(prop)
+    if not missing:
+        return
+    no_prompt = (f"\n[Input] Missing required fields: {', '.join(missing)}. "
+                 f"Pass them as CLI args (non-TTY environment).")
+    if not sys.stdin.isatty():
+        print(no_prompt, file=sys.stderr)
+        sys.exit(1)
+    # isatty() is not proof anyone can type: on Windows the NUL device
+    # reports as a terminal, and Claude Code runs commands that way. The
+    # prompt then hit EOF and crashed with a traceback (2026-09-28).
+    print("\n[Input] Missing property details. Please provide:")
+    try:
+        _prompt_missing_details(prop)
+    except EOFError:
+        print(no_prompt, file=sys.stderr)
+        sys.exit(1)
+    still = _missing_details(prop)
+    if still:
+        print(f"\n[Input] Still missing: {', '.join(still)}. Pass them as CLI args.",
+              file=sys.stderr)
+        sys.exit(1)
 
 
 # ── Subject enrichment ────────────────────────────────────────────────
 
-async def _resolve_subject(args) -> PropertyBasics:
-    """Turn the raw --input into a fully-populated PropertyBasics.
+def _apply_size_overrides(prop: PropertyBasics, args) -> None:
+    """--beds/--baths/--guests/--market are overrides: they always win."""
+    if args.beds:   prop.bedrooms = args.beds
+    if args.baths:  prop.bathrooms = args.baths
+    if args.guests: prop.max_guests = args.guests
+    if args.market: prop.market = args.market
 
-    Path A - Airbnb URL: AirROI get_listing (primary), HTML scrape (fallback)
-    Path B - realtor.ca URL or address: scrape_mls
-    Fallback: interactive prompts for missing beds/baths/guests
-    """
-    raw = args.input
 
-    # Path A: Airbnb URL → extract listing ID → AirROI API
-    if _is_airbnb_url(raw):
-        print(f"[Input] Airbnb URL detected: {raw}")
-        listing_id_match = re.search(r"/rooms/(\d+)", raw)
-        listing_id = int(listing_id_match.group(1)) if listing_id_match else None
+def _subject_from_airroi(data: dict, raw: str, listing_id: int, args) -> PropertyBasics:
+    """PropertyBasics from AirROI's /listings response for the subject."""
+    li = data.get("listing_info") or {}
+    pd = data.get("property_details") or {}
+    hi = data.get("host_info") or {}
+    loc = data.get("location_info") or {}
+    ratings = data.get("ratings") or {}
 
-        # Try AirROI first — structured data, no scraping, full metrics
-        if listing_id:
-            try:
-                print(f"[AirROI] Fetching listing {listing_id}...")
-                data = await get_listing(listing_id)
+    title = li.get("listing_name") or ""
+    location_text = ", ".join(filter(None, [loc.get("locality"), loc.get("region")]))
 
-                li = data.get("listing_info") or {}
-                pd = data.get("property_details") or {}
-                hi = data.get("host_info") or {}
-                loc = data.get("location_info") or {}
-                ratings = data.get("ratings") or {}
+    prop = PropertyBasics(
+        address=location_text or raw,
+        short_address=title or location_text or raw,
+        market=loc.get("locality") or "Unknown Market",
+        bedrooms=_as_int(pd.get("bedrooms")),
+        bathrooms=float(pd.get("baths") or 0),
+        max_guests=_as_int(pd.get("guests")),
+        property_type=li.get("listing_type") or "Property",
+        # AirROI gives us the country directly (0% null). Use it instead
+        # of guessing currency from address text, which mislabelled
+        # every Canadian subject as USD and understated by ~29.7%.
+        country_code=(loc.get("country_code") or "").upper(),
+        hero_image_url=li.get("cover_photo_url") or "",
+        airbnb_url=raw,
+        title=title,
+        rating=ratings.get("rating_overall"),
+        review_count=ratings.get("num_reviews"),
+        is_superhost=bool(hi.get("superhost")),
+        description=li.get("description") or "",
+        latitude=loc.get("latitude"),
+        longitude=loc.get("longitude"),
+        amenities=[str(a) for a in (pd.get("amenities") or [])],
+        min_nights=(data.get("booking_settings") or {}).get("min_nights"),
+    )
+    _apply_size_overrides(prop, args)
 
-                title = li.get("listing_name") or ""
-                # AirROI gives us the country directly (0% null). Use it instead
-                # of guessing currency from address text, which mislabelled
-                # every Canadian subject as USD and understated by ~29.7%.
-                _country_code = (loc.get("country_code") or "").upper()
-                location_text = ", ".join(filter(None, [
-                    loc.get("locality"), loc.get("region"),
-                ]))
+    # The subject's own trailing-12-month history. This response already
+    # contains it; before this it was parsed for 15 other fields and the
+    # performance block thrown away, so the report inferred the subject's
+    # occupancy from comps even when we were holding its measured number.
+    prop.subject_performance = subject_performance_from_listing(data)
+    prop.airroi_listing_id = listing_id
 
-                prop = PropertyBasics(
-                    address=location_text or raw,
-                    short_address=title or location_text or raw,
-                    market=args.market or loc.get("locality") or "Unknown Market",
-                    bedrooms=args.beds or int(pd.get("bedrooms") or 0),
-                    bathrooms=args.baths or float(pd.get("baths") or 0),
-                    max_guests=args.guests or int(pd.get("guests") or 0),
-                    property_type=li.get("listing_type") or "Property",
-                    country_code=_country_code,
-                    hero_image_url=li.get("cover_photo_url") or "",
-                    airbnb_url=raw,
-                    title=title,
-                    rating=ratings.get("rating_overall"),
-                    review_count=ratings.get("num_reviews"),
-                    is_superhost=bool(hi.get("superhost")),
-                    description=li.get("description") or "",
-                    latitude=loc.get("latitude"),
-                    longitude=loc.get("longitude"),
-                    amenities=[str(a) for a in (pd.get("amenities") or [])],
-                    min_nights=(data.get("booking_settings") or {}).get("min_nights"),
-                )
+    print(f"[AirROI] Found: {prop.title or prop.short_address}")
+    print(f"         {prop.bedrooms}BR / {prop.bathrooms}BA / Sleeps {prop.max_guests}")
+    print(f"         Rating: {prop.rating} ({prop.review_count} reviews) / Superhost: {prop.is_superhost}")
+    print(f"         Amenities: {len(prop.amenities)}")
+    sp = prop.subject_performance
+    if sp:
+        print(f"[AirROI] Subject's OWN trailing 12mo: "
+              f"{prop.currency}{sp.annual_revenue:,.0f} / "
+              f"{sp.occupancy_pct:.1f}% adj occ / "
+              f"{sp.nights_booked} nights booked")
+    else:
+        print("[AirROI] No trailing history for subject "
+              "— estimating from the market")
+    if prop.title:
+        prop.short_address = prop.title
+    return prop
 
-                # The subject's own trailing-12-month history. This response
-                # already contains it; before this it was parsed for 15 other
-                # fields and the performance block thrown away, so the report
-                # inferred the subject's occupancy from comps even when we
-                # were holding its measured number.
-                prop.subject_performance = subject_performance_from_listing(data)
-                prop.airroi_listing_id = listing_id
 
-                print(f"[AirROI] Found: {prop.title or prop.short_address}")
-                print(f"         {prop.bedrooms}BR / {prop.bathrooms}BA / Sleeps {prop.max_guests}")
-                print(f"         Rating: {prop.rating} ({prop.review_count} reviews) / Superhost: {prop.is_superhost}")
-                print(f"         Amenities: {len(prop.amenities)}")
-                sp = prop.subject_performance
-                if sp:
-                    print(f"[AirROI] Subject's OWN trailing 12mo: "
-                          f"{prop.currency}{sp.annual_revenue:,.0f} / "
-                          f"{sp.occupancy_pct:.1f}% adj occ / "
-                          f"{sp.nights_booked} nights booked")
-                else:
-                    print("[AirROI] No trailing history for subject "
-                          "— estimating from the market")
+async def _subject_from_airbnb(raw: str, args) -> PropertyBasics:
+    """Path A - Airbnb URL: AirROI get_listing (primary), HTML scrape (fallback)."""
+    print(f"[Input] Airbnb URL detected: {raw}")
+    room_id = _airbnb_room_id(raw)
+    listing_id = int(room_id) if room_id else None
 
-                if prop.title:
-                    prop.short_address = prop.title
-                return prop
-
-            except AirROIError as e:
-                print(f"[AirROI] Listing fetch failed: {e}")
-                print("[AirROI] Falling back to HTML scraper...")
-            except Exception as e:
-                print(f"[AirROI] Unexpected error: {e}")
-                print("[AirROI] Falling back to HTML scraper...")
-
-        # Fallback: HTML scrape (fragile, but covers edge cases)
+    # Try AirROI first — structured data, no scraping, full metrics
+    if listing_id:
         try:
-            print("[Airbnb] HTML scraping fallback...")
-            prop = await scrape_airbnb_listing(raw)
-            print(f"[Airbnb] Scraped: {prop.title or prop.short_address}")
-            print(f"         {prop.bedrooms}BR / {prop.bathrooms}BA / Sleeps {prop.max_guests}")
-            if args.beds:   prop.bedrooms = args.beds
-            if args.baths:  prop.bathrooms = args.baths
-            if args.guests: prop.max_guests = args.guests
-            if args.market: prop.market = args.market
-
-            if prop.title:
-                prop.short_address = prop.title
-            return prop
+            print(f"[AirROI] Fetching listing {listing_id}...")
+            return _subject_from_airroi(await get_listing(listing_id), raw, listing_id, args)
+        except AirROIError as e:
+            print(f"[AirROI] Listing fetch failed: {e}")
+            print("[AirROI] Falling back to HTML scraper...")
         except Exception as e:
-            print(f"[Airbnb] HTML scrape also failed: {e}")
-            print("[Input] Falling back to manual input...")
-            return PropertyBasics(
-                address=raw, short_address=raw,
-                market=args.market or "Unknown Market",
-                bedrooms=args.beds, bathrooms=args.baths, max_guests=args.guests,
-                airbnb_url=raw,
-            )
+            print(f"[AirROI] Unexpected error: {e}")
+            print("[AirROI] Falling back to HTML scraper...")
 
-    # Path B: Any listing URL (Zillow, Redfin, realtor.ca, VRBO, etc.)
-    # Path C: Plain address → search the internet for the property
+    # Fallback: HTML scrape (fragile, but covers edge cases)
+    try:
+        print("[Airbnb] HTML scraping fallback...")
+        prop = await scrape_airbnb_listing(raw)
+        print(f"[Airbnb] Scraped: {prop.title or prop.short_address}")
+        print(f"         {prop.bedrooms}BR / {prop.bathrooms}BA / Sleeps {prop.max_guests}")
+        _apply_size_overrides(prop, args)
+        if prop.title:
+            prop.short_address = prop.title
+        return prop
+    except Exception as e:
+        print(f"[Airbnb] HTML scrape also failed: {e}")
+        print("[Input] Falling back to manual input...")
+        return PropertyBasics(
+            address=raw, short_address=raw,
+            market=args.market or "Unknown Market",
+            bedrooms=args.beds or 0, bathrooms=args.baths or 0, max_guests=args.guests or 0,
+            airbnb_url=raw,
+        )
+
+
+def _accept_trusted_hero(url: str) -> bool:
+    return not check_subject_hero(url)
+
+
+async def _subject_from_search(raw: str, args) -> PropertyBasics:
+    """Path B - any listing URL (Zillow, Redfin, realtor.ca, VRBO, ...).
+    Path C - plain address: search the internet for the property."""
     is_url = raw.startswith(("http://", "https://"))
 
     if is_url:
@@ -406,94 +480,85 @@ async def _resolve_subject(args) -> PropertyBasics:
                       "pass this unit's own Airbnb, Zillow or Realtor link as --input.")
                 sys.exit(2)
 
-    if listing_data:
-        print(f"[Search] Found: {listing_data.get('raw_address') or listing_data.get('title')}")
-        hero = listing_data.get("hero_image_url") or ""
-        if hero:
-            print(f"         Hero: {hero[:70]}...")
-        print(f"         {listing_data.get('bedrooms')}BR / {listing_data.get('bathrooms')}BA / "
-              f"{listing_data.get('sqft') or '?'} sqft / {listing_data.get('property_type')}")
-
-        prop = PropertyBasics(
-            address=listing_data.get("raw_address") or raw,
-            short_address=listing_data.get("raw_address") or raw,
-            # --market is an OVERRIDE (see argparse help), so it must win over the
-            # scraped value, exactly like --beds/--baths/--guests below. It was
-            # inverted here, which discarded the flag precisely when the scraper
-            # had guessed a market and the user was correcting it.
-            market=args.market or listing_data.get("market") or "Unknown Market",
-            bedrooms=args.beds or int(listing_data.get("bedrooms") or 0),
-            bathrooms=args.baths or float(listing_data.get("bathrooms") or 0.0),
-            max_guests=args.guests or int(listing_data.get("max_guests") or 0),
-            property_type=listing_data.get("property_type") or "Property",
-            hero_image_url=listing_data.get("hero_image_url") or "",
-            listing_url=listing_data.get("listing_url"),
-            description=listing_data.get("description"),
-            title=listing_data.get("title"),
-            sqft=int(listing_data.get("sqft")) if listing_data.get("sqft") else None,
-            # The listing's own features (porch, deck, hot tub...). Without
-            # them an address subject reached the feature gate with nothing,
-            # and six hot-tub comps priced a house with no hot tub.
-            amenities=list(listing_data.get("features") or []),
-        )
-        # Infer guest capacity from bedrooms if not found
-        if prop.max_guests <= 0 and prop.bedrooms > 0:
-            prop.max_guests = prop.bedrooms * 2 + 2
-        # The listing had no usable photo (a map or a logo is refused), or one
-        # the photo gate will refuse (an address often resolves to a local
-        # rental company's site: Sun Peaks, 2026-09-28), so look for one on a
-        # trusted host before the gate stops the run and asks the user.
-        if not args.hero_url and (not prop.hero_image_url
-                                  or check_subject_hero(prop.hero_image_url)):
-            if prop.hero_image_url:
-                print(f"[Search] Listing photo is from an untrusted site "
-                      f"({urlparse(prop.hero_image_url).netloc}); searching for a trusted one...")
-            found = await search_hero_image(
-                prop.address or raw, accept=lambda u: not check_subject_hero(u))
-            prop.hero_image_url = found or prop.hero_image_url
-    else:
+    if not listing_data:
         print("[Search] No listing found online.")
         # Still build from CLI args — but try to at least find a hero image
         hero_url = None
         if not args.hero_url and not is_url:
-            hero_url = await search_hero_image(raw)
-
-        prop = PropertyBasics(
+            hero_url = await search_hero_image(raw, accept=_accept_trusted_hero)
+        return PropertyBasics(
             address=raw, short_address=raw,
             market=args.market or "Unknown Market",
-            bedrooms=args.beds, bathrooms=args.baths, max_guests=args.guests,
+            bedrooms=args.beds or 0, bathrooms=args.baths or 0, max_guests=args.guests or 0,
             hero_image_url=hero_url or "",
         )
 
-    # Manual overrides from CLI flags (always take precedence)
+    print(f"[Search] Found: {listing_data.get('raw_address') or listing_data.get('title')}")
+    hero = listing_data.get("hero_image_url") or ""
+    if hero:
+        print(f"         Hero: {hero[:70]}...")
+    print(f"         {listing_data.get('bedrooms')}BR / {listing_data.get('bathrooms')}BA / "
+          f"{listing_data.get('sqft') or '?'} sqft / {listing_data.get('property_type')}")
+
+    prop = PropertyBasics(
+        address=listing_data.get("raw_address") or raw,
+        short_address=listing_data.get("raw_address") or raw,
+        market=listing_data.get("market") or "Unknown Market",
+        bedrooms=_as_int(listing_data.get("bedrooms")),
+        bathrooms=float(listing_data.get("bathrooms") or 0.0),
+        max_guests=_as_int(listing_data.get("max_guests")),
+        property_type=listing_data.get("property_type") or "Property",
+        hero_image_url=hero,
+        listing_url=listing_data.get("listing_url"),
+        description=listing_data.get("description"),
+        title=listing_data.get("title"),
+        sqft=_as_int(listing_data.get("sqft")) or None,
+        # The listing's own features (porch, deck, hot tub...). Without
+        # them an address subject reached the feature gate with nothing,
+        # and six hot-tub comps priced a house with no hot tub.
+        amenities=list(listing_data.get("features") or []),
+    )
+    # --market is an OVERRIDE (see argparse help), so it wins over the scraped
+    # value, exactly like --beds/--baths/--guests.
+    _apply_size_overrides(prop, args)
+    # Infer guest capacity from bedrooms if not found
+    if prop.max_guests <= 0 and prop.bedrooms > 0:
+        prop.max_guests = prop.bedrooms * 2 + 2
+    # The listing had no usable photo (a map or a logo is refused), or one
+    # the photo gate will refuse (an address often resolves to a local
+    # rental company's site: Sun Peaks, 2026-09-28), so look for one on a
+    # trusted host before the gate stops the run and asks the user.
+    if not args.hero_url and (not prop.hero_image_url
+                              or check_subject_hero(prop.hero_image_url)):
+        if prop.hero_image_url:
+            print(f"[Search] Listing photo is from an untrusted site "
+                  f"({urlparse(prop.hero_image_url).netloc}); searching for a trusted one...")
+        found = await search_hero_image(prop.address or raw, accept=_accept_trusted_hero)
+        prop.hero_image_url = found or prop.hero_image_url
+    return prop
+
+
+async def _resolve_subject(args) -> PropertyBasics:
+    """Turn the raw --input into a fully-populated PropertyBasics.
+
+    Path A - Airbnb URL: AirROI get_listing (primary), HTML scrape (fallback)
+    Path B - listing URL or address: scrape / search
+    Every path: CLI overrides, then prompts (or exit) for missing details.
+    """
+    raw = args.input
+    if _is_airbnb_url(raw):
+        prop = await _subject_from_airbnb(raw, args)
+    else:
+        prop = await _subject_from_search(raw, args)
+
+    # Manual overrides from CLI flags (always take precedence). The Airbnb
+    # path returned before these, so --hero-url could not fix a refused photo.
     if args.hero_url:
         prop.hero_image_url = args.hero_url
     if args.listing_url:
         prop.listing_url = args.listing_url
 
-    if (prop.bedrooms <= 0 or prop.bathrooms <= 0 or prop.max_guests <= 0
-            or not prop.market or prop.market == "Unknown Market"):
-        missing = []
-        if prop.bedrooms <= 0:   missing.append("--beds")
-        if prop.bathrooms <= 0:  missing.append("--baths")
-        if prop.max_guests <= 0: missing.append("--guests")
-        if not prop.market or prop.market == "Unknown Market":
-            missing.append("--market")
-        no_prompt = (f"\n[Input] Missing required fields: {', '.join(missing)}. "
-                     f"Pass them as CLI args (non-TTY environment).")
-        if not sys.stdin.isatty():
-            print(no_prompt, file=sys.stderr)
-            sys.exit(1)
-        # isatty() is not proof anyone can type: on Windows the NUL device
-        # reports as a terminal, and Claude Code runs commands that way. The
-        # prompt then hit EOF and crashed with a traceback (2026-09-28).
-        print("\n[Input] Missing property details. Please provide:")
-        try:
-            prop = _prompt_missing_details(prop)
-        except EOFError:
-            print(no_prompt, file=sys.stderr)
-            sys.exit(1)
-
+    _require_details(prop)
     return prop
 
 
@@ -558,7 +623,9 @@ def _build_rentalizer(estimate_data: dict, prop: PropertyBasics) -> RentalizerDa
             rev_potential = float(rev_pct["p75"])
 
     if not rev_potential:
-        rev_potential = annual_rev * 1.3 if annual_rev else 0.0
+        # No p75 in the response: the estimate itself is the only defensible
+        # figure. A multiplier on it would be a number nobody measured.
+        rev_potential = annual_rev
 
     # Monthly seasonality from revenue distribution ratios
     # These are proportions (sum to 1.0) — convert to monthly revenue estimates
@@ -614,10 +681,11 @@ async def _render_and_gate(report_data: ReportData, slug: str) -> Path:
 async def _render_only(args) -> None:
     """--render: rebuild the HTML from cached data plus new narrative copy.
 
-    This is the second half of the Claude Code loop. It touches NO network and
-    spends NO API credit: the expensive work (AirROI, Airbtics, liveness probes)
-    already happened on the first pass and its result is on disk. Swapping in
-    better copy should be free, otherwise nobody does it twice.
+    This is the second half of the Claude Code loop. It spends NO API credit:
+    the expensive work (AirROI, comp liveness probes) already happened on the
+    first pass and its result is on disk. The only network use is the free
+    Phase B image check. Swapping in better copy should be free, otherwise
+    nobody does it twice.
     """
     data_path = Path(args.render)
     if not data_path.exists():
@@ -646,7 +714,7 @@ async def _render_only(args) -> None:
             sys.exit(2)
 
     report_data.report_date = date.today().strftime("%B %d, %Y")
-    slug = report_data.property.market.replace(" ", "-") or "report"
+    slug = _file_slug(report_data.property.market)
     output_path = await _render_and_gate(report_data, slug)
 
     if args.email:
@@ -670,7 +738,8 @@ Examples:
         """,
     )
     parser.add_argument("--input", required=False,
-                        help="Airbnb URL, realtor.ca URL, or physical property address")
+                        help="Airbnb URL, Zillow/Realtor URL, or a street address "
+                             "(required unless --render)")
     parser.add_argument("--email", default=None,
                         help="Email address to send the report to (optional)")
     parser.add_argument("--beds", type=int, default=0,
@@ -715,7 +784,7 @@ Examples:
                         help="Accept a listing for a different unit at the same street address "
                              "(the address search stops and asks otherwise)")
     parser.add_argument("--listing-url", default=None,
-                        help="Manual realtor.ca listing URL (use when MLS search fails)")
+                        help="Link for the report's View Listing button")
     parser.add_argument("--currency", default=None, choices=["$", "CA$"],
                         help="Override currency (auto-detected from address: $ for US, CA$ for Canada)")
     return parser
@@ -757,7 +826,7 @@ def _stop_if_hero_refused(prop: PropertyBasics) -> None:
     sys.exit(2)
 
 
-def _resource_subject_performance(prop: PropertyBasics, candidates_raw: list[dict]) -> None:
+async def _resource_subject_performance(prop: PropertyBasics, candidates_raw: list[dict]) -> None:
     """Re-read the subject's performance from the comp pool, in the report's currency.
 
     Step 1's get_listing() call defaults to currency="usd" and cannot pass the
@@ -769,7 +838,9 @@ def _resource_subject_performance(prop: PropertyBasics, candidates_raw: list[dic
     though the property earned 32% below its own potential.
     The subject is normally inside the comp pool, and that copy is in the SAME
     currency as everything else, so re-source the performance block from there.
-    Costs nothing: the data is already in hand.
+    Costs nothing: the data is already in hand. When the subject is not in the
+    pool, fetch it again in the right currency ($0.10) rather than ship USD
+    figures labelled CA$.
     """
     if prop.subject_performance is None or not prop.airroi_listing_id:
         return
@@ -785,11 +856,21 @@ def _resource_subject_performance(prop: PropertyBasics, candidates_raw: list[dic
                           f"{prop.currency}{was:,.0f} -> "
                           f"{prop.currency}{recast.annual_revenue:,.0f}")
             return
-    if _airroi_currency(prop) != "usd":
-        print("[AirROI] WARNING: subject not found in the comp pool; its "
-              "performance figures are USD while the report is "
-              f"{prop.currency}. Treat own_performance with caution.",
-              file=sys.stderr)
+    currency = _airroi_currency(prop)
+    if currency == "usd":
+        return
+    try:
+        recast = subject_performance_from_listing(
+            await get_listing(int(prop.airroi_listing_id), currency=currency))
+    except Exception as e:  # kit.KeyFailure is a BaseException and still stops the run
+        print(f"[AirROI] Could not re-fetch the subject in {prop.currency} "
+              f"({type(e).__name__}); leaving out its trailing figures rather than "
+              f"showing USD as {prop.currency}", file=sys.stderr)
+        recast = None
+    prop.subject_performance = recast
+    if recast is not None:
+        print(f"[AirROI] Subject performance re-fetched in {prop.currency}: "
+              f"{prop.currency}{recast.annual_revenue:,.0f}")
 
 
 async def _fetch_estimate_and_pool(prop: PropertyBasics) -> tuple[dict, list[dict], RentalizerData]:
@@ -802,12 +883,14 @@ async def _fetch_estimate_and_pool(prop: PropertyBasics) -> tuple[dict, list[dic
         rev = estimate_data.get("revenue") or 0
         adr = estimate_data.get("average_daily_rate") or 0
         occ = estimate_data.get("occupancy") or 0
-        print(f"[AirROI] Estimate: rev ${rev:,.0f} / ADR ${adr:.0f} / Occ {occ:.0%}")
+        occ_pct = occ * 100 if occ <= 1 else occ
+        print(f"[AirROI] Estimate: rev {prop.currency}{rev:,.0f} / ADR {prop.currency}{adr:.0f} "
+              f"/ Occ {occ_pct:.0f}%")
         print(f"[AirROI] Comp candidates: {len(candidates_raw)}")
         if _adopt_estimate_location(prop, estimate_data):
             print(f"[AirROI] Subject located from the estimate: "
                   f"{prop.latitude:.5f}, {prop.longitude:.5f}")
-        _resource_subject_performance(prop, candidates_raw)
+        await _resource_subject_performance(prop, candidates_raw)
     except AirROIError as e:
         print(f"\n[AirROI] Pipeline error: {e}")
         print("[AirROI] Check address/coordinates; try specifying --beds/--baths/--guests.")
@@ -821,8 +904,7 @@ async def _fetch_estimate_and_pool(prop: PropertyBasics) -> tuple[dict, list[dic
 
 
 def _subject_airbnb_id(prop: PropertyBasics) -> str:
-    m = re.search(r"/rooms/(\d+)", prop.airbnb_url or "")
-    return m.group(1) if m else ""
+    return _airbnb_room_id(prop.airbnb_url or "")
 
 
 def _normalize_name(text: str) -> str:
@@ -872,6 +954,22 @@ class PoolFilters:
             exclude_terms=self.exclude_terms,
         )
 
+    def enforce_like(self, selection: comp_filters.PoolSelection,
+                     candidates: list[dict]) -> list[dict]:
+        """Apply to `candidates` exactly what `selection` enforced on the main
+        pool: the same filters (unless it had to relax them), the operator's
+        --exclude always, and every lacking feature it actually dropped on.
+        Never relaxes on its own, so a late candidate cannot bring back a comp
+        kind the main pool kept out."""
+        kept = candidates
+        if not selection.relaxed:
+            kept, _ = comp_filters.apply_comp_filters(
+                kept, drop_on_water=self.drop_on_water, required_features=self.required)
+        kept, _ = comp_filters.apply_keyword_exclusions(kept, self.exclude_terms)
+        dropped_on = {f for _, fs in selection.lacking_dropped for f in fs}
+        return [c for c in kept
+                if not any(comp_filters.comp_mentions_feature(c, f) for f in dropped_on)]
+
 
 def _decide_filters(args, prop: PropertyBasics) -> PoolFilters:
     """Water proximity + must-have / must-not-have features.
@@ -892,7 +990,8 @@ def _decide_filters(args, prop: PropertyBasics) -> PoolFilters:
     )
 
     if args.require is not None:
-        required = [f.strip() for f in args.require.split(",") if f.strip()]
+        required = [comp_filters.normalize_feature(f)
+                    for f in args.require.split(",") if f.strip()]
     elif args.no_feature_filter:
         required = []
     else:
@@ -1125,15 +1224,20 @@ async def _pick_live_comps(result: dict, subject_for_scoring: dict) -> list[dict
     return live_selected
 
 
-async def _widen(prop: PropertyBasics, selected: list[dict], mapped: list[dict],
-                 subject_for_scoring: dict, subject_id: str) -> None:
-    """Fewer than 6 comps: query adjacent bedroom counts. Appends to `selected`."""
+async def _widen(prop: PropertyBasics, selected: list[dict], pool: CompPool,
+                 filters: PoolFilters, subject_for_scoring: dict, subject_id: str) -> None:
+    """Fewer than 6 comps: query adjacent bedroom counts. Appends to `selected`.
+
+    New candidates go through the same filters the main pool did. The pass
+    used to score them raw, so a comp dropped by --exclude, the water filter
+    or a feature filter came straight back through an adjacent-bedroom query.
+    """
     need = COMPS_NEEDED - len(selected)
     print(f"\n[Widening] Only {len(selected)} comps — need {need} more. Searching wider area...")
 
     already_ids = {_listing_id(c) for c in selected}
-    # Also exclude all candidates we already scored (they failed for a reason)
-    already_ids |= {_listing_id(c) for c in mapped}
+    # Every candidate already seen, filtered out or scored: each is out for a reason.
+    already_ids |= {_listing_id(c) for c in pool.unfiltered}
     # Never re-admit the subject's own listing through the widening pass.
     if subject_id:
         already_ids.add(subject_id)
@@ -1170,20 +1274,19 @@ async def _widen(prop: PropertyBasics, selected: list[dict], mapped: list[dict],
 
     if wider_candidates:
         print(f"[Widening] Found {len(wider_candidates)} new candidates from adjacent bedroom counts")
-        wider_result = rank_comps(subject_for_scoring, map_batch_for_scorer(wider_candidates),
+        admissible = filters.enforce_like(pool.selection, wider_candidates)
+        if len(admissible) < len(wider_candidates):
+            print(f"[Widening] {len(wider_candidates) - len(admissible)} left out by the "
+                  f"same filters and exclusions as the main pool")
+        wider_result = rank_comps(subject_for_scoring, map_batch_for_scorer(admissible),
                                   top_n=need * 2)
-        wider_ranked = wider_result.get("ranked") or []
-        if wider_ranked:
-            wider_urls = [_airbnb_id_to_url(c) for c in wider_ranked]
-            wider_liveness = await _check_liveness(wider_urls)
-            for cand, is_live in zip(wider_ranked, wider_liveness):
-                if len(selected) >= COMPS_NEEDED:
-                    break
-                if is_live:
-                    print(f"[Widening] Added: {cand.get('name', '?')[:40]} ({cand.get('bedrooms')}BR)")
-                    selected.append(cand)
-                else:
-                    print(f"[Widening] Dead listing skipped: {cand.get('name', '?')[:35]}")
+        # Listing page AND cover photo, like every other comp: a live page
+        # with a dead photo passed here and then blocked the report at Phase A.
+        added, _ = await _first_usable(wider_result.get("ranked") or [], need,
+                                       log_prefix="[Widening] Dead listing or photo skipped: ")
+        for cand in added:
+            print(f"[Widening] Added: {cand.get('name', '?')[:40]} ({cand.get('bedrooms')}BR)")
+            selected.append(cand)
 
     if len(selected) < COMPS_NEEDED:
         print(f"[Widening] Still only {len(selected)} comps after widening — proceeding with what we have")
@@ -1259,7 +1362,7 @@ async def _market_curve(prop: PropertyBasics, rentalizer: RentalizerData,
         # row, with every percentile identical, so counting rows reported
         # 12/12 for a market that only reported 9.
         out.missing_months = market_months_missing(out.market_occ)
-        covered = max(0, len(out.market_occ) - out.missing_months)
+        covered = 12 - out.missing_months
         where = mkt.get("locality") or mkt.get("region") or "market"
         print(f"[Seasonal] AirROI market curve for {where}: {covered}/12 months"
               + (f" ({out.missing_months} with no market data, filled from "
@@ -1276,7 +1379,7 @@ async def _market_curve(prop: PropertyBasics, rentalizer: RentalizerData,
         else:
             out.data = []
             print("[Seasonal] Market curve too thin — falling back to per-comp metrics")
-    except (AirROIError, httpx.HTTPError, asyncio.TimeoutError) as e:
+    except Exception as e:  # kit.KeyFailure is a BaseException and still stops the run
         print(f"[Seasonal] Market curve unavailable ({type(e).__name__}) — "
               "falling back to per-comp metrics", file=sys.stderr)
         out.data = []
@@ -1299,7 +1402,7 @@ async def _subject_monthly(prop: PropertyBasics) -> list[float | None]:
             listing_id=int(prop.airroi_listing_id), num_months=12,
             currency=_airroi_currency(prop),
         )
-    except (AirROIError, httpx.HTTPError, asyncio.TimeoutError) as e:
+    except Exception as e:  # kit.KeyFailure is a BaseException and still stops the run
         print(f"[Seasonal] Subject monthly unavailable ({type(e).__name__}) — "
               "chart will show the market band only", file=sys.stderr)
         return []
@@ -1424,6 +1527,8 @@ def _maybe_email(args, short_address: str, output_path: Path) -> None:
 async def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
+    if not args.input and not args.render:
+        parser.error("--input is required (an Airbnb link, a Zillow/Realtor link or an address)")
 
     if args.no_cache:
         os.environ["AIRROI_CACHE"] = "0"
@@ -1490,7 +1595,7 @@ async def main() -> None:
     print(f"[Scorer] Score range: {result['score_range']}")
 
     if len(result["selected"]) < COMPS_NEEDED:
-        await _widen(prop, result["selected"], mapped, subject_for_scoring, subject_id)
+        await _widen(prop, result["selected"], pool, filters, subject_for_scoring, subject_id)
         # The widening pass pulls from a second, larger query, so the funnel
         # above no longer describes where the delivered set came from. Say so
         # rather than printing a tally that does not add up.
@@ -1506,7 +1611,7 @@ async def main() -> None:
     # Step 6: Sanity checks — Phase A (blocking, pre-render)
     print("\n--- Step 6: Sanity Phase A (pre-render, blocking) ---")
     report_data = ReportData(property=prop, rentalizer=rentalizer, comps=comps)
-    slug = prop.market.replace(" ", "-") if prop.market else "report"
+    slug = _file_slug(prop.market)
     phase_a_failures = await run_phase_a(report_data)
     if phase_a_failures:
         write_failure_report(
@@ -1557,7 +1662,6 @@ async def main() -> None:
         seasonal_data=season.data,
         narratives_file=args.narratives,
         output_dir=config.OUTPUT_DIR,
-        input_ref=args.input,
     )
     narratives.peak_season_label = peak_label
     narratives.shoulder_season_label = shoulder_label
@@ -1600,7 +1704,8 @@ async def main() -> None:
         print("\n[FAIL] Calculator sanity failed:", file=sys.stderr)
         for f in calc_failures:
             print(f"  - {f}", file=sys.stderr)
-        sys.exit(1)
+        # Same exit as every other blocking sanity gate.
+        sys.exit(2)
 
     _write_report_data(report_data)
     output_path = await _render_and_gate(report_data, slug)
