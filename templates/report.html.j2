@@ -661,10 +661,10 @@
           </div>
         </div>
 
-        <div class="flex items-center gap-3 no-print lg:pt-2">
+        <div class="flex flex-wrap lg:flex-nowrap items-center gap-3 no-print lg:pt-2">
           <button
             onclick="window.print()"
-            class="btn-primary whitespace-nowrap"
+            class="btn-primary whitespace-nowrap shrink-0"
           >
             📄 Print / Save PDF
           </button>
@@ -672,7 +672,7 @@
           <a
             href="{{ branding.website_url | safe_url }}"
             target="_blank"
-            class="btn-secondary"
+            class="btn-secondary whitespace-nowrap shrink-0"
           >
             🌐 {{ branding.website_url | replace("https://","") | replace("http://","") | trim("/") }}
           </a>
