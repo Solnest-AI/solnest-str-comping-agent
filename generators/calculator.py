@@ -14,6 +14,27 @@ def _round_up(value: float, step: int) -> int:
     return int(math.ceil(value / step) * step)
 
 
+def _inward(value: float, digits: int, up: bool) -> float:
+    scaled = round(value * 10 ** digits, 6)
+    return (math.ceil(scaled) if up else math.floor(scaled)) / 10 ** digits
+
+
+def occupancy_band_text(low: float, high: float) -> str:
+    """"61-89%" for an observed band, with both bounds rounded INWARD.
+
+    Half-up rounding turned a real 61.4-88.6% into "61-89%", a claim wider than
+    the data. Low rounds up and high rounds down; a band that holds no whole
+    number falls back to one decimal, also inward.
+    """
+    lo, hi = _inward(low, 0, True), _inward(high, 0, False)
+    if lo < hi:
+        return f"{lo:.0f}-{hi:.0f}%"
+    if lo == hi:
+        return f"{lo:.0f}%"
+    lo, hi = _inward(low, 1, True), _inward(high, 1, False)
+    return f"{lo:.1f}-{hi:.1f}%" if lo < hi else f"{low:.1f}%"
+
+
 # Minimum market-pool size before its median is trusted over the comp median.
 # Below this a "pool" is just the comp set with extra steps.
 MIN_POOL_FOR_ANCHOR = 8
@@ -218,9 +239,9 @@ def derive_calculator_defaults(
             occ_min=30,
             occ_max=75,
             occ_default=round(rentalizer.occupancy_pct),
-            adr_min=_round_down(rentalizer.adr * 0.6, 50),
-            adr_max=_round_up(rentalizer.adr * 1.5, 50),
-            adr_default=_round_down(rentalizer.adr, 50),
+            adr_min=max(50, _round_down(rentalizer.adr * 0.6, 50)),
+            adr_max=max(100, _round_up(rentalizer.adr * 1.5, 50)),
+            adr_default=max(50, _round_down(rentalizer.adr, 50)),
             occ_range_text=f"30-75% for premium {prop.market} properties",
             adr_range_text=f"{prop.currency}{int(rentalizer.adr * 0.6):,} - {prop.currency}{int(rentalizer.adr * 1.5):,} based on market data",
         )
@@ -250,8 +271,11 @@ def derive_calculator_defaults(
     occ_max = min(95, _round_up(max(max(occ_values), occ_anchor) + 10, 5))
     occ_default = int(min(occ_max, max(occ_min, round(occ_anchor))))
 
-    adr_min = _round_down(min(min(adr_values), adr_anchor) * 0.7, ADR_STEP)
-    adr_max = _round_up(max(max(adr_values), adr_anchor) * 1.2, ADR_STEP)
+    # One step is the floor: a $0 minimum fails the sanity gate and a slider
+    # that starts at zero says nothing.
+    adr_min = max(ADR_STEP, _round_down(min(min(adr_values), adr_anchor) * 0.7, ADR_STEP))
+    adr_max = max(adr_min + ADR_STEP,
+                  _round_up(max(max(adr_values), adr_anchor) * 1.2, ADR_STEP))
     # Round to nearest, not down: flooring to the next lower $50 is a
     # one-directional understatement of up to 11.9% in low-ADR markets.
     adr_default = int(round(adr_anchor / ADR_STEP) * ADR_STEP)
@@ -283,7 +307,7 @@ def derive_calculator_defaults(
     # bounds are the anchor padded out, and no industry source was consulted.
     occ_range_text = (
         f"{occ_min}-{occ_max}% adjustable; the six comps observed "
-        f"{int(round(min(occ_values)))}-{int(round(max(occ_values)))}%"
+        f"{occupancy_band_text(min(occ_values), max(occ_values))}"
     )
     adr_range_text = (
         f"{prop.currency}{int(min(adr_values)):,} - "
@@ -303,7 +327,10 @@ def derive_calculator_defaults(
         days_min=days_min,
         days_max=365,
         days_default=days_default,
-        days_step=5,
+        # Step 1: the default is the property's real open-nights figure (e.g.
+        # 343). A 5-night grid made the browser snap it to 345, a number
+        # nobody measured, next to prose quoting 343.
+        days_step=1,
         occ_range_text=occ_range_text,
         adr_range_text=adr_range_text,
         occ_basis=occ_basis,
@@ -359,44 +386,13 @@ def aggregate_seasonal_from_comps(
     return out
 
 
-def airbtics_to_seasonal(airbtics_metrics: list[dict]) -> list[float | None]:
-    """Convert Airbtics monthly_metrics array to 12-element calendar series.
-
-    Airbtics metrics carry "month" keys (typically YYYY-MM strings) and
-    "occupancy" values. Maps each entry to its calendar month (0-11). If multiple
-    years cover the same month, the most recent value wins (insertion order).
-
-    Returns 12 values, Jan-Dec, with None for months Airbtics did not cover.
-    """
-    out: list[float | None] = [None] * 12
-    for entry in airbtics_metrics or []:
-        if not isinstance(entry, dict):
-            continue
-        month_key = entry.get("month") or ""
-        try:
-            mo = int(str(month_key).split("-")[1]) - 1
-            if not (0 <= mo <= 11):
-                continue
-        except (ValueError, IndexError):
-            continue
-        occ = entry.get("occupancy")
-        if isinstance(occ, (int, float)):
-            out[mo] = float(occ)
-    # A missing month must stay None, not 0.0. Airbtics returns a TRAILING
-    # 12-month window, so at every month boundary it can briefly return 11
-    # entries — and a 0% month rendered on a client seasonality chart reads as
-    # broken software, not as absent data. The caller decides what to do.
-    return out
-
-
 def market_occupancy_to_seasonal(results: list[dict]) -> list[float | None]:
     """Convert AirROI /markets/metrics/occupancy rows to a 12-element calendar.
 
     Rows carry `date` as "YYYY-MM-01" over a TRAILING twelve months, so they
     must be mapped by calendar month, not by position. Occupancy arrives as a
     0-1 fraction and is returned as a percentage to match every other seasonal
-    source. Uncovered months stay None; the caller decides, exactly as with
-    airbtics_to_seasonal.
+    source. Uncovered months stay None; the caller decides.
 
     `p50` (median), NOT `avg`. Measured on Sun Peaks against the subject's own
     12 months: avg is off by 20.9 points, p50 by 16.9, against 16.1 for the
@@ -467,13 +463,39 @@ def market_occupancy_band(results: list[dict]) -> dict[str, list[float | None]]:
     return out
 
 
+def _row_month(row: dict) -> int | None:
+    """Calendar month 0-11 of a market row's `date`, or None if unreadable."""
+    try:
+        mo = int(str((row or {}).get("date") or "").split("-")[1]) - 1
+    except (ValueError, IndexError):
+        return None
+    return mo if 0 <= mo <= 11 else None
+
+
 def market_months_missing(results: list[dict] | None) -> int:
-    """How many of the twelve months the market reported nothing for."""
-    return sum(1 for r in (results or []) if not market_has_data(r))
+    """How many of the twelve calendar months the market reported nothing for.
+
+    Counts absent months as well as the zero-row sentinel: twelve minus the
+    distinct calendar months that carry real data. With no market response at
+    all there is no curve to have gaps in, so that is 0.
+    """
+    if not results:
+        return 0
+    covered = {
+        mo for r in results
+        if market_has_data(r) and (mo := _row_month(r)) is not None
+    }
+    return 12 - len(covered)
 
 
 def _interpolate_gaps(series: list[float | None]) -> list[float] | None:
-    """Fill isolated None months from their circular neighbours.
+    """Fill isolated None months by linear interpolation between real months.
+
+    Each gap is placed between the nearest REAL months either side (wrapping
+    across year-end), so a run of gaps fills as a straight line. Reading from
+    the list being filled instead made the second gap of a run lean on the
+    first gap's guess: anchors 10 and 50 with three gaps between filled
+    30 / 40 / 45, not 20 / 30 / 40.
 
     Returns None when more than 3 months are missing — at that point the curve
     is a guess, and the caller should try another source or block the report.
@@ -485,13 +507,14 @@ def _interpolate_gaps(series: list[float | None]) -> list[float] | None:
         return None
     out = list(series)
     for i in missing:
-        prev_v = next((out[(i - k) % 12] for k in range(1, 12)
-                       if out[(i - k) % 12] is not None), None)
-        next_v = next((out[(i + k) % 12] for k in range(1, 12)
-                       if out[(i + k) % 12] is not None), None)
-        vals = [v for v in (prev_v, next_v) if v is not None]
-        out[i] = sum(vals) / len(vals) if vals else None
-    return [float(v) for v in out] if all(v is not None for v in out) else None
+        back, prev_v = next(((k, series[(i - k) % 12]) for k in range(1, 12)
+                             if series[(i - k) % 12] is not None), (None, None))
+        ahead, next_v = next(((k, series[(i + k) % 12]) for k in range(1, 12)
+                              if series[(i + k) % 12] is not None), (None, None))
+        if prev_v is None or next_v is None:
+            return None
+        out[i] = prev_v + (next_v - prev_v) * back / (back + ahead)
+    return [float(v) for v in out]
 
 
 def derive_seasonal_data_with_basis(
@@ -501,10 +524,10 @@ def derive_seasonal_data_with_basis(
 ) -> tuple[list[float], str]:
     """Return (12 monthly occupancy values Jan-Dec, basis label).
 
-    The basis says WHICH source supplied the curve: "airbtics", "comps",
+    The basis says WHICH source supplied the curve: "market", "comps",
     "subject" or "" when nothing did. Callers use it to decide whether the
-    per-comp AirROI metric calls can be skipped — only an Airbtics-supplied
-    curve justifies skipping them, and only Airbtics may be named as the source.
+    per-comp AirROI metric calls can be skipped — only a market curve justifies
+    skipping them, and the report names the source from this label.
 
     Priority order (most reliable first):
       1. AirROI market occupancy — whole market, with p25-p90 percentiles
@@ -516,11 +539,10 @@ def derive_seasonal_data_with_basis(
     market data, not generic seasonality assumptions.
     """
     # Priority 1: AirROI market occupancy (one $0.10 call). AirROI is the SINGLE
-    # market-data source for this report (Ryan-stated 2026-09-20). Airbtics used
-    # to sit ahead of this and was removed: two providers meant "the market"
-    # silently meant different things on different client reports, and only the
-    # AirROI call carries the p25/p75 percentiles the chart shades as a band, so
-    # an Airbtics-sourced report lost the band without saying so.
+    # market-data source for this report (Ryan-stated 2026-09-20): a second
+    # provider meant "the market" silently meant different things on different
+    # client reports, and only this call carries the p25/p75 percentiles the
+    # chart shades as a band.
     #
     # Fill the occasional single-month gap from its neighbours rather than
     # printing a zero. With more than 3 months missing there is no credible
@@ -547,13 +569,11 @@ def derive_seasonal_data_with_basis(
 
     # Priority 3: subject's own monthly data (capped, since it's only one data point).
     #
-    # This MUST reject a series containing None. agent.py assigns
-    # rentalizer.monthly_occupancy = airbtics_to_seasonal(metrics) when the
-    # subject has no monthly data of its own, and that helper leaves uncovered
-    # months as None by design. Without this guard a market Airbtics tracks for
-    # fewer than 9 months would be rejected by Priority 1 and then resurrected
-    # here, where min(None, CAP) raises TypeError and kills the run AFTER the
-    # AirROI calls have been paid for. Verified by test_seasonal_sparse.py.
+    # This MUST reject a series containing None. A partial series on
+    # rentalizer.monthly_occupancy would be rejected by Priority 1 and then
+    # resurrected here, where min(None, CAP) raises TypeError and kills the run
+    # AFTER the AirROI calls have been paid for. Verified by
+    # test_seasonal_sparse.py.
     own = rentalizer.monthly_occupancy
     if own and len(own) == 12 and all(v is not None for v in own):
         return [min(v, SEASONAL_PEAK_CAP) for v in own], "subject"
@@ -561,20 +581,6 @@ def derive_seasonal_data_with_basis(
     # Fully exhausted — return empty so sanity gate blocks delivery.
     return [], ""
 
-
-
-def derive_seasonal_data(
-    rentalizer: RentalizerData,
-    comp_monthly_data: list[list[float | None]] | None = None,
-    market_occupancy: list[dict] | None = None,
-) -> list[float]:
-    """Back-compat wrapper: the series only. Use the _with_basis form when the
-    caller needs to know which source paid for the curve."""
-    series, _ = derive_seasonal_data_with_basis(
-        rentalizer, comp_monthly_data=comp_monthly_data,
-        market_occupancy=market_occupancy,
-    )
-    return series
 
 
 _MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -602,25 +608,35 @@ def derive_season_labels(
 
     Prefers AirROI's `monthly_revenue_distributions` (12 floats summing to ~1.0,
     already fetched by the estimate call and previously referenced nowhere).
-    Falls back to the seasonal occupancy series.
+    Falls back to the seasonal occupancy series when that is missing or sums to
+    zero. The fallback names the months only: occupancy is not revenue, so the
+    "% of annual revenue" share is left off.
 
     The season was previously hardcoded to "Dec-Mar (ski season)" in four
     places, which shipped a ski narrative on a Florida beach report whose own
     chart peaked in July.
     """
     series = None
+    share_known = False
     if monthly_distribution and len(monthly_distribution) == 12:
-        series = [float(v or 0) for v in monthly_distribution]
-    elif seasonal_data and len(seasonal_data) == 12:
-        series = [float(v or 0) for v in seasonal_data]
-    if not series or sum(series) <= 0:
+        dist = [float(v or 0) for v in monthly_distribution]
+        if sum(dist) > 0:
+            series, share_known = dist, True
+    if series is None and seasonal_data and len(seasonal_data) == 12:
+        occ = [float(v or 0) for v in seasonal_data]
+        if sum(occ) > 0:
+            series = occ
+    if series is None:
         return "", ""
 
     ranked = sorted(range(12), key=lambda i: series[i], reverse=True)
     peak = ranked[:4]
     shoulder = [i for i in range(12) if i not in peak]
-    peak_share = sum(series[i] for i in peak) / sum(series)
-    return (
-        f"Peak Season ({_contiguous_label(peak)}): {peak_share:.0%} of annual revenue",
-        f"Shoulder Season ({_contiguous_label(shoulder)})",
-    )
+    peak_label = f"Peak Season ({_contiguous_label(peak)})"
+    if share_known:
+        # Only a revenue distribution can say what share of revenue the peak
+        # carries. Occupancy points are not revenue: quoting a share off them
+        # would invent a number that then flows into the brief.
+        peak_share = sum(series[i] for i in peak) / sum(series)
+        peak_label += f": {peak_share:.0%} of annual revenue"
+    return peak_label, f"Shoulder Season ({_contiguous_label(shoulder)})"

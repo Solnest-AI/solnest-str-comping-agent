@@ -20,6 +20,7 @@ Run: pytest tests/test_narratives.py -v
 
 import asyncio
 import json
+import math
 import re
 import statistics
 import sys
@@ -150,8 +151,8 @@ def _run(coro):
 def test_tool_call_and_file_loader_share_one_schema():
     """The forced tool call, the brief and the loader must not drift apart."""
     assert N.NARRATIVE_TOOL["input_schema"] is NARRATIVE_INPUT_SCHEMA
-    assert NARRATIVE_INPUT_SCHEMA["required"] == NARRATIVE_FIELDS
-    # The loader is stricter on purpose: a hand-written file has no retry loop.
+    # The two lists are required too: a missing one renders as a hole.
+    assert NARRATIVE_INPUT_SCHEMA["required"] == NARRATIVE_FIELDS + NARRATIVE_LIST_FIELDS
     assert set(N._FILE_REQUIRED) == set(NARRATIVE_FIELDS) | set(NARRATIVE_LIST_FIELDS)
 
 
@@ -189,8 +190,11 @@ def test_template_copy_quotes_only_real_comp_occupancy(market):
     # Occupancy percentages are the only "NN%" the copy emits. The spread
     # sentence prints a difference in points, so allow that value too.
     spread = round(stats["high"] - stats["low"])
+    # Bounds are rounded INWARD (low up, high down), so the copy never claims
+    # a band wider than the comps actually covered.
     allowed = {
         round(stats["low"]), round(stats["high"]), round(stats["median"]), spread,
+        math.ceil(stats["low"]), math.floor(stats["high"]),
     }
     for pct in re.findall(r"(\d+)%", blob):
         assert int(pct) in allowed, (
@@ -362,6 +366,7 @@ def test_file_path_beats_the_api_key(case, tmp_path, monkeypatch):
     """A named file wins even when a key is configured."""
     prop, rentalizer, comps, calculator = case
     monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "sk-should-not-be-used")
+    monkeypatch.setattr(config, "NARRATIVES_VIA_API", True)
 
     def explode(*_a, **_k):
         raise AssertionError("the API must not be called when a file is given")
@@ -526,6 +531,7 @@ def test_api_path_survives_a_leading_thinking_block(case, monkeypatch):
     that raises AttributeError and burned the whole retry loop."""
     prop, rentalizer, comps, calculator = case
     monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr(config, "NARRATIVES_VIA_API", True)
     blocks = [
         _Block("thinking", thinking="considering the comp set"),
         _Block("tool_use", input=dict(VALID_PAYLOAD)),
@@ -543,6 +549,7 @@ def test_api_path_survives_a_leading_thinking_block(case, monkeypatch):
 def test_api_path_parses_a_fenced_text_block(case, monkeypatch):
     prop, rentalizer, comps, calculator = case
     monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr(config, "NARRATIVES_VIA_API", True)
     fenced = "```json\n" + json.dumps(VALID_PAYLOAD) + "\n```"
     monkeypatch.setattr(N, "anthropic", _fake_anthropic([_Block("text", text=fenced)]))
     out = _run(N.generate_narratives(prop, rentalizer, comps, calculator))
@@ -552,6 +559,7 @@ def test_api_path_parses_a_fenced_text_block(case, monkeypatch):
 def test_api_failure_falls_back_to_template_copy(case, monkeypatch, tmp_path):
     prop, rentalizer, comps, calculator = case
     monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr(config, "NARRATIVES_VIA_API", True)
     monkeypatch.setattr(
         N, "anthropic", _fake_anthropic([], raises=_FakeAPIError("503")),
     )
@@ -564,8 +572,22 @@ def test_api_failure_falls_back_to_template_copy(case, monkeypatch, tmp_path):
         prop, rentalizer, comps, calculator, output_dir=tmp_path,
     ))
     assert out.positioning_summary == N.template_narratives(prop, comps).positioning_summary
-    # A key was configured, so this is not the keyless handoff path: no brief.
-    assert not narrative_brief_path(tmp_path, prop).exists()
+    # A failed API run still hands off to Claude Code: the brief is written.
+    assert narrative_brief_path(tmp_path, prop).exists()
+
+
+def test_an_ambient_key_does_not_switch_off_the_handoff(case, monkeypatch, tmp_path):
+    """A student with ANTHROPIC_API_KEY in their environment still gets the
+    Claude Code handoff: no API call, and the brief is written."""
+    prop, rentalizer, comps, calculator = case
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "sk-ambient")
+    monkeypatch.setattr(config, "NARRATIVES_VIA_API", False)
+    calls = []
+    monkeypatch.setattr(N, "anthropic", _fake_anthropic([], calls))
+    out = _run(N.generate_narratives(prop, rentalizer, comps, calculator, output_dir=tmp_path))
+    assert calls == []
+    assert out.positioning_summary == N.template_narratives(prop, comps).positioning_summary
+    assert narrative_brief_path(tmp_path, prop).exists()
 
 
 def test_api_path_degrades_when_the_sdk_is_not_installed(case, monkeypatch, capsys):
@@ -573,6 +595,7 @@ def test_api_path_degrades_when_the_sdk_is_not_installed(case, monkeypatch, caps
     environment must not crash the import or the run."""
     prop, rentalizer, comps, calculator = case
     monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr(config, "NARRATIVES_VIA_API", True)
     monkeypatch.setattr(N, "anthropic", None)
 
     out = _run(N.generate_narratives(prop, rentalizer, comps, calculator))

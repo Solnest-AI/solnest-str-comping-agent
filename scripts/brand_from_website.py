@@ -156,6 +156,24 @@ def logo_url(branding: dict, site: str) -> str:
     return url if url.startswith(("https://", "http://")) else ""
 
 
+def site_origin(site: str) -> str:
+    """scheme://host[:port] of a page URL, "" when it has no usable host.
+
+    The report links to the student's site, not to whichever page the brand
+    was read from, and a userinfo or query string must never be copied into a
+    public link.
+    """
+    try:
+        parsed = urlparse(site)
+        host, port = parsed.hostname, parsed.port
+    except ValueError:
+        return ""
+    if not host or parsed.scheme not in ("http", "https"):
+        return ""
+    host = f"[{host}]" if ":" in host else host
+    return f"{parsed.scheme}://{host}" + (f":{port}" if port else "")
+
+
 # ── I/O ─────────────────────────────────────────────────────────────────
 
 def read_brand(site: str) -> dict:
@@ -194,6 +212,11 @@ def main(argv: list[str]) -> int:
     site = a.website.strip()
     if not site.lower().startswith(("http://", "https://")):
         site = "https://" + site
+    origin = site_origin(site)
+    if not origin:
+        print(f"[brand] '{a.website}' is not a website address.")
+        print("NEXT: ask the student for their website address (like theirsite.com) and run this again.")
+        return 3
     config.ensure_firecrawl_configured()
 
     try:
@@ -224,12 +247,12 @@ def main(argv: list[str]) -> int:
     except ValueError:
         previous = {}
     example = json.loads(EXAMPLE.read_text(encoding="utf-8-sig"))
-    name = str(brand.get("brandName") or "").strip() or urlparse(site).hostname.removeprefix("www.")
+    name = str(brand.get("brandName") or "").strip() or urlparse(origin).hostname.removeprefix("www.")
     out = {
         "company_name": name,
         "tagline": a.tagline or previous.get("tagline") or example.get("tagline", ""),
         "logo_url": logo,
-        "website_url": site.rstrip("/"),
+        "website_url": origin,
         "primary_color": primary,
         "accent_color": accent,
         "logo_background": logo_plate(brand) if logo else "",

@@ -24,3 +24,5 @@ def _private_setup_stamp(tmp_path, monkeypatch):
     .cache/setup_ok.json (kit.key_failure forgets it by design)."""
     import kit
     monkeypatch.setattr(kit, "SETUP_STAMP", tmp_path / "setup_ok.json")
+    # Nor read or pin this machine's real kit choice.
+    monkeypatch.setattr(kit, "KIT_CHOICE", tmp_path / "kit_path.txt")

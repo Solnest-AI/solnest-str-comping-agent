@@ -20,25 +20,34 @@ KIT_MARKERS = ("CONNECTIONS.md", "fan-out-env.sh")
 # Spaces around the = are tolerated because the kit's env_load tolerates them:
 # a key the kit reads as set must not read as blank here, or check_setup would
 # append an empty duplicate line that blanks the key for the kit too.
-_LINE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
+_LINE = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
+# A quoted value ends at its closing quote; only whitespace or a # comment may follow.
+_QUOTED = re.compile(r"""(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)')\s*(?:#.*)?$""")
 _SKIP = {".git", ".venv", "node_modules", "__pycache__", "output", "Library", "AppData"}
 
 
+def _parse_value(raw: str) -> str:
+    """One value the way python-dotenv reads it: a quoted value is what sits
+    inside the quotes, an unquoted one loses a trailing ` # comment`."""
+    val = raw.strip()
+    m = _QUOTED.match(val)
+    if m:
+        return m.group(1) if m.group(1) is not None else m.group(2)
+    return re.sub(r"\s+#.*$", "", val).rstrip()
+
+
 def read_env(path: Path) -> dict[str, str]:
-    """KEY=VALUE lines, quotes and whitespace stripped, like the kit's lib/env.sh."""
+    """KEY=VALUE lines, quotes and whitespace stripped, like the kit's lib/env.sh.
+    An unreadable or non-UTF-8 file (UnicodeDecodeError is a ValueError) reads as empty."""
     values: dict[str, str] = {}
     try:
         lines = path.read_text(encoding="utf-8-sig").splitlines()
-    except OSError:
+    except (OSError, ValueError):
         return values
     for line in lines:
         m = _LINE.match(line.strip())
-        if not m:
-            continue
-        val = m.group(2).strip()
-        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
-            val = val[1:-1]
-        values[m.group(1)] = val
+        if m:
+            values[m.group(1)] = _parse_value(m.group(2))
     return values
 
 
@@ -46,10 +55,17 @@ def is_kit(d: Path) -> bool:
     return all((d / m).is_file() for m in KIT_MARKERS)
 
 
-def _walk(root: Path, depth: int):
-    if depth < 0 or not root.is_dir():
+def _walk(root: Path, depth: int, seen: dict[Path, int]):
+    """Kit folders up to `depth` levels below root. `seen` maps each folder
+    already listed to the depth it was listed with, so overlapping roots (the
+    repo's parent is usually ~/Documents) are not walked twice."""
+    if depth < 1:
         return
     try:
+        real = root.resolve()
+        if not root.is_dir() or seen.get(real, 0) >= depth:
+            return
+        seen[real] = depth
         children = list(root.iterdir())
     except OSError:
         return
@@ -62,30 +78,80 @@ def _walk(root: Path, depth: int):
         if is_kit(c):
             yield c
         else:
-            yield from _walk(c, depth - 1)
+            yield from _walk(c, depth - 1, seen)
 
 
-def find_kit(home: Path | None = None, near: Path = ROOT) -> Path | None:
-    """The kit folder, or None. $STR_SECRETS_KIT wins, then next to this folder,
-    Desktop, Documents, Downloads (and their OneDrive copies), home; 2 levels deep.
-    A kit that has been run (has a .env) beats an unused download."""
-    env = os.environ.get("STR_SECRETS_KIT")
-    if env and is_kit(Path(env).expanduser()):
-        return Path(env).expanduser().resolve()
+# A kit found once is remembered for the process (config's import and the setup
+# check would otherwise each walk the disk). Only hits are kept: a kit cloned
+# mid-run must still be found by the next call.
+_FOUND: dict[tuple[str, str], Path] = {}
+# The two keys a kit must hold to run comps.
+REQUIRED_KEYS = ("AIRROI_API_KEY", "FIRECRAWL_API_KEY")
+# The kit scripts/check_setup.py last passed with. A second download or a
+# backup of the kit must not take over from the one the student set up.
+KIT_CHOICE = ROOT / ".cache" / "kit_path.txt"
+
+
+def keys_filled(d: Path) -> int:
+    """How many of the required keys this kit's .env holds (values never read out)."""
+    values = read_env(d / ".env")
+    return sum(1 for n in REQUIRED_KEYS if values.get(n))
+
+
+def _remembered() -> Path | None:
+    try:
+        d = Path(KIT_CHOICE.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    return d.resolve() if str(d) and is_kit(d) and (d / ".env").exists() else None
+
+
+def remember_kit(d: Path) -> None:
+    """Pin this kit for later runs (a path, never a key)."""
+    try:
+        KIT_CHOICE.parent.mkdir(parents=True, exist_ok=True)
+        KIT_CHOICE.write_text(str(Path(d).resolve()), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def find_kits(home: Path | None = None, near: Path = ROOT) -> list[Path]:
+    """Every kit folder on this computer, best first: the most required keys
+    filled in, then a kit that has been run (has a .env), then location order
+    (next to this folder, Desktop, Documents, Downloads, their OneDrive copies,
+    home; 2 levels deep). Never newest-first: a fresh blank download must not
+    beat the kit the student already filled in."""
     home = home or Path.home()
     roots = [near.parent, home / "Desktop", home / "Documents", home / "Downloads",
              home / "OneDrive" / "Desktop", home / "OneDrive" / "Documents", home]
     found: list[Path] = []
+    seen: dict[Path, int] = {}
     for r in roots:
-        for d in ([r] if is_kit(r) else []) + list(_walk(r, 2)):
+        for d in ([r] if is_kit(r) else []) + list(_walk(r, 2, seen)):
             d = d.resolve()
             if d not in found:
                 found.append(d)
+    order = {d: i for i, d in enumerate(found)}
+    return sorted(found, key=lambda d: (-keys_filled(d), not (d / ".env").exists(), order[d]))
+
+
+def find_kit(home: Path | None = None, near: Path = ROOT) -> Path | None:
+    """The kit folder, or None. $STR_SECRETS_KIT wins, then the kit the setup
+    check last passed with, then the best of find_kits()."""
+    env = os.environ.get("STR_SECRETS_KIT")
+    if env and is_kit(Path(env).expanduser()):
+        return Path(env).expanduser().resolve()
+    chosen = _remembered()
+    if chosen is not None:
+        return chosen
+    home = home or Path.home()
+    memo = (str(home), str(near))
+    if memo in _FOUND and is_kit(_FOUND[memo]):
+        return _FOUND[memo]
+    found = find_kits(home, near)
     if not found:
         return None
-    found.sort(key=lambda d: ((d / ".env").exists(),
-                              (d / ".env").stat().st_mtime if (d / ".env").exists() else 0),
-               reverse=True)
+    _FOUND[memo] = found[0]
     return found[0]
 
 
@@ -101,7 +167,12 @@ def _rewrite(env: Path, edit) -> None:
     raw = env.read_bytes() if env.exists() else b""
     bom = raw.startswith(b"\xef\xbb\xbf")
     eol = "\r\n" if b"\r\n" in raw else "\n"
-    lines = edit(raw.decode("utf-8-sig").splitlines())
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        # Editing it would corrupt it (it is likely UTF-16 from a PowerShell redirect).
+        raise ValueError(f"{env} is not UTF-8 text; re-save it as UTF-8 and try again") from None
+    lines = edit(text.splitlines())
     fd, tmp = tempfile.mkstemp(dir=env.parent, prefix=".env.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8-sig" if bom else "utf-8", newline="") as f:

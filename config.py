@@ -15,7 +15,8 @@ load_dotenv(_env_path, override=True)
 
 
 def _get(key: str, default: str = "") -> str:
-    return os.getenv(key, default)
+    """A setting, or the default when it is unset or blank (`NARRATIVE_MODEL=`)."""
+    return (os.getenv(key) or "").strip() or default
 
 
 def key_from_connections_kit(name: str, claude_json: Path | None = None) -> str:
@@ -34,6 +35,8 @@ def key_from_connections_kit(name: str, claude_json: Path | None = None) -> str:
         servers = json.loads(path.read_text(encoding="utf-8")).get("mcpServers") or {}
     except (OSError, ValueError, AttributeError):
         return ""
+    if not isinstance(servers, dict):
+        return ""
     host, header, prefix = {
         "AIRROI_API_KEY": ("airroi.com", "X-API-KEY", ""),
         "FIRECRAWL_API_KEY": ("firecrawl.dev", "Authorization", "bearer "),
@@ -44,13 +47,14 @@ def key_from_connections_kit(name: str, claude_json: Path | None = None) -> str:
         if not isinstance(server, dict):
             continue
         value = ""
-        if host in (server.get("url") or ""):
-            value = str((server.get("headers") or {}).get(header) or "").strip()
+        url, headers, env = server.get("url"), server.get("headers"), server.get("env")
+        if isinstance(url, str) and host in url:
+            value = str((headers if isinstance(headers, dict) else {}).get(header) or "").strip()
             if prefix and value.lower().startswith(prefix):
                 value = value[len(prefix):].strip()
             elif prefix:
                 value = ""
-        value = value or str((server.get("env") or {}).get(name) or "").strip()
+        value = value or str((env if isinstance(env, dict) else {}).get(name) or "").strip()
         value = value or _key_beside_stdio_server(server, name)
         # A literal variable name or ${...} is a template, not a key.
         if value and value != name and not value.startswith("$"):
@@ -67,7 +71,8 @@ def _key_beside_stdio_server(server: dict, name: str) -> str:
     (airroi-official, key in a header) have only this copy. Found 2026-09-27
     on a Windows laptop with a working key that the agent reported missing.
     """
-    for arg in server.get("args") or []:
+    args = server.get("args")
+    for arg in args if isinstance(args, list) else []:
         if not isinstance(arg, str) or not arg.endswith(".py"):
             continue
         value = kit.read_env(Path(arg).parent / ".env").get(name, "")
@@ -105,15 +110,12 @@ AIRROI_BASE_URL: str = _get("AIRROI_BASE_URL", "https://api.airroi.com")
 FIRECRAWL_API_KEY, FIRECRAWL_KEY_SOURCE = _key("FIRECRAWL_API_KEY")
 FIRECRAWL_BASE_URL: str = _get("FIRECRAWL_BASE_URL", "https://api.firecrawl.dev/v1")
 
-# ── Airbtics (optional market-level overlay) ──
-AIRBTICS_API_KEY: str = _get("AIRBTICS_API_KEY")
-AIRBTICS_BASE_URL: str = _get(
-    "AIRBTICS_BASE_URL",
-    "https://crap0y5bx5.execute-api.us-east-2.amazonaws.com/prod",
-)
-
 # ── Anthropic (narrative generation) ──
 ANTHROPIC_API_KEY: str = _get("ANTHROPIC_API_KEY")
+# The API path is opt-in. Claude Code writes the copy (the narrative handoff);
+# a key the student happens to have in their environment must not silently
+# switch that off. Set NARRATIVE_MODE=api for headless platform runs.
+NARRATIVES_VIA_API: bool = _get("NARRATIVE_MODE").lower() == "api"
 # Default is the current-generation Sonnet. Measured on a real report:
 #   claude-sonnet-4-6          35.7s   $0.025/report
 #   claude-sonnet-5            18.5s   $0.025/report   <- same cost, 1.9x faster
@@ -130,12 +132,6 @@ OUTPUT_DIR: Path = Path(_get("OUTPUT_DIR", "./output"))
 
 # ── HTTP ──
 HTTP_TIMEOUT: int = 30
-
-# ── Ski resort seasonal template (Jan-Dec occupancy %) ──
-# Used when AirROI / Airbtics monthly data is unavailable
-SKI_RESORT_SEASONAL_TEMPLATE: list[float] = [
-    82, 85, 78, 45, 38, 42, 48, 52, 40, 35, 50, 75
-]
 
 
 def ensure_firecrawl_configured() -> None:
@@ -210,11 +206,48 @@ def _load_branding() -> dict:
 _HEX = re.compile(r"#[0-9a-fA-F]{6}")
 
 
+# Names that mean nobody branded the report: the example's and the defaults'.
+_PLACEHOLDER_NAMES = {"your company", _BRANDING_DEFAULTS["company_name"].lower()}
+
+
+def branding_problems(path: Path | None = None) -> list[str]:
+    """What stops branding.json from being a real brand, one line per field.
+    Empty means ready. Shared by scripts/check_setup.py and the run's own gate,
+    so a file that setup calls READY is never rendered as a default identity.
+    A name alone is a complete brand: logo, website and colours are optional."""
+    path = path or _BRANDING_PATH
+    if not path.exists():
+        return ["branding.json does not exist yet"]
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as e:
+        return [f"branding.json is not valid JSON ({e})"]
+    if not isinstance(data, dict):
+        return ["branding.json must be one JSON object: { \"company_name\": \"...\", ... }"]
+    problems = []
+    name = data.get("company_name")
+    if not isinstance(name, str) or not name.strip():
+        problems.append("company_name is missing or blank")
+    elif name.strip().lower() in _PLACEHOLDER_NAMES:
+        problems.append(f"company_name is still the placeholder {name.strip()!r}")
+    for key in ("tagline", "logo_url", "website_url", "primary_color", "accent_color", "logo_background"):
+        value = data.get(key)
+        if value in (None, ""):
+            continue
+        if not isinstance(value, str):
+            problems.append(f"{key} must be text in quotes")
+        elif key.endswith(("_color", "_background")) and not _HEX.fullmatch(value):
+            problems.append(f"{key} {value!r} must be a colour like #1f3c34")
+        elif key.endswith("_url") and not value.lower().startswith(("https://", "http://")):
+            problems.append(f"{key} must start with https://")
+    return problems
+
+
 def branding_is_placeholder() -> bool:
-    """True until branding.json exists: the report would carry the example's
+    """True until branding.json holds a real brand: the report would carry a
     placeholder name. The skill asks for the student's website before the
     first report (scripts/brand_from_website.py)."""
-    return not _BRANDING_PATH.exists()
+    return bool(branding_problems())
 
 
 BRANDING: dict = _load_branding()

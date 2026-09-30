@@ -1,12 +1,15 @@
 """Jinja2 template rendering for the HTML report."""
 
+import math
 import statistics
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from datetime import date
+from urllib.parse import urlsplit
 
 import jinja2
 
+from generators.narrative_brief import slugify
 from schema import ReportData
 import config
 
@@ -17,8 +20,20 @@ TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 # ── Custom Jinja2 filters ────────────────────────────────────────────────
 
 def format_currency(value: float, prefix: str = "CA$") -> str:
-    """CA$1,100"""
-    return f"{prefix}{int(value):,}"
+    """CA$1,100. Rounds half-up like revenue_breakdown, never truncates: a
+    comp card and the summary line above it must print the same dollar."""
+    return f"{prefix}{_whole_dollars(value):,}"
+
+
+def safe_url(value) -> str:
+    """The URL if it is plain http(s), else "". Keeps `javascript:` and other
+    schemes a scraped listing could carry out of an href or src."""
+    url = str(value or "").strip()
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return ""
+    return url if parts.scheme in ("http", "https") and parts.netloc else ""
 
 
 def format_currency_k(value: float, prefix: str = "CA$") -> str:
@@ -51,6 +66,11 @@ def lighten(value: str, amount: float = 0.25) -> str:
 
 def _whole_dollars(value: float) -> int:
     return int(Decimal(str(value)).quantize(Decimal("1"), ROUND_HALF_UP))
+
+
+def js_round(value: float) -> int:
+    """JavaScript's Math.round for the non-negative values the calculator uses."""
+    return math.floor(value + 0.5)
 
 
 def _per_night(total: int, nights: int) -> Decimal:
@@ -157,17 +177,20 @@ def render_report(data: ReportData) -> str:
     env.filters["format_bath"] = format_bath
     env.filters["rgb"] = rgb
     env.filters["lighten"] = lighten
+    env.filters["safe_url"] = safe_url
     env.globals["revenue_breakdown"] = revenue_breakdown
 
     template = env.get_template("report.html.j2")
 
     # Pre-compute initial calculator display values
     calc = data.calculator
-    # Must match report.html.j2's updateCalculator() exactly (Math.round), or
-    # the pre-JS HTML that email_sender.py attaches disagrees with the live page.
-    initial_occ_nights = round(calc.days_default * calc.occ_default / 100)
+    # Must match report.html.j2's updateCalculator() exactly, or the pre-JS HTML
+    # that email_sender.py attaches disagrees with the live page. Math.round
+    # rounds halves up; Python's round() rounds them to even, which put a night
+    # (and one nightly rate of revenue) between the two.
+    initial_occ_nights = js_round(calc.days_default * (calc.occ_default / 100))
     initial_revenue = initial_occ_nights * calc.adr_default
-    initial_revpar = round(initial_revenue / calc.days_default) if calc.days_default else 0
+    initial_revpar = js_round(initial_revenue / calc.days_default) if calc.days_default else 0
 
     sp = getattr(data.property, "subject_performance", None)
     occ_basis_text = occupancy_basis_text(calc, sp)
@@ -216,19 +239,10 @@ def _comp_summary(data: ReportData) -> dict | None:
         "count": len(comps),
         "bedrooms": span(beds, "bedrooms"),
         "sleeps": span(sleeps, "guests"),
-        "median_revenue": format_currency(round(statistics.median(revs)), cur),
+        "median_revenue": format_currency(statistics.median(revs), cur),
         "low_revenue": format_currency(revs[0], cur),
         "high_revenue": format_currency(revs[-1], cur),
     }
-
-
-def _slugify(text: str, max_len: int = 60) -> str:
-    """Filename-safe slug: alphanumerics + hyphens, length-capped, no doubles."""
-    import re
-    s = re.sub(r"[^A-Za-z0-9]+", "-", (text or "").strip()).strip("-")
-    if len(s) > max_len:
-        s = s[:max_len].rstrip("-")
-    return s or "report"
 
 
 def save_report(data: ReportData, output_dir: Path) -> Path:
@@ -247,9 +261,9 @@ def save_report(data: ReportData, output_dir: Path) -> Path:
         or (data.property.market if data.property.market != "Unknown Market" else "")
         or "report"
     )
-    slug = _slugify(identity)
+    slug = slugify(identity)
     today = date.today().isoformat()
-    brand_slug = _slugify(config.BRANDING.get("company_name", "STR"), max_len=20) or "STR"
+    brand_slug = slugify(config.BRANDING.get("company_name", "STR"), max_len=20) or "STR"
     filename = f"{brand_slug}-Report-{slug}-{today}.html"
     output_path = output_dir / filename
 

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -30,12 +32,13 @@ def world(tmp_path, monkeypatch):
         return run
 
     monkeypatch.setattr(cs.kit, "find_kit", lambda: kit_dir)
+    monkeypatch.setattr(cs.kit, "find_kits", lambda: [kit_dir])
     monkeypatch.setattr(cs, "PROBES", {n: probe(n) for n in cs.REQUIRED})
     monkeypatch.setattr(cs, "STAMP", tmp_path / "stamp.json")
     # Hermetic: never adopt a key from this machine's real .env or ~/.claude.json.
     monkeypatch.setattr(cs, "other_copy", lambda name: ("", ""))
     branding = tmp_path / "branding.json"
-    branding.write_text("{}", encoding="utf-8")
+    branding.write_text('{"company_name": "Acme Stays"}', encoding="utf-8")
     monkeypatch.setattr(cs, "BRANDING", branding)
     return kit_dir, probes, calls
 
@@ -208,7 +211,7 @@ def test_a_key_failure_skips_every_fallback_even_six_wide():
 def test_the_run_stops_cleanly_and_forgets_the_pass(tmp_path, monkeypatch, capsys):
     import agent
     stamp = tmp_path / "setup_ok.json"
-    stamp.write_text("{}", encoding="utf-8")
+    stamp.write_text('{"company_name": "Acme Stays"}', encoding="utf-8")
     monkeypatch.setattr(cs.kit, "SETUP_STAMP", stamp)
 
     async def main():
@@ -292,6 +295,7 @@ def test_vendor_replies_never_echo_the_key(monkeypatch, capsys):
     assert "ar-live-123" not in str(airroi.AirROIError(400, "bad request for key ar-live-123"))
 
     monkeypatch.setattr(ps.config, "FIRECRAWL_API_KEY", "fc-live-456")
+    monkeypatch.setattr(ps, "_RETRY_DELAY", 0)
     transport = httpx.MockTransport(lambda req: httpx.Response(429, text="slow down fc-live-456"))
     real = httpx.AsyncClient
     monkeypatch.setattr(ps.httpx, "AsyncClient", lambda **kw: real(transport=transport, **kw))
@@ -311,6 +315,7 @@ def test_redaction_happens_before_truncation(monkeypatch, capsys):
 
     key = "fc-" + "k" * 40
     monkeypatch.setattr(ps.config, "FIRECRAWL_API_KEY", key)
+    monkeypatch.setattr(ps, "_RETRY_DELAY", 0)
     body = "x" * 280 + key
     transport = httpx.MockTransport(lambda req: httpx.Response(500, text=body))
     real = httpx.AsyncClient
@@ -322,3 +327,78 @@ def test_redaction_happens_before_truncation(monkeypatch, capsys):
     monkeypatch.setattr(airroi.config, "AIRROI_API_KEY", akey)
     msg, _ = airroi._extract_error(["y" * 280 + akey], 400)
     assert "ar-qqqq" not in msg
+
+
+# ── Firecrawl: a 200 proves the key, the balance proves it can work ─────────
+
+class _Reply:
+    status_code = 200
+
+    def __init__(self, body):
+        self._body = body
+
+    def json(self):
+        if isinstance(self._body, Exception):
+            raise self._body
+        return self._body
+
+
+@pytest.mark.parametrize("body,expected", [
+    ({"success": True, "data": {"remainingCredits": 500}}, "ok"),
+    ({"success": True, "data": {"remainingCredits": 0}}, "no credit"),
+    ({"success": False, "data": {"remainingCredits": 500}}, "unverified (unexpected reply)"),
+    ({"success": True, "data": {}}, "unverified (no balance in reply)"),
+    ({"success": True, "data": {"remainingCredits": "lots"}}, "unverified (no balance in reply)"),
+    ([], "unverified (unexpected reply)"),
+    (ValueError("not json"), "unverified (unreadable reply)"),
+])
+def test_firecrawl_probe_reads_the_balance(monkeypatch, body, expected):
+    monkeypatch.setattr(cs.httpx, "get", lambda *a, **k: _Reply(body))
+    assert cs.probe_firecrawl("fc-secret") == expected
+
+
+def test_zero_firecrawl_credit_is_not_ready_and_not_remembered(world, capsys):
+    kit_dir, results, _ = world
+    (kit_dir / ".env").write_text("AIRROI_API_KEY=a\nFIRECRAWL_API_KEY=fc-secret\n", encoding="utf-8")
+    results["FIRECRAWL_API_KEY"] = "no credit"
+    assert cs.main(["--no-open"]) == 2
+    assert not cs.STAMP.exists()
+    out = capsys.readouterr().out
+    assert "Top up" in out and "fc-secret" not in out
+    results["FIRECRAWL_API_KEY"] = "ok"          # the student topped up
+    assert cs.main(["--no-open"]) == 0
+
+
+def test_an_unverified_balance_is_not_a_key_problem(world, monkeypatch, capsys):
+    kit_dir, results, _ = world
+    (kit_dir / ".env").write_text("AIRROI_API_KEY=a\nFIRECRAWL_API_KEY=f\n", encoding="utf-8")
+    results["FIRECRAWL_API_KEY"] = "unverified (no balance in reply)"
+    opened = []
+    monkeypatch.setattr(cs, "open_for_paste", opened.append)
+    assert cs.main([]) == 2
+    assert opened == [] and not cs.STAMP.exists()
+    assert "no key change needed" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("stamp", ["[]", '"x"', '{"fingerprint": "f", "at": "yesterday"}', "{", "null"])
+def test_a_corrupt_stamp_is_a_recheck_not_a_crash(world, stamp):
+    kit_dir, _, calls = world
+    (kit_dir / ".env").write_text("AIRROI_API_KEY=a\nFIRECRAWL_API_KEY=f\n", encoding="utf-8")
+    cs.STAMP.write_text(stamp, encoding="utf-8")
+    assert cs.main(["--no-open"]) == 0
+    assert len(calls) == 2
+    assert json.loads(cs.STAMP.read_text(encoding="utf-8"))["at"] <= time.time()
+
+
+def test_other_populated_kits_are_listed_by_path_never_by_value(world, monkeypatch, capsys):
+    kit_dir, _, _ = world
+    (kit_dir / ".env").write_text("AIRROI_API_KEY=a-secret\nFIRECRAWL_API_KEY=f-secret\n", encoding="utf-8")
+    other = kit_dir.parent / "kit-backup"
+    other.mkdir()
+    (other / ".env").write_text("AIRROI_API_KEY=zq9b\n", encoding="utf-8")
+    monkeypatch.delenv("STR_SECRETS_KIT", raising=False)
+    monkeypatch.setattr(cs.kit, "find_kits", lambda: [kit_dir, other])
+    assert cs.main(["--no-open"]) == 0
+    out = capsys.readouterr().out
+    assert str(other) in out and "zq9" not in out
+    assert cs.kit.KIT_CHOICE.read_text(encoding="utf-8") == str(kit_dir.resolve())

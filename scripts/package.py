@@ -71,14 +71,18 @@ DEV_ONLY = (
 def tracked_files() -> list[Path]:
     """The exact set of files git publishes, as repo-relative paths."""
     try:
-        out = subprocess.run(
+        # Bytes, decoded as UTF-8: git prints paths as UTF-8 and text=True
+        # would decode them with the locale (cp1252 on Windows), so a file
+        # named with an accent or an emoji would come back as a path that
+        # does not exist.
+        raw = subprocess.run(
             ["git", "ls-files", "-z"],
             cwd=PROJECT_ROOT,
             capture_output=True,
-            text=True,
             check=True,
         ).stdout
-    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        out = raw.decode("utf-8")
+    except (subprocess.CalledProcessError, FileNotFoundError, UnicodeDecodeError) as exc:
         sys.exit(f"ERROR: could not read the git manifest ({exc}). Run this inside the repo.")
 
     files = [PROJECT_ROOT / p for p in out.split("\0") if p]
@@ -101,7 +105,7 @@ def build_zip(extra_out: Path | None = None) -> Path:
     zip_path = DIST_DIR / ZIP_NAME
     zip_path.unlink(missing_ok=True)
 
-    blocked, count = [], 0
+    blocked, missing, count = [], [], 0
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for path in sorted(tracked_files()):
             rel = path.relative_to(PROJECT_ROOT)
@@ -109,9 +113,16 @@ def build_zip(extra_out: Path | None = None) -> Path:
                 blocked.append(rel)
                 continue
             if not path.is_file():
-                continue  # tracked but deleted locally
+                missing.append(rel)
+                continue
             zf.write(path, f"{TOP_LEVEL}/{rel}")
             count += 1
+
+    if missing:
+        zip_path.unlink(missing_ok=True)
+        sys.exit("ERROR: tracked but missing on disk, so the zip would silently lack "
+                 f"them: {', '.join(str(m) for m in missing)}. Restore them or "
+                 "`git rm` them, then build again.")
 
     size_kb = zip_path.stat().st_size / 1024
     print(f"\n{'=' * 56}")

@@ -96,14 +96,14 @@ def test_a_listing_that_names_no_unit_is_flagged():
     assert "does not say which unit" in note
 
 
-def _resolve(monkeypatch, allow):
+def _resolve(monkeypatch, allow, guests=None):
     async def fake_search(raw):
         return {**ps._parse_firecrawl_result(UNIT_12["json"], UNIT_12["url"]),
                 "unit_mismatch": ps.unit_mismatch(ASKED, {"raw_address": UNIT_12["json"]["address"]})}
 
     monkeypatch.setattr(agent, "search_for_property", fake_search)
     args = SimpleNamespace(input=ASKED, allow_other_unit=allow, hero_url=None, listing_url=None,
-                           market=None, beds=None, baths=None, guests=None)
+                           market=None, beds=None, baths=None, guests=guests)
     return asyncio.run(agent._resolve_subject(args))
 
 
@@ -117,8 +117,9 @@ def test_agent_stops_on_a_flagged_unit_before_any_paid_call(monkeypatch, capsys)
 
 def test_allow_other_unit_continues(monkeypatch, capsys):
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False, raising=False)
-    prop = _resolve(monkeypatch, allow=True)
-    assert prop.bedrooms == 2
+    # The listing does not state guests, so the user supplies them.
+    prop = _resolve(monkeypatch, allow=True, guests=6)
+    assert prop.bedrooms == 2 and prop.max_guests == 6
     assert "Continuing: --allow-other-unit" in capsys.readouterr().out
 
 
@@ -190,3 +191,53 @@ def test_the_search_never_swaps_in_another_untrusted_photo(monkeypatch):
 def test_a_trusted_listing_photo_is_kept_without_searching(monkeypatch):
     prop, calls = _resolve_with_photo(monkeypatch, ZILLOW, "https://photos.zillowstatic.com/other.jpg")
     assert calls == [] and prop.hero_image_url == ZILLOW
+
+
+# ── Salem, 2026-09-30: a five-apartment building comped as one house ──────
+
+@pytest.mark.parametrize("text,kept", [
+    ("", None),
+    ("Grand mid-18th-century residence, five residences", None),
+    ("Cozy cottage, sleeps 11 guests", 11),
+    ("Accommodates 11", 11),
+    ("Perfect for up to 8 guests", None),       # states 8, not the 11 extracted
+])
+def test_a_guest_count_is_kept_only_when_the_listing_states_it(text, kept):
+    out = ps._parse_firecrawl_result({"address": "393 Essex St, Salem, MA", "max_guests": 11,
+                                      "description": text}, "https://www.zillow.com/x/")
+    assert out["max_guests"] == kept
+
+
+def _salem(monkeypatch, **size):
+    async def fake_search(raw):
+        return {**ps._parse_firecrawl_result(
+            {"address": "393 Essex St, Salem, MA 01970", "market": "Salem", "bedrooms": 6,
+             "bathrooms": 7, "max_guests": 11, "property_type": "MultiFamily",
+             "hero_image_url": "https://photos.zillowstatic.com/fp/x.jpg",
+             "description": "Converted into five residences."}, "https://www.zillow.com/x/"),
+            "unit_mismatch": ""}
+
+    async def no_hero(address, accept=None):
+        return ""
+
+    monkeypatch.setattr(agent, "search_for_property", fake_search)
+    monkeypatch.setattr(agent, "search_hero_image", no_hero)
+    monkeypatch.setattr(agent, "check_subject_hero", lambda url: [])
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False, raising=False)
+    args = SimpleNamespace(input="393 Essex St, Salem, MA 01970", allow_other_unit=False, hero_url=None,
+                           listing_url=None, market=None, beds=size.get("beds"),
+                           baths=size.get("baths"), guests=size.get("guests"))
+    return asyncio.run(agent._resolve_subject(args))
+
+
+def test_a_multi_unit_building_stops_before_anything_is_spent(monkeypatch, capsys):
+    with pytest.raises(SystemExit) as e:
+        _salem(monkeypatch)
+    assert e.value.code == 1
+    err = capsys.readouterr().err
+    assert "multi-unit building" in err and "--beds N --baths N --guests N" in err
+
+
+def test_one_unit_of_a_multi_unit_building_can_be_comped(monkeypatch):
+    prop = _salem(monkeypatch, beds=2, baths=2, guests=4)
+    assert (prop.bedrooms, prop.bathrooms, prop.max_guests) == (2, 2, 4)

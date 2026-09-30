@@ -24,8 +24,18 @@ import os
 import time
 from pathlib import Path
 
-CACHE_DIR = Path(os.getenv("AIRROI_CACHE_DIR", Path(__file__).parent.parent / ".cache" / "vendor"))
-TTL_SECONDS = int(os.getenv("AIRROI_CACHE_TTL", str(24 * 60 * 60)))
+CACHE_DIR = Path(os.getenv("AIRROI_CACHE_DIR") or Path(__file__).parent.parent / ".cache" / "vendor")
+
+
+def _ttl() -> int:
+    """AIRROI_CACHE_TTL in seconds; blank or non-numeric falls back to 24h."""
+    try:
+        return int(os.getenv("AIRROI_CACHE_TTL") or 24 * 60 * 60)
+    except ValueError:
+        return 24 * 60 * 60
+
+
+TTL_SECONDS = _ttl()
 
 _STATS = {"hit": 0, "miss": 0, "write": 0}
 
@@ -58,7 +68,7 @@ def get(vendor: str, endpoint: str, params: dict | None):
             return None
         _STATS["hit"] += 1
         return rec["data"]
-    except (FileNotFoundError, KeyError, ValueError, OSError):
+    except (FileNotFoundError, KeyError, TypeError, ValueError, OSError):
         _STATS["miss"] += 1
         return None
 

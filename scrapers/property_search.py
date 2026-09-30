@@ -16,8 +16,10 @@ shape, or None on failure.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import sys
+import unicodedata
 from typing import Optional
 
 import httpx
@@ -103,9 +105,14 @@ _REGION_NAMES = {
 }
 
 
+def _fold(text: str) -> str:
+    """Drop accents ("Québec" -> "Quebec") so they are not read as separators."""
+    return "".join(c for c in unicodedata.normalize("NFKD", text or "") if not unicodedata.combining(c))
+
+
 def _norm(text: str) -> str:
-    """Lowercase, strip punctuation, collapse whitespace."""
-    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+    """Lowercase, fold accents, strip punctuation, collapse whitespace."""
+    return re.sub(r"[^a-z0-9]+", " ", _fold(text).lower()).strip()
 
 
 def _is_region_token(token: str) -> bool:
@@ -114,7 +121,7 @@ def _is_region_token(token: str) -> bool:
         return False
     if t.upper() in _REGION_ABBR and len(t) == 2:
         return True
-    return t.lower() in _REGION_NAMES
+    return _fold(t).lower() in _REGION_NAMES
 
 
 def query_locality(address: str) -> str:
@@ -171,13 +178,31 @@ def query_locality(address: str) -> str:
     return " ".join(tokens).strip(" ,.-")
 
 
+# A word right before the city that makes it a different place: "West Kelowna"
+# is not Kelowna, "Mount Vernon" is not Vernon. Deliberately shorter than
+# airbnb.py's _PLACE_PREFIXES: "st", "la", "grand" also end street names.
+_LOCALITY_PREFIXES = {
+    "west", "east", "north", "south", "mount", "mt", "new", "old", "upper",
+    "lower", "fort", "ft", "port",
+}
+
+
 def _mentions_locality(city: str, *texts: str) -> bool:
-    """True when `city` appears as a whole phrase in any of `texts`."""
+    """True when `city` appears as a whole phrase in any of `texts`, and is not
+    just the tail of a longer place name. Checked per comma segment so a street
+    direction ("Lakeshore Dr North, Kelowna") is not read as part of the city."""
     needle = _norm(city)
     if not needle:
         return False
-    pattern = r"\b" + re.escape(needle) + r"\b"
-    return any(re.search(pattern, _norm(t)) for t in texts if t)
+    pattern = re.compile(r"\b" + re.escape(needle) + r"\b")
+    for text in texts:
+        for segment in re.split(r"[,;|\n]", text or ""):
+            seg = _norm(segment)
+            for m in pattern.finditer(seg):
+                before = seg[:m.start()].split()
+                if not before or before[-1] not in _LOCALITY_PREFIXES:
+                    return True
+    return False
 
 
 def _locality_score(city: str, *texts: str) -> int:
@@ -219,8 +244,9 @@ _UNIT_WORD = re.compile(
     r"|#\s*([A-Z]?\d+[A-Z]?)\b"
 )
 # Canadian style "12-5005 Valley Drive": unit, dash, street number, street name.
-_UNIT_DASH_STREET = re.compile(r"(?:^|[\s,])([A-Z]?\d+[A-Z]?)\s*-\s*(\d+[A-Z]?)\s+[A-Z]")
-_STREET_NUMBER = re.compile(r"(?:^|,)\s*(\d+[A-Z]?)\s+[A-Z]")
+_UNIT_DASH_STREET = re.compile(r"(?:^|[\s,])([A-Z]?\d+[A-Z]?)\s*-\s*(\d+[A-Z]?)\s+[A-Z0-9]")
+# Hawaiian style "78-261 Manukai St" is one hyphenated house number.
+_STREET_NUMBER = re.compile(r"(?:^|,)\s*(\d+(?:-\d+)?[A-Z]?)\s+[A-Z0-9]")
 
 
 def _clean_unit(u: str) -> str:
@@ -237,11 +263,14 @@ def street_and_unit(text: str) -> tuple[str, str]:
       "Stones Throw #12"                        -> ("", "12")
     """
     s = (text or "").upper()
-    m = _UNIT_DASH_STREET.search(s)
-    if m:
-        return m.group(2), _clean_unit(m.group(1))
+    dash = _UNIT_DASH_STREET.search(s)
+    word = _UNIT_WORD.search(s)
+    # An explicit unit elsewhere ("78-261 Manukai St Unit 2305") means the dash
+    # is a house number, not unit-street; "Unit 12-5005 Valley Drive" is both.
+    if dash and not (word and not word.start() <= dash.start(1) < word.end()):
+        return dash.group(2), _clean_unit(dash.group(1))
     unit = ""
-    m = _UNIT_WORD.search(s)
+    m = word
     if m:
         unit = _clean_unit(m.group(1) or m.group(2))
         s = s[:m.start()] + "," + s[m.end():]
@@ -279,6 +308,26 @@ def unit_mismatch(address: str, result: dict) -> str:
 
 
 # ── Result parser ────────────────────────────────────────────────────
+
+_GUESTS_STATED = re.compile(
+    r"(?:sleeps|accommodates|up to|max(?:imum)?(?: of)?)\s*(\d{1,2})\b"
+    r"|\b(\d{1,2})\s*(?:guests|people|persons)\b", re.I)
+
+
+def _stated_guests(raw: dict) -> Optional[int]:
+    """The extracted guest count, only when the page's own text states it.
+
+    Firecrawl's extractor fills every schema field it can. A for-sale Zillow
+    listing says nothing about guests, and it returned "11" for 393 Essex St
+    anyway (2026-09-30). A number the listing does not state is a guess, and
+    guesses become the comp filter; without one the run asks the user."""
+    n = _coerce_int(raw.get("max_guests"))
+    if not n:
+        return None
+    text = " ".join(str(raw.get(k) or "") for k in ("title", "description"))
+    stated = {int(a or b) for a, b in _GUESTS_STATED.findall(text)}
+    return n if n in stated else None
+
 
 def _coerce_int(v) -> Optional[int]:
     if v is None:
@@ -455,7 +504,7 @@ def _parse_firecrawl_result(
         "bedrooms":       _coerce_int(raw.get("bedrooms")),
         "bathrooms":      _coerce_float(raw.get("bathrooms")),
         "sqft":           _coerce_int(raw.get("sqft")),
-        "max_guests":     _coerce_int(raw.get("max_guests")),
+        "max_guests":     _stated_guests(raw),
         "property_type":  raw.get("property_type") or "Property",
         "listing_url":    source_url,
         "raw_address":    raw.get("address") or "",
@@ -466,6 +515,13 @@ def _parse_firecrawl_result(
         "features":       _clean_features(raw.get("features")),
     }
 
+
+# Firecrawl retries: 429/5xx and connect failures, twice. A read timeout is not
+# retried: Firecrawl was still working, so a second call burns 180s and credits.
+_ATTEMPTS = 3
+_RETRY_DELAY = 2.0         # seconds; doubles each attempt
+_RETRY_AFTER_MAX = 10.0
+_RETRY_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 
 # Each fallback attempt is a full Firecrawl scrape (up to 180s), so the
 # locality-aware retry loop is capped rather than walking all 8 hits.
@@ -482,24 +538,44 @@ async def _firecrawl_post(endpoint: str, body: dict) -> dict:
         "Authorization": f"Bearer {config.FIRECRAWL_API_KEY}",
         "Content-Type": "application/json",
     }
-    try:
-        async with httpx.AsyncClient(timeout=180) as client:
-            resp = await client.post(url, json=body, headers=headers)
-    except httpx.ReadTimeout:
-        print(f"[firecrawl] {endpoint} timed out after 180s", file=sys.stderr)
-        return {}
-    except httpx.HTTPError as e:
-        print(f"[firecrawl] {endpoint} HTTP error: {e}", file=sys.stderr)
-        return {}
-    if resp.status_code >= 400:
-        kit.check_key_status("Firecrawl", resp.status_code)   # before the body is printed
-        body = kit.redact(resp.text, config.FIRECRAWL_API_KEY)[:300]   # redact, then cut
-        print(f"[firecrawl] {endpoint} returned {resp.status_code}: {body}", file=sys.stderr)
-        return {}
-    try:
-        return resp.json()
-    except Exception:
-        return {}
+    for attempt in range(_ATTEMPTS):
+        last = attempt == _ATTEMPTS - 1
+        try:
+            async with httpx.AsyncClient(timeout=180) as client:
+                resp = await client.post(url, json=body, headers=headers)
+        except httpx.ReadTimeout:
+            print(f"[firecrawl] {endpoint} timed out after 180s", file=sys.stderr)
+            return {}
+        except httpx.HTTPError as e:
+            if not last:
+                await asyncio.sleep(_RETRY_DELAY * 2 ** attempt)
+                continue
+            print(f"[firecrawl] {endpoint} HTTP error: {e}", file=sys.stderr)
+            return {}
+        if resp.status_code in _RETRY_STATUSES and not last:
+            try:
+                delay = min(float(resp.headers["Retry-After"]), _RETRY_AFTER_MAX)
+            except (KeyError, ValueError):
+                delay = _RETRY_DELAY * 2 ** attempt
+            await asyncio.sleep(delay)
+            continue
+        if resp.status_code >= 400:
+            kit.check_key_status("Firecrawl", resp.status_code)   # before the body is printed
+            body = kit.redact(resp.text, config.FIRECRAWL_API_KEY)[:300]   # redact, then cut
+            print(f"[firecrawl] {endpoint} returned {resp.status_code}: {body}", file=sys.stderr)
+            return {}
+        try:
+            data = resp.json()
+        except ValueError:
+            return {}
+        return data if isinstance(data, dict) else {}
+    return {}
+
+
+def _result_rows(data: dict) -> list[dict]:
+    """The dict rows of a /search response's "data" list; anything else is dropped."""
+    rows = data.get("data")
+    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
 
 
 # ── Public: scrape any listing URL ───────────────────────────────────
@@ -533,7 +609,9 @@ async def scrape_listing_url(url: str, expect_locality: str = "") -> Optional[di
     }
 
     data = await _firecrawl_post("/scrape", body)
-    payload = data.get("data") or {}
+    payload = data.get("data")
+    if not isinstance(payload, dict):
+        payload = {}
     json_data = payload.get("json")
     if not json_data or not isinstance(json_data, dict):
         print(f"[Search] No structured data extracted from {url[:60]}", file=sys.stderr)
@@ -594,7 +672,7 @@ async def search_for_property(address: str) -> Optional[dict]:
     }
 
     data = await _firecrawl_post("/search", search_body)
-    results = data.get("data") or []
+    results = _result_rows(data)
 
     if not results:
         print(f"[Search] No search results for: {address}", file=sys.stderr)
@@ -748,8 +826,8 @@ async def search_hero_image(address: str, accept=None) -> Optional[str]:
     }
 
     data = await _firecrawl_post("/search", body)
-    for r in (data.get("data") or []):
-        json_data = r.get("json") or {}
+    for r in _result_rows(data):
+        json_data = r.get("json") if isinstance(r.get("json"), dict) else {}
         img = await resolved_hero(json_data.get("hero_image_url"), r.get("metadata"))
         if img and accept is not None and not accept(img):
             continue

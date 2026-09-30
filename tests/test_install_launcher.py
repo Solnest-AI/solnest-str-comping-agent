@@ -7,6 +7,7 @@ and spent $6.48.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -26,7 +27,10 @@ def test_launcher_points_at_this_folder_with_the_skills_own_trigger(tmp_path):
     assert ROOT.resolve().as_posix() in text
     project = (ROOT / ".claude/skills/str-comping-agent/SKILL.md").read_text(encoding="utf-8")
     description = next(line for line in project.splitlines() if line.startswith("description:"))
-    assert description in text, "launcher must trigger on the same phrases as the skill"
+    launched = next(line for line in text.splitlines() if line.startswith("description:"))
+    assert json.loads(launched.split(":", 1)[1]) == description.split(":", 1)[1].strip(), (
+        "launcher must trigger on the same phrases as the skill"
+    )
     assert "\\" not in text.split("---", 2)[2].split("If that folder")[0], "Windows path must use forward slashes"
 
 

@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;800;900&display=swap" rel="stylesheet">
 
@@ -96,16 +96,6 @@
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
-    }
-
-    @keyframes borderGlow {
-      0%, 100% { opacity: 0.5; }
-      50% { opacity: 1; }
-    }
-
-    .border-glow {
-      position: relative;
-      overflow: hidden;
     }
 
     .btn-primary {
@@ -205,6 +195,8 @@
     }
 
     .metric{
+      container-type: inline-size;   /* the value below sizes to its own tile */
+      min-width: 0;
       background: linear-gradient(135deg, rgba(255,255,255,0.9) 0%, rgba(255,255,255,0.7) 100%);
       border: 1px solid rgba(var(--brand-rgb),0.12);
       border-radius: 1rem;
@@ -276,7 +268,9 @@
 
     .metric .v{
       margin-top: 0.5rem;
-      font-size: 1.25rem;
+      /* Scales down inside a narrow tile instead of clipping; below the floor
+         the <wbr> after the currency lets it wrap rather than shrink further. */
+      font-size: clamp(0.85rem, 15cqi, 1.25rem);
       font-weight: 900;
       background: var(--sol-gradient-1);
       -webkit-background-clip: text;
@@ -630,6 +624,15 @@
     /* The revenue headline overflowed a 390px viewport (measured 2026-09-20). */
     @media (max-width: 640px) {
       .stat-number.text-6xl { font-size: 2rem; line-height: 1.15; white-space: nowrap; }
+      /* Two tiles a row left ~100px for a value: "CA$163,934" was clipped to
+         "CA$16" by the tile's overflow:hidden (Vancouver, 2026-09-30). */
+      .metric { padding: 0.75rem; }
+    }
+    /* On a phone two tiles a row leave 50-100px for a value: no readable size
+       fits "163,934" there, so the tiles stack one a row. */
+    @media (max-width: 420px) {
+      .metric-grid { grid-template-columns: 1fr; }
+      .metric[style*="grid-column"] { grid-column: auto !important; }
     }
 
     @media print {
@@ -651,7 +654,7 @@
           <div class="shrink-0 rounded-2xl{% if branding.logo_background %} px-5 py-4{% endif %}"
                {% if branding.logo_background %}style="background:{{ branding.logo_background }};"{% endif %}>
             <img
-              src="{{ branding.logo_url }}"
+              src="{{ branding.logo_url | safe_url }}"
               alt="{{ branding.company_name }} Logo"
               class="h-16 md:h-20 w-auto max-w-[220px] object-contain"
             />
@@ -671,18 +674,18 @@
           </div>
         </div>
 
-        <div class="flex items-center gap-3 no-print lg:pt-2">
+        <div class="flex flex-wrap lg:flex-nowrap items-center gap-3 no-print lg:pt-2">
           <button
             onclick="window.print()"
-            class="btn-primary whitespace-nowrap"
+            class="btn-primary whitespace-nowrap shrink-0"
           >
             📄 Print / Save PDF
           </button>
-          {% if branding.website_url %}
+          {% if branding.website_url | safe_url %}
           <a
-            href="{{ branding.website_url }}"
+            href="{{ branding.website_url | safe_url }}"
             target="_blank"
-            class="btn-secondary"
+            class="btn-secondary whitespace-nowrap shrink-0"
           >
             🌐 {{ branding.website_url | replace("https://","") | replace("http://","") | trim("/") }}
           </a>
@@ -702,17 +705,17 @@
             {{ narratives.positioning_summary }}
           </p>
         </div>
-        {% if property.listing_url %}
+        {% if property.listing_url | safe_url %}
         <a
-          href="{{ property.listing_url }}"
+          href="{{ property.listing_url | safe_url }}"
           target="_blank"
           class="no-print btn-secondary"
         >
           🔗 View Listing
         </a>
-        {% elif property.airbnb_url %}
+        {% elif property.airbnb_url | safe_url %}
         <a
-          href="{{ property.airbnb_url }}"
+          href="{{ property.airbnb_url | safe_url }}"
           target="_blank"
           class="no-print btn-secondary"
         >
@@ -725,13 +728,13 @@
         <div class="lg:col-span-2 subject-card shadow-soft glass-card">
           <div class="subject-img-wrap">
             <img
-              src="{{ property.hero_image_url }}"
+              src="{{ property.hero_image_url | safe_url }}"
               alt="{{ property.short_address }} hero image"
               onerror="this.onerror=null; this.src='https://placehold.co/1200x800/f7f3ee/1f3c34?text=Subject+Image';"
             />
           </div>
 
-          {% if property.airbnb_url %}
+          {% if property.airbnb_url | safe_url %}
           {# ── Airbnb listing card ── #}
           <div class="subject-card-body">
             <div class="subject-card-title">
@@ -764,7 +767,7 @@
               {{ property.market }}
             </div>
           </div>
-          <a href="{{ property.airbnb_url }}" target="_blank" class="no-print subject-card-link">
+          <a href="{{ property.airbnb_url | safe_url }}" target="_blank" class="no-print subject-card-link">
             View on Airbnb &rarr;
           </a>
 
@@ -793,8 +796,8 @@
               {{ property.market }}
             </div>
           </div>
-          {% if property.listing_url %}
-          <a href="{{ property.listing_url }}" target="_blank" class="no-print subject-card-link">
+          {% if property.listing_url | safe_url %}
+          <a href="{{ property.listing_url | safe_url }}" target="_blank" class="no-print subject-card-link">
             View Listing &rarr;
           </a>
           {% endif %}
@@ -953,7 +956,7 @@
           <div class="metric-grid">
             <div class="metric">
               <div class="k">Reported Gross Revenue</div>
-              <div class="v">{{ property.currency }}{{ '{:,.0f}'.format(subject_performance.annual_revenue) }}</div>
+              <div class="v">{{ property.currency }}<wbr>{{ '{:,.0f}'.format(subject_performance.annual_revenue) }}</div>
             </div>
             <div class="metric">
               <div class="k">Occupancy</div>
@@ -965,7 +968,7 @@
             </div>
             <div class="metric">
               <div class="k">Revenue per Booked Night</div>
-              <div class="v">{{ property.currency }}{{ '{:,.0f}'.format(subject_performance.revenue_per_booked_night) }}</div>
+              <div class="v">{{ property.currency }}<wbr>{{ '{:,.0f}'.format(subject_performance.revenue_per_booked_night) }}</div>
             </div>
           </div>
         </div>
@@ -988,11 +991,11 @@
         </div>
         <div class="metric">
           <div class="k">💵 Revenue per Night</div>
-          <div class="v">{{ property.currency }}<span id="revPerNight">{{ '{:,}'.format(calculator.adr_default) }}</span></div>
+          <div class="v">{{ property.currency }}<wbr><span id="revPerNight">{{ '{:,}'.format(calculator.adr_default) }}</span></div>
         </div>
         <div class="metric">
           <div class="k">📊 Revenue per Available Night</div>
-          <div class="v">{{ property.currency }}<span id="revPar">{{ '{:,}'.format(initial_revpar) }}</span></div>
+          <div class="v">{{ property.currency }}<wbr><span id="revPar">{{ '{:,}'.format(initial_revpar) }}</span></div>
         </div>
       </div>
     </section>
@@ -1063,7 +1066,7 @@
         <div class="comp-card avoid-break flex flex-col rounded-2xl overflow-hidden shadow-soft glass-card">
           <div class="image-overlay">
             <img
-              src="{{ comp.image_url }}"
+              src="{{ comp.image_url | safe_url }}"
               alt="{{ comp.name }}"
               class="w-full h-48 object-cover"
               onerror="this.onerror=null; this.src='https://placehold.co/900x600/f7f3ee/1f3c34?text=Comp+Image';"
@@ -1081,14 +1084,14 @@
               {% endfor %}
             </div>
             <div class="metric-grid">
-              <div class="metric"><div class="k">Rev / Listed Night</div><div class="v">{{ comp.revenue_per_listed_night | format_currency(property.currency) }}</div></div>
-              <div class="metric"><div class="k">Annual Revenue <span class="k-basis">incl. fees</span></div><div class="v">{{ comp.annual_revenue | format_currency_k(property.currency) }}</div></div>
+              <div class="metric"><div class="k">Rev / Listed Night</div><div class="v">{{ property.currency }}<wbr>{{ comp.revenue_per_listed_night | format_currency("") }}</div></div>
+              <div class="metric"><div class="k">Annual Revenue <span class="k-basis">incl. fees</span></div><div class="v">{{ property.currency }}<wbr>{{ comp.annual_revenue | format_currency_k("") }}</div></div>
               <div class="metric"><div class="k">Occupancy</div><div class="v">{{ '%.1f'|format(comp.occupancy_pct) }}%</div></div>
               {% set rb = revenue_breakdown(comp) %}
               {% if rb and rb.mode == 'split' %}
-              <div class="metric"><div class="k">Avg Nightly Rate <span class="k-basis">excl. fees</span></div><div class="v">{{ property.currency }}{{ '{:,}'.format(rb.nightly) }}</div></div>
+              <div class="metric"><div class="k">Avg Nightly Rate <span class="k-basis">excl. fees</span></div><div class="v">{{ property.currency }}<wbr>{{ '{:,}'.format(rb.nightly) }}</div></div>
               {% elif rb %}
-              <div class="metric"><div class="k">Per Booked Night <span class="k-basis">incl. fees</span></div><div class="v">{{ property.currency }}{{ '{:,}'.format(rb.per_night) }}</div></div>
+              <div class="metric"><div class="k">Per Booked Night <span class="k-basis">incl. fees</span></div><div class="v">{{ property.currency }}<wbr>{{ '{:,}'.format(rb.per_night) }}</div></div>
               {% endif %}
               <div class="metric" style="grid-column: 1 / span 2;"><div class="k">Nights Booked (12 mo)</div><div class="v">{{ comp.nights_booked }}<span style="font-size:.7em;opacity:.6;"> / {{ comp.nights_listed }} listed</span></div></div>
               {% if rb %}
@@ -1110,7 +1113,7 @@
               {% endif %}
             </div>
           </div>
-          <a href="{{ comp.airbnb_url }}" target="_blank"
+          <a href="{{ comp.airbnb_url | safe_url }}" target="_blank"
              class="block w-full text-center text-sm font-bold py-3 text-white transition-all hover:opacity-90"
              style="background:var(--sol-gradient-1);">View Listing →</a>
         </div>
@@ -1179,9 +1182,9 @@
       <p class="text-xs text-gray-400 font-medium uppercase tracking-widest">
         {{ branding.company_name }} · {{ branding.tagline }}
       </p>
-      {% if branding.website_url %}
+      {% if branding.website_url | safe_url %}
       <p class="text-xs text-gray-300 mt-2">
-        <a href="{{ branding.website_url }}" class="hover:text-sol-forest transition">{{ branding.website_url | replace("https://","") | replace("http://","") | trim("/") }}</a>
+        <a href="{{ branding.website_url | safe_url }}" class="hover:text-sol-forest transition">{{ branding.website_url | replace("https://","") | replace("http://","") | trim("/") }}</a>
       </p>
       {% endif %}
       <p class="text-xs text-gray-300 mt-1">

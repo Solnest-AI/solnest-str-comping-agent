@@ -125,3 +125,44 @@ def test_per_comp_fallback_still_refuses_more_than_three_blank_months():
         _rent(), comp_monthly_data=comps, market_occupancy=[])
     assert basis == ""
     assert series == []
+
+
+def test_a_postal_code_without_data_falls_back_to_the_town(monkeypatch):
+    """Salem 01970 (2026-09-30): /markets/lookup names the ZIP as the
+    district, the ZIP has under 25 listings and 404s, the town has 12 months."""
+    import asyncio
+
+    from scrapers import airroi
+
+    sent = []
+
+    async def post(path, body, client=None):
+        sent.append(dict(body["market"]))
+        if "district" in body["market"]:
+            raise airroi.AirROIError(404, "No market data matches your search criteria.")
+        return {"results": _rows(range(1, 13))}
+
+    monkeypatch.setattr(airroi, "_post", post)
+    market = {"country": "United States", "region": "Massachusetts",
+              "locality": "Salem", "district": "01970"}
+    rows = asyncio.run(airroi.get_market_occupancy(market))
+    assert len(rows) == 12
+    assert sent == [market, {k: v for k, v in market.items() if k != "district"}]
+
+
+def test_other_market_errors_are_not_retried(monkeypatch):
+    import asyncio
+
+    from scrapers import airroi
+
+    calls = []
+
+    async def post(path, body, client=None):
+        calls.append(body)
+        raise airroi.AirROIError(500, "vendor error")
+
+    monkeypatch.setattr(airroi, "_post", post)
+    with pytest.raises(airroi.AirROIError):
+        asyncio.run(airroi.get_market_occupancy(
+            {"country": "US", "region": "MA", "locality": "Salem", "district": "01970"}))
+    assert len(calls) == 1

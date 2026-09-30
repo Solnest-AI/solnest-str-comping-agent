@@ -243,6 +243,7 @@ def test_revenue_sanity_passes_high_occupancy_comp():
 def test_revenue_sanity_catches_revenue_below_room_revenue():
     """Revenue far below ADR x booked nights means the mapping is broken."""
     comp = _make_good_comp()
+    comp.room_revenue = comp.adr * comp.nights_booked   # measured, not adr x nights
     comp.annual_revenue = 5000   # 5000 / 86000 = 5.8% of room revenue
     msg = _check_revenue_sanity(comp)
     assert msg is not None
@@ -252,6 +253,7 @@ def test_revenue_sanity_catches_revenue_below_room_revenue():
 def test_revenue_sanity_catches_impossible_fee_multiplier():
     """Revenue far above ADR x booked nights is not a fee multiplier."""
     comp = _make_good_comp()
+    comp.room_revenue = comp.adr * comp.nights_booked   # measured, not adr x nights
     comp.annual_revenue = 400000   # 400000 / 86000 = 465% of room revenue
     msg = _check_revenue_sanity(comp)
     assert msg is not None
