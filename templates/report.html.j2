@@ -195,6 +195,8 @@
     }
 
     .metric{
+      container-type: inline-size;   /* the value below sizes to its own tile */
+      min-width: 0;
       background: linear-gradient(135deg, rgba(255,255,255,0.9) 0%, rgba(255,255,255,0.7) 100%);
       border: 1px solid rgba(var(--brand-rgb),0.12);
       border-radius: 1rem;
@@ -266,7 +268,9 @@
 
     .metric .v{
       margin-top: 0.5rem;
-      font-size: 1.25rem;
+      /* Scales down inside a narrow tile instead of clipping; below the floor
+         the <wbr> after the currency lets it wrap rather than shrink further. */
+      font-size: clamp(0.85rem, 15cqi, 1.25rem);
       font-weight: 900;
       background: var(--sol-gradient-1);
       -webkit-background-clip: text;
@@ -620,6 +624,15 @@
     /* The revenue headline overflowed a 390px viewport (measured 2026-09-20). */
     @media (max-width: 640px) {
       .stat-number.text-6xl { font-size: 2rem; line-height: 1.15; white-space: nowrap; }
+      /* Two tiles a row left ~100px for a value: "CA$163,934" was clipped to
+         "CA$16" by the tile's overflow:hidden (Vancouver, 2026-09-30). */
+      .metric { padding: 0.75rem; }
+    }
+    /* On a phone two tiles a row leave 50-100px for a value: no readable size
+       fits "163,934" there, so the tiles stack one a row. */
+    @media (max-width: 420px) {
+      .metric-grid { grid-template-columns: 1fr; }
+      .metric[style*="grid-column"] { grid-column: auto !important; }
     }
 
     @media print {
@@ -943,7 +956,7 @@
           <div class="metric-grid">
             <div class="metric">
               <div class="k">Reported Gross Revenue</div>
-              <div class="v">{{ property.currency }}{{ '{:,.0f}'.format(subject_performance.annual_revenue) }}</div>
+              <div class="v">{{ property.currency }}<wbr>{{ '{:,.0f}'.format(subject_performance.annual_revenue) }}</div>
             </div>
             <div class="metric">
               <div class="k">Occupancy</div>
@@ -955,7 +968,7 @@
             </div>
             <div class="metric">
               <div class="k">Revenue per Booked Night</div>
-              <div class="v">{{ property.currency }}{{ '{:,.0f}'.format(subject_performance.revenue_per_booked_night) }}</div>
+              <div class="v">{{ property.currency }}<wbr>{{ '{:,.0f}'.format(subject_performance.revenue_per_booked_night) }}</div>
             </div>
           </div>
         </div>
@@ -978,11 +991,11 @@
         </div>
         <div class="metric">
           <div class="k">💵 Revenue per Night</div>
-          <div class="v">{{ property.currency }}<span id="revPerNight">{{ '{:,}'.format(calculator.adr_default) }}</span></div>
+          <div class="v">{{ property.currency }}<wbr><span id="revPerNight">{{ '{:,}'.format(calculator.adr_default) }}</span></div>
         </div>
         <div class="metric">
           <div class="k">📊 Revenue per Available Night</div>
-          <div class="v">{{ property.currency }}<span id="revPar">{{ '{:,}'.format(initial_revpar) }}</span></div>
+          <div class="v">{{ property.currency }}<wbr><span id="revPar">{{ '{:,}'.format(initial_revpar) }}</span></div>
         </div>
       </div>
     </section>
@@ -1071,14 +1084,14 @@
               {% endfor %}
             </div>
             <div class="metric-grid">
-              <div class="metric"><div class="k">Rev / Listed Night</div><div class="v">{{ comp.revenue_per_listed_night | format_currency(property.currency) }}</div></div>
-              <div class="metric"><div class="k">Annual Revenue <span class="k-basis">incl. fees</span></div><div class="v">{{ comp.annual_revenue | format_currency_k(property.currency) }}</div></div>
+              <div class="metric"><div class="k">Rev / Listed Night</div><div class="v">{{ property.currency }}<wbr>{{ comp.revenue_per_listed_night | format_currency("") }}</div></div>
+              <div class="metric"><div class="k">Annual Revenue <span class="k-basis">incl. fees</span></div><div class="v">{{ property.currency }}<wbr>{{ comp.annual_revenue | format_currency_k("") }}</div></div>
               <div class="metric"><div class="k">Occupancy</div><div class="v">{{ '%.1f'|format(comp.occupancy_pct) }}%</div></div>
               {% set rb = revenue_breakdown(comp) %}
               {% if rb and rb.mode == 'split' %}
-              <div class="metric"><div class="k">Avg Nightly Rate <span class="k-basis">excl. fees</span></div><div class="v">{{ property.currency }}{{ '{:,}'.format(rb.nightly) }}</div></div>
+              <div class="metric"><div class="k">Avg Nightly Rate <span class="k-basis">excl. fees</span></div><div class="v">{{ property.currency }}<wbr>{{ '{:,}'.format(rb.nightly) }}</div></div>
               {% elif rb %}
-              <div class="metric"><div class="k">Per Booked Night <span class="k-basis">incl. fees</span></div><div class="v">{{ property.currency }}{{ '{:,}'.format(rb.per_night) }}</div></div>
+              <div class="metric"><div class="k">Per Booked Night <span class="k-basis">incl. fees</span></div><div class="v">{{ property.currency }}<wbr>{{ '{:,}'.format(rb.per_night) }}</div></div>
               {% endif %}
               <div class="metric" style="grid-column: 1 / span 2;"><div class="k">Nights Booked (12 mo)</div><div class="v">{{ comp.nights_booked }}<span style="font-size:.7em;opacity:.6;"> / {{ comp.nights_listed }} listed</span></div></div>
               {% if rb %}
