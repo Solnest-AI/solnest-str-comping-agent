@@ -19,6 +19,25 @@ Users run this from the Claude Code desktop app. They never type into a
 terminal: you run every command yourself with the Bash tool, from this folder.
 Confirm each step before moving on.
 
+**Never commit, push, fork, open a pull request or create a GitHub repo for
+this folder.** It is the student's own copy of a tool, not a project. When
+they say "save", everything is already saved on disk: say so. At the
+2026-09-29 summit a student's "save" became a push to Solnest-AI's GitHub.
+Only if the student explicitly asks to put their copy on their own GitHub
+account is that a separate job, and it never involves Solnest-AI.
+
+### Step 0: Detach from GitHub (automatic, first)
+
+```bash
+bash scripts/detach_from_github.sh
+```
+
+A `git clone` links this folder to Solnest-AI's GitHub. This removes that link
+and the `.git` folder, so nothing here can be pushed back. It only touches an
+untouched copy of the public repo (never a working copy with edits, branches
+or unpushed commits) and always exits 0: relay the one line it prints. The
+tool never needs git to run.
+
 **Never run bare `python`, `python3` or `pip`.** On a fresh Windows machine
 `python` is the Microsoft Store stub and opens the Store instead of running.
 Every Python command in this file goes through `scripts/ensure_env.sh`, which
@@ -157,7 +176,7 @@ Do **not** edit the template to rebrand.
 ### Step 4: Tell them they're set up
 
 Setup is done once `check_setup.py` says `READY` and the launcher is installed
-(Step 1b). Tell the user, in these words: "You're set up. From any Claude Code
+(Step 1b). Tell the user, in these words: "✅ You're set up. From any Claude Code
 window, just say: run comps on <an Airbnb link, a Zillow link or an address>.
 If it ever doesn't pick that up, type /str-comping-agent." Also give them this
 folder's path.
@@ -172,6 +191,20 @@ The HTML lands in `output/`. Then do the narrative handoff below. The first
 report is not finished until you have. If this sample listing fails (sparse
 market, delisted, vendor hiccup), setup is still complete: say so, and try the
 student's own property instead. Never make up comps to fill the gap.
+
+---
+
+## When the user says "update the comping agent"
+
+Their copy is a plain folder (Step 0), so it updates by download, not
+`git pull`. `branding.json`, `.env`, `.venv`, `output/` and `.cache/` are not
+in the download and stay as they are:
+
+```bash
+T="$(mktemp -d)" && curl -fsSL -o "$T/c.tar.gz" https://github.com/Solnest-AI/solnest-str-comping-agent/archive/refs/heads/main.tar.gz && tar -xzf "$T/c.tar.gz" -C "$T" && cp -R "$T/solnest-str-comping-agent-main/." . && rm -rf "$T"
+```
+
+Then run Step 1 (it reinstalls anything new) and `scripts/check_setup.py`.
 
 ---
 
@@ -398,6 +431,8 @@ link it and `/api/openapi.json` 404s.
 
 ## Don't do these things
 
+- Don't commit, push, fork or open pull requests for a student's copy, even
+  when they say "save". Saving means the files on disk. See Step 0.
 - Don't commit `.env` or `branding.json`. Keys and identity stay local.
 - Don't hardcode API keys in source. Ever.
 - Don't rebrand by editing `templates/report.html.j2`. Edit `branding.json`.
