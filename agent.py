@@ -163,8 +163,7 @@ def _require_branding() -> bool:
         print(f"Fix those fields in {config._BRANDING_PATH} with the student, or rebuild it:")
     else:
         print("[Branding] No branding.json yet: the report would say 'Your Company' with no logo.")
-    print("NEXT: ask the student for their company website (their own site, not a listing), then run:")
-    print('    PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/brand_from_website.py <their website>')
+    print("\n".join(config.BRANDING_ASK))
     print("Look at the logo it saves, confirm the name, logo and colours with them, then run this again.")
     print("Nothing has been spent.")
     return False

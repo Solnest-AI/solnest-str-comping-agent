@@ -197,7 +197,7 @@ def main(argv: list[str]) -> int:
         STAMP.write_text(json.dumps({"fingerprint": _fingerprint(values), "at": time.time()}), encoding="utf-8")
         kit.remember_kit(found)   # later runs keep using this kit, whatever else gets downloaded
         print("[setup] Keys: AirROI and Firecrawl both work.")
-        from config import branding_problems   # lazy: config walks for the kit on import
+        from config import BRANDING_ASK, branding_problems   # lazy: config walks for the kit on import
         problems = branding_problems(BRANDING)
         if problems:
             if BRANDING.exists():
@@ -205,8 +205,7 @@ def main(argv: list[str]) -> int:
                 print("      Fix those fields with the student (a name alone is fine), or rebuild it:")
             else:
                 print("[setup] Branding: not set yet. The report would say 'Your Company' with no logo.")
-            print("NEXT: ask the student for their company website (their own site, not a listing), then run:")
-            print('      PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/brand_from_website.py <their website>')
+            print("\n".join(BRANDING_ASK))
             print("      Look at the logo it saves and confirm the name, logo and colours with them.")
             print("      No website? Copy branding.example.json to branding.json and fill it in with them.")
             return 4

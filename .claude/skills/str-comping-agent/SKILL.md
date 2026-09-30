@@ -57,7 +57,10 @@ tests each with one real request (AirROI $0.01, Firecrawl free). A pass is remem
 - **4, keys work but there is no usable `branding.json`** (missing, not valid JSON, or
   still a placeholder name; the output names the field): the report would say "Your
   Company" with no logo. A name alone is a complete brand. Ask the student for their company website (their own site, not a
-  listing), then run
+  listing), then **stop and wait for their answer.** Never fill it in yourself: not from
+  their email address, a folder name, another copy's `branding.json` or a web search,
+  however obvious it looks. Only the student knows which business their reports go out
+  under. With their answer, run
   `PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/brand_from_website.py <website>`.
   It reads their name, logo and colours with Firecrawl and writes `branding.json`. **Look
   at the logo it saves** (`.cache/brand_logo.*`), then show the student the name, logo,

@@ -334,7 +334,7 @@ def main(argv: list[str]) -> int:
     origin = site_origin(site)
     if not origin:
         print(f"[brand] '{a.website}' is not a website address.")
-        print("NEXT: ask the student for their website address (like theirsite.com) and run this again.")
+        print("NEXT: ask the student for their website address (like theirsite.com), wait for their answer, then run this again.")
         return 3
     config.ensure_firecrawl_configured()
 
