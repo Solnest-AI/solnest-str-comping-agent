@@ -24,6 +24,8 @@ step at a time.
 > Already cloned it? Step 0 of `CLAUDE.md` detaches it. Then follow
 > `CLAUDE.md` > "When the user says set this up". **Never commit, push, fork
 > or open a pull request for this folder**: saving means the files on disk.
+> Branding: ask the student for their company website and wait for the
+> answer; never take it from their email, another copy or a search.
 > Run every Python command
 > through `scripts/ensure_env.sh`, never bare `python`/`pip` (on a fresh
 > Windows machine `python` opens the Microsoft Store). Verify keys with

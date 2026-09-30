@@ -151,8 +151,14 @@ company name. A name alone is a complete brand; logo, website and colours are
 optional. Build it from the student's
 own website:
 
-1. Ask the student for their company website (their own site, not a listing).
-2. Run:
+1. Ask the student for their company website (their own site, not a listing),
+   then **stop and wait for their answer.** Never fill it in yourself: not
+   from their email address, a folder name, another copy's `branding.json` or
+   a web search, however obvious it looks. Only the student knows which
+   business their reports go out under. (Tested 2026-09-29: with another
+   copy's `branding.json` on disk, a headless "set this up" branded from that
+   without asking.)
+2. With their answer, run:
    ```bash
    PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/brand_from_website.py <their website>
    ```
@@ -424,7 +430,7 @@ link it and `/api/openapi.json` 404s.
 | `listed as a multi-unit building` (the run stops, nothing spent) | A duplex or a house split into apartments; the listing's size is the whole building | Ask which unit to comp and re-run with `--beds N --baths N --guests N` for it; comp each unit to value the building |
 | `Missing required fields: --guests` on a Zillow/Realtor link | Sale listings do not state guest capacity, and it is never guessed | Ask the user how many guests it sleeps and re-run with `--guests N` |
 | `[setup] FAILED: ...` | No internet, or uv/Python blocked on this machine | Do what the message says, then run the same command again |
-| `[Branding] No branding.json yet` or `branding.json is not usable yet` (the run stops, nothing spent) | The student has not been branded, or the file is broken / still a placeholder | Ask for their website and run `scripts/brand_from_website.py` (Step 3) |
+| `[Branding] No branding.json yet` or `branding.json is not usable yet` (the run stops, nothing spent) | The student has not been branded, or the file is broken / still a placeholder | Ask for their website, wait for the answer, and run `scripts/brand_from_website.py` (Step 3) |
 | Report says "Your Company" / no logo | No `branding.json` | Ask for the student's website and run `scripts/brand_from_website.py` (Step 3) |
 
 ---

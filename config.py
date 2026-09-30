@@ -243,6 +243,20 @@ def branding_problems(path: Path | None = None) -> list[str]:
     return problems
 
 
+# What Claude does when there is no usable brand, printed by check_setup.py and
+# agent.py. "Ask the student" alone was not enough (2026-09-29): a headless
+# "set this up" read another copy's branding.json and branded from that site
+# without asking. Only the student knows which business the reports go out
+# under, and a guessed brand puts someone else's name on every report.
+BRANDING_ASK = (
+    'NEXT: ASK the student "What is your company website?" (their own site, not a listing),',
+    "      then STOP and wait for their answer. Never fill it in yourself: not from their email",
+    "      address, a folder name, another copy's branding.json or a web search.",
+    "      With their answer, run:",
+    '      PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/brand_from_website.py <their website>',
+)
+
+
 def branding_is_placeholder() -> bool:
     """True until branding.json holds a real brand: the report would carry a
     placeholder name. The skill asks for the student's website before the
