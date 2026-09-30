@@ -523,9 +523,9 @@ async def _subject_from_search(raw: str, args) -> PropertyBasics:
     # --market is an OVERRIDE (see argparse help), so it wins over the scraped
     # value, exactly like --beds/--baths/--guests.
     _apply_size_overrides(prop, args)
-    # Infer guest capacity from bedrooms if not found
-    if prop.max_guests <= 0 and prop.bedrooms > 0:
-        prop.max_guests = prop.bedrooms * 2 + 2
+    # Guest capacity is never inferred. A for-sale listing does not state it,
+    # and bedrooms x 2 + 2 put a six-bedroom Salem building at 14 guests
+    # (2026-09-30). _require_details stops the run and Claude asks the user.
     # The listing had no usable photo (a map or a logo is refused), or one
     # the photo gate will refuse (an address often resolves to a local
     # rental company's site: Sun Peaks, 2026-09-28), so look for one on a
@@ -560,8 +560,37 @@ async def _resolve_subject(args) -> PropertyBasics:
     if args.listing_url:
         prop.listing_url = args.listing_url
 
+    _refuse_multi_unit(prop, args)
     _require_details(prop)
     return prop
+
+
+# Words a portal uses for a building of several separate dwellings.
+_MULTI_UNIT = re.compile(r"multi[\s_-]?family|duplex|triplex|fourplex|quadplex|\b\d+[\s-]?units?\b|"
+                         r"apartment building", re.I)
+
+
+def _refuse_multi_unit(prop: PropertyBasics, args) -> None:
+    """Stop, before anything is spent, on a multi-unit building sized as a whole.
+
+    393 Essex St, Salem (2026-09-30) is five apartments; Zillow sums them to
+    6BR / 7BA, and the run comped it as one six-bedroom house. The comps and
+    the headline were for a property that does not exist. Sizing one unit
+    with --beds, --baths and --guests is the way through."""
+    if not _MULTI_UNIT.search(prop.property_type or ""):
+        return
+    if args.beds and args.baths and args.guests:
+        print(f"[Input] Multi-unit building: comping one unit as {args.beds}BR / "
+              f"{args.baths}BA / sleeps {args.guests}, as given.")
+        return
+    print(f"\n[Input] {prop.short_address} is listed as a multi-unit building "
+          f"({prop.property_type}, {prop.bedrooms}BR / {prop.bathrooms:g}BA in total).", file=sys.stderr)
+    print("[Input] One comp set for the whole building would price it as a single "
+          f"{prop.bedrooms}-bedroom home. Nothing has been spent.", file=sys.stderr)
+    print("NEXT: ask the user which unit to comp (its bedrooms, bathrooms and how many guests it "
+          "sleeps), then re-run the same command with --beds N --baths N --guests N for that unit. "
+          "Comp each unit separately if they want the whole building.", file=sys.stderr)
+    sys.exit(1)
 
 
 # ── AirROI estimate -> RentalizerData ────────────────────────────────

@@ -262,7 +262,18 @@ async def get_market_occupancy(
     """
     keep = {k: market.get(k) for k in ("country", "region", "locality", "district")}
     keep = {k: v for k, v in keep.items() if v}
-    data = await _post("/markets/metrics/occupancy", {"market": keep}, client=client)
+    try:
+        data = await _post("/markets/metrics/occupancy", {"market": keep}, client=client)
+    except AirROIError as e:
+        # /markets/lookup names the postal code as the district, and a postal
+        # code with under 25 listings 404s ("No market data matches"): Salem
+        # 01970, 2026-09-30. The town itself has the curve, so ask once for it.
+        if e.status != 404 or "district" not in keep:
+            raise
+        keep.pop("district")
+        print(f"[Seasonal] No market data for postal code {market.get('district')}; "
+              f"using {keep.get('locality') or 'the town'} as a whole.")
+        data = await _post("/markets/metrics/occupancy", {"market": keep}, client=client)
     return (data or {}).get("results") or []
 
 

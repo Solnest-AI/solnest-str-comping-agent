@@ -182,6 +182,14 @@ Zillow or Realtor link and use it as `--input`. Never add `--allow-other-unit` o
 `Missing required fields: --beds, --baths, --guests` (the listing page did not say),
 nothing has been spent: ask the user for those numbers and re-run with them. Never guess
 them or copy them from a neighbouring unit.
+Zillow, Realtor and Redfin sale listings almost never say how many guests a home sleeps,
+so expect `--guests` to be asked for on most of them.
+
+**Multi-unit building:** if it stops with `listed as a multi-unit building` (duplex,
+triplex, a house split into apartments), nothing has been spent. One comp set for the
+whole building would price it as one big house. Ask the user which unit to comp and its
+bedrooms, bathrooms and guest count, then re-run with `--beds N --baths N --guests N`.
+For the whole building, comp each unit separately and add them up in your summary.
 If the run stops with `Subject photo refused` (an address often
 resolves to a local rental company's site), nothing has been spent on AirROI yet: ask
 the user for a photo of the property on Airbnb, Zillow, Realtor.ca or Redfin (right-click

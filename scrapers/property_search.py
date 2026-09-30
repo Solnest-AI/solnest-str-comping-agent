@@ -309,6 +309,26 @@ def unit_mismatch(address: str, result: dict) -> str:
 
 # ── Result parser ────────────────────────────────────────────────────
 
+_GUESTS_STATED = re.compile(
+    r"(?:sleeps|accommodates|up to|max(?:imum)?(?: of)?)\s*(\d{1,2})\b"
+    r"|\b(\d{1,2})\s*(?:guests|people|persons)\b", re.I)
+
+
+def _stated_guests(raw: dict) -> Optional[int]:
+    """The extracted guest count, only when the page's own text states it.
+
+    Firecrawl's extractor fills every schema field it can. A for-sale Zillow
+    listing says nothing about guests, and it returned "11" for 393 Essex St
+    anyway (2026-09-30). A number the listing does not state is a guess, and
+    guesses become the comp filter; without one the run asks the user."""
+    n = _coerce_int(raw.get("max_guests"))
+    if not n:
+        return None
+    text = " ".join(str(raw.get(k) or "") for k in ("title", "description"))
+    stated = {int(a or b) for a, b in _GUESTS_STATED.findall(text)}
+    return n if n in stated else None
+
+
 def _coerce_int(v) -> Optional[int]:
     if v is None:
         return None
@@ -484,7 +504,7 @@ def _parse_firecrawl_result(
         "bedrooms":       _coerce_int(raw.get("bedrooms")),
         "bathrooms":      _coerce_float(raw.get("bathrooms")),
         "sqft":           _coerce_int(raw.get("sqft")),
-        "max_guests":     _coerce_int(raw.get("max_guests")),
+        "max_guests":     _stated_guests(raw),
         "property_type":  raw.get("property_type") or "Property",
         "listing_url":    source_url,
         "raw_address":    raw.get("address") or "",
