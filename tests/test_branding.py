@@ -112,6 +112,139 @@ def test_a_firecrawl_key_failure_exits_2(tmp_path, monkeypatch):
     assert bw.main(["https://solnestai.com"]) == 2
 
 
+# ── real STR sites, read by Firecrawl 2026-09-29 (colours as returned) ────
+# Before this fix 5 of 13 lost their brand colour: the picker kept only a
+# colour that was ALREADY dark, so black body text or a link colour won.
+
+def test_a_muted_brand_colour_is_kept_not_swapped_for_the_link_colour():
+    """solneststays.com (Wix): sage everywhere, navy links, browser-blue 'secondary'."""
+    brand = {"colorScheme": "light", "colors": {
+        "primary": "#8A8C6D", "secondary": "#0000EE", "accent": "#8A8C6D", "background": "#EEEEEE",
+        "textPrimary": "#000000", "link": "#2B5672"},
+        "components": {"buttonPrimary": {"background": "#8A8C6D"}}}
+    primary, accent = bw.pick_colours(brand)
+    assert accent == "#8a8c6d", "the site's own sage, as the site shows it"
+    assert bw.contrast(primary, bw.REPORT_BG) >= 7
+    assert _hue(primary) == pytest.approx(_hue("#8A8C6D"), abs=0.01), "a darker sage, not navy"
+    assert "#0000ee" not in (primary, accent) and "#2b5672" not in (primary, accent)
+
+
+def test_the_browser_default_link_colour_is_nobodys_brand():
+    for default in ("#0000EE", "#551A8B"):
+        primary, accent = bw.pick_colours({"colors": {"primary": default, "accent": default,
+                                                      "textPrimary": "#222222"}})
+        assert default.lower() not in (primary, accent)
+
+
+def test_a_tan_brand_on_black_text_stays_tan():
+    """theapresarcade.com / sunburstchalet.ca: primary tan, text black. Was black."""
+    brand = {"colors": {"primary": "#C19B76", "accent": "#C19B76", "background": "#F5F5F5",
+                        "textPrimary": "#000000", "link": "#9CA3AF"}}
+    primary, accent = bw.pick_colours(brand)
+    assert primary != "#000000" and _hue(primary) == pytest.approx(_hue("#C19B76"), abs=0.01)
+    assert bw.contrast(primary, bw.REPORT_BG) >= 7 and bw.contrast(accent, bw.REPORT_BG) >= 3
+
+
+def test_an_accent_is_darkened_as_little_as_possible():
+    """houst.com: yellow accent, light-blue primary. Darkening the yellow gave mustard."""
+    brand = {"colors": {"primary": "#3898EC", "secondary": "#0050BD", "accent": "#FFE403",
+                        "background": "#FFFFFF", "textPrimary": "#000000", "link": "#FFE403"}}
+    primary, accent = bw.pick_colours(brand)
+    assert _hue(accent) == pytest.approx(_hue("#3898EC"), abs=0.01)
+    assert bw.contrast(accent, bw.REPORT_BG) >= 3
+
+
+def test_an_already_dark_brand_colour_is_left_alone():
+    """legacyrnr.com, evolve.com, cozycohost.com: dark primaries, used as is."""
+    for colour in ("#2B2F1B", "#093F46", "#283B62"):
+        assert bw.pick_colours({"colors": {"primary": colour, "accent": "#C8AD7D"}})[0] == colour.lower()
+
+
+def test_a_page_title_is_cut_back_to_the_brand_name():
+    assert bw.clean_name("Air Concierge | Short Term Rental Management") == "Air Concierge"
+    assert bw.clean_name("Legacy RnR") == "Legacy RnR"
+    assert bw.clean_name("Stay-With-Somos") == "Stay-With-Somos"
+
+
+def _hue(h: str) -> float:
+    import colorsys
+    return colorsys.rgb_to_hls(*bw._rgb(bw._hex(h)))[0]
+
+
+def _png(path, fg, alpha_bg=True, box=False):
+    from PIL import Image, ImageDraw
+    im = Image.new("RGBA", (120, 60), (255, 255, 255, 255) if box else (0, 0, 0, 0))
+    ImageDraw.Draw(im).rectangle((10, 15, 110, 45), fill=fg)
+    im.save(path)
+    return path
+
+
+def test_a_white_logo_on_a_light_site_gets_a_dark_plate(tmp_path):
+    """legacyrnr.com's logo is LegacyRnR_Logo_white.png: invisible on cream."""
+    logo = _png(tmp_path / "logo.png", (255, 255, 255, 255))
+    assert bw.logo_is_light(logo) is True
+    assert bw.plate_for({"colorScheme": "light"}, logo, "#2b2f1b") == "#2b2f1b"
+
+
+def test_a_dark_logo_needs_no_plate_even_on_a_dark_site(tmp_path):
+    logo = _png(tmp_path / "logo.png", (20, 20, 20, 255))
+    assert bw.logo_is_light(logo) is False
+    assert bw.plate_for(SOLNEST, logo, "#12110f") == ""
+
+
+def test_a_logo_on_its_own_box_always_shows(tmp_path):
+    logo = _png(tmp_path / "logo.png", (255, 255, 255, 255), box=True)
+    assert bw.logo_is_light(logo) is False
+
+
+def test_svg_logos_are_judged_by_their_fills(tmp_path):
+    white = tmp_path / "w.svg"
+    white.write_text('<svg><path fill="#FFF" d="M0"/><text style="fill: white">x</text></svg>', encoding="utf-8")
+    plain = tmp_path / "p.svg"
+    plain.write_text('<svg><path d="M0"/></svg>', encoding="utf-8")
+    coloured = tmp_path / "c.svg"
+    coloured.write_text('<svg><path fill="rgb(13, 82, 104)" d="M0"/></svg>', encoding="utf-8")
+    assert bw.logo_is_light(white) is True
+    assert bw.logo_is_light(plain) is False
+    assert bw.logo_is_light(coloured) is False
+
+
+def test_an_unreadable_logo_falls_back_to_the_site_scheme(tmp_path):
+    junk = tmp_path / "logo.png"
+    junk.write_bytes(b"not an image")
+    assert bw.logo_is_light(junk) is None and bw.logo_is_light(None) is None
+    assert bw.plate_for(SOLNEST, junk, "#12110f") == "#0d0d0b"
+    assert bw.plate_for({"colorScheme": "light"}, junk, "#12110f") == ""
+
+
+def test_the_student_can_supply_the_logo(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(bw, "BRANDING", tmp_path / "branding.json")
+    monkeypatch.setattr(bw, "CACHE", tmp_path / ".cache")
+    monkeypatch.setattr(bw.config, "FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setattr(bw, "read_brand", lambda site: {"brandName": "Evolve", "colors": {"primary": "#093F46"},
+                                                        "logo": "data:image/svg+xml;utf8,<svg/>"})
+    fetched = []
+    monkeypatch.setattr(bw, "fetch_logo", lambda url: fetched.append(url) or _png(tmp_path / "l.png", (9, 63, 70, 255)))
+    assert bw.main(["evolve.com", "--logo", "https://cdn.example.com/evolve-logo.png"]) == 0
+    out = json.loads((tmp_path / "branding.json").read_text(encoding="utf-8"))
+    assert fetched == ["https://cdn.example.com/evolve-logo.png"]
+    assert out["logo_url"] == "https://cdn.example.com/evolve-logo.png" and out["logo_background"] == ""
+
+    monkeypatch.setattr(bw, "fetch_logo", lambda url: None)
+    assert bw.main(["evolve.com", "--logo", "https://cdn.example.com/broken.png"]) == 0
+    assert "did not load as an image" in capsys.readouterr().out
+    assert json.loads((tmp_path / "branding.json").read_text(encoding="utf-8"))["logo_url"] == ""
+
+
+def test_no_logo_found_tells_claude_how_to_get_one(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(bw, "BRANDING", tmp_path / "branding.json")
+    monkeypatch.setattr(bw, "CACHE", tmp_path / ".cache")
+    monkeypatch.setattr(bw.config, "FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setattr(bw, "read_brand", lambda site: {"brandName": "Ski", "colors": {"primary": "#C19B76"}})
+    assert bw.main(["theapresarcade.com"]) == 0
+    assert "--logo" in capsys.readouterr().out
+
+
 # ── the setup gate ─────────────────────────────────────────────────────
 
 def test_setup_asks_for_the_website_before_the_first_report(tmp_path, monkeypatch, capsys):

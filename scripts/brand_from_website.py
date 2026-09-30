@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import colorsys
 import json
+import re
 import sys
 from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlparse
@@ -91,39 +92,96 @@ def darken_to(h: str, ratio: float, bg: str = REPORT_BG) -> str:
     return h
 
 
+# The browser's own unvisited / visited link colours. A site with an unstyled
+# link reports them as brand colours (solneststays.com: "secondary" #0000EE),
+# and they are nobody's brand.
+BROWSER_DEFAULTS = {"#0000ee", "#551a8b"}
+
+
+def chroma(h: str) -> float:
+    """HSV saturation: how coloured a colour is, 0 for greys, black and white.
+
+    Not HLS saturation: HLS calls cream (#F0EBE1) 0.43 "saturated" and a muted
+    sage (#8A8C6D) only 0.12, which is backwards for picking a brand colour.
+    """
+    r, g, b = _rgb(h)
+    hi = max(r, g, b)
+    return 0.0 if hi == 0 else (hi - min(r, g, b)) / hi
+
+
+def is_brand_hue(h: str) -> bool:
+    """A real colour, not a grey, not the browser's link blue. Sage, tan and
+    greige-with-a-tint count: muted palettes are normal for STR brands."""
+    return h not in BROWSER_DEFAULTS and chroma(h) >= 0.18
+
+
+def _distance(a: str, b: str) -> float:
+    return sum((x - y) ** 2 for x, y in zip(_rgb(a), _rgb(b))) ** 0.5 * 255
+
+
 def pick_colours(branding: dict) -> tuple[str, str]:
-    """(primary_color, accent_color) for a light report, from Firecrawl's read."""
+    """(primary_color, accent_color) for a light report, from Firecrawl's read.
+
+    The site's declared primary (or its main button) IS the brand. When it is
+    too light to read on cream it is darkened, same hue, until it is, instead
+    of being swapped for whatever else on the page happens to be dark: that
+    used to turn a sage brand navy (its link colour) and a tan brand black
+    (its body text), measured on 5 of 13 real STR sites on 2026-09-29.
+    """
     colours = branding.get("colors") or {}
     button = ((branding.get("components") or {}).get("buttonPrimary") or {}).get("background")
     order = [colours.get("primary"), button, colours.get("accent"), colours.get("link"),
              colours.get("secondary"), colours.get("textPrimary"), colours.get("background")]
-    cands = [h for h in dict.fromkeys(_hex(c) for c in order) if h]
+    cands = [h for h in dict.fromkeys(_hex(c) for c in order) if h and h not in BROWSER_DEFAULTS]
     if not cands:
         return config._BRANDING_DEFAULTS["primary_color"], config._BRANDING_DEFAULTS["accent_color"]
 
-    # Primary: prefer a real colour over near-black/grey when one is dark enough.
-    dark = [h for h in cands if contrast(h, REPORT_BG) >= 7]
-    colourful = [h for h in dark if saturation(h) >= 0.25]
-    if colourful:
-        primary = colourful[0]
-    elif dark:
-        primary = dark[0]
-    else:
-        primary = darken_to(max(cands, key=saturation), 7)
+    primary = None
+    for h in (_hex(colours.get("primary")), _hex(button)):
+        if not h or h in BROWSER_DEFAULTS:
+            continue
+        if is_brand_hue(h):
+            primary = darken_to(h, 7)          # unchanged when already dark enough
+            break
+        if contrast(h, REPORT_BG) >= 7:        # a near-black brand (dark site's buttons)
+            primary = h
+            break
+        # a grey, cream or white "primary" is a dark site's text: keep looking
+    if primary is None:
+        dark = [h for h in cands if contrast(h, REPORT_BG) >= 7]
+        colourful = [h for h in dark if is_brand_hue(h)]
+        if colourful:
+            primary = colourful[0]
+        elif dark:
+            primary = dark[0]
+        else:
+            primary = darken_to(max(cands, key=chroma), 7)
 
-    # Accent: a different, readable, preferably colourful brand colour.
-    accent_order = [colours.get("accent"), colours.get("link"), colours.get("secondary"),
-                    colours.get("primary"), button]
-    acc = [h for h in dict.fromkeys(_hex(c) for c in accent_order) if h and h != primary]
-    good = [h for h in acc if contrast(h, REPORT_BG) >= 3 and saturation(h) >= 0.25]
-    fair = [h for h in acc if saturation(h) >= 0.25]
+    # Accent: a brand colour visibly different from the primary. The site's
+    # own accent first, then the primary as the site shows it (so a darkened
+    # sage gets the real sage beside it), darkened only as far as 3:1 needs.
+    accent_order = [colours.get("accent"), colours.get("primary"), button,
+                    colours.get("link"), colours.get("secondary")]
+    acc = [h for h in dict.fromkeys(_hex(c) for c in accent_order)
+           if h and is_brand_hue(h) and _distance(h, primary) >= 48]
+    good = [h for h in acc if contrast(h, REPORT_BG) >= 3]
     if good:
         accent = good[0]
-    elif fair:
-        accent = darken_to(fair[0], 3)
+    elif acc:
+        # The one that needs the least darkening: a yellow taken to 3:1 is
+        # mustard (houst.com), a light blue taken to 3:1 is still that blue.
+        accent = darken_to(max(acc, key=lambda h: contrast(h, REPORT_BG)), 3)
     else:
         accent = darken_to(_lighten(primary, 0.35), 3)
     return primary, accent
+
+
+def clean_name(name: str) -> str:
+    """'Air Concierge | Short Term Rental Management' -> 'Air Concierge'.
+    Firecrawl sometimes returns the page title; the brand is the first part."""
+    for sep in (" | ", " – ", " — "):
+        name = name.split(sep)[0]
+    return name.strip()
 
 
 def _lighten(h: str, amount: float) -> str:
@@ -138,6 +196,65 @@ def logo_plate(branding: dict) -> str:
         return ""
     bg = _hex((branding.get("colors") or {}).get("background"))
     return bg if bg and contrast(bg, REPORT_BG) >= 3 else "#111111"
+
+
+_SVG_COLOUR = re.compile(r"""(?:fill|stroke|stop-color)\s*[:=]\s*["']?\s*(#[0-9a-fA-F]{3,6}\b|white\b|rgb\([^)]*\))""",
+                         re.IGNORECASE)
+
+
+def _svg_colour(raw: str) -> str | None:
+    raw = raw.strip().lower()
+    if raw == "white":
+        return "#ffffff"
+    if raw.startswith("rgb"):
+        nums = re.findall(r"\d+", raw)[:3]
+        return "#" + "".join(f"{min(int(n), 255):02x}" for n in nums) if len(nums) == 3 else None
+    return _hex(raw)
+
+
+def logo_is_light(path: Path | None) -> bool | None:
+    """True when the logo is drawn light (white text on a transparent
+    background) and would vanish on the report's cream header, False when it
+    reads on cream, None when it cannot be told (no file, unknown format).
+
+    legacyrnr.com's header logo is LegacyRnR_Logo_white.png on a light site:
+    the colour-scheme rule alone left it invisible.
+    """
+    if path is None or not path.is_file():
+        return None
+    try:
+        if path.suffix == ".svg":
+            text = path.read_text(encoding="utf-8", errors="replace")
+            found = [c for c in (_svg_colour(m) for m in _SVG_COLOUR.findall(text)) if c]
+            if not found:
+                return False                # unfilled SVG paths draw black
+            light = sum(contrast(c, REPORT_BG) < 1.8 for c in found)
+            return light / len(found) >= 0.6
+        from PIL import Image               # Pillow: in requirements.txt
+        with Image.open(path) as im:
+            im = im.convert("RGBA")
+            im.thumbnail((160, 160))
+            raw = im.tobytes()                # RGBA, 4 bytes a pixel, on every Pillow version
+    except Exception:                        # a logo we cannot read is not worth a crash
+        return None
+    total = len(raw) // 4
+    opaque = [tuple(raw[i:i + 3]) for i in range(0, len(raw), 4) if raw[i + 3] >= 128]
+    if not opaque or len(opaque) >= 0.97 * total:
+        # Nothing drawn, or a solid rectangle (a JPEG, a logo on its own
+        # background): a box always shows on cream, whatever is in it.
+        return None if not opaque else False
+    light = sum(contrast("#%02x%02x%02x" % p, REPORT_BG) < 1.8 for p in opaque)
+    return light / len(opaque) >= 0.6
+
+
+def plate_for(branding: dict, logo_file: Path | None, primary: str) -> str:
+    """The logo's backing colour on the report header, "" for none."""
+    light = logo_is_light(logo_file)
+    if light is None:
+        return logo_plate(branding)          # cannot see it: go by the site's scheme
+    if not light:
+        return ""                            # a dark logo reads on cream as is
+    return logo_plate(branding) or primary   # a light logo needs a dark plate
 
 
 def logo_url(branding: dict, site: str) -> str:
@@ -208,6 +325,8 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("website")
     ap.add_argument("--tagline", help="footer line, e.g. 'Short-Term Rental Management'")
+    ap.add_argument("--logo", help="the logo's image address, when the site's own was not found "
+                                   "or is the wrong one (right-click the logo, Copy image address)")
     a = ap.parse_args(argv)
     site = a.website.strip()
     if not site.lower().startswith(("http://", "https://")):
@@ -238,8 +357,10 @@ def main(argv: list[str]) -> int:
     (CACHE / "brand_raw.json").write_text(json.dumps(brand, indent=1), encoding="utf-8")
 
     primary, accent = pick_colours(brand)
-    logo = logo_url(brand, site)
+    logo = logo_url({"logo": a.logo.strip()}, site) if a.logo else logo_url(brand, site)
     logo_file = fetch_logo(logo) if logo else None
+    if a.logo and not logo_file:
+        print(f"[brand] The logo link given did not load as an image: {a.logo.strip()}")
     if logo and not logo_file:
         logo = ""
     try:
@@ -247,7 +368,7 @@ def main(argv: list[str]) -> int:
     except ValueError:
         previous = {}
     example = json.loads(EXAMPLE.read_text(encoding="utf-8-sig"))
-    name = str(brand.get("brandName") or "").strip() or urlparse(origin).hostname.removeprefix("www.")
+    name = clean_name(str(brand.get("brandName") or "")) or urlparse(origin).hostname.removeprefix("www.")
     out = {
         "company_name": name,
         "tagline": a.tagline or previous.get("tagline") or example.get("tagline", ""),
@@ -255,16 +376,20 @@ def main(argv: list[str]) -> int:
         "website_url": origin,
         "primary_color": primary,
         "accent_color": accent,
-        "logo_background": logo_plate(brand) if logo else "",
+        "logo_background": plate_for(brand, logo_file, primary) if logo else "",
     }
     BRANDING.write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
 
     print(f"[brand] Wrote {BRANDING.name} from {site}")
     print(f"  company_name   {out['company_name']}")
     print(f"  tagline        {out['tagline']}")
-    print(f"  logo_url       {logo or '(none found: the header shows the name only)'}")
+    if logo:
+        print(f"  logo_url       {logo}")
+    else:
+        print("  logo_url       (none found: the header shows the name only. Ask the student to")
+        print('                 right-click their logo, Copy image address, and re-run with --logo "<that>")')
     if out["logo_background"]:
-        print(f"  logo_background {out['logo_background']}   (dark site: the logo sits on this plate)")
+        print(f"  logo_background {out['logo_background']}   (a light logo: it sits on this plate)")
     print(f"  primary_color  {primary}   (contrast {contrast(primary, REPORT_BG):.1f}:1 on the report)")
     print(f"  accent_color   {accent}   (contrast {contrast(accent, REPORT_BG):.1f}:1)")
     site_colours = {k: v for k, v in (brand.get("colors") or {}).items() if _hex(v)}

@@ -56,7 +56,9 @@ tests each with one real request (AirROI $0.01, Firecrawl free). A pass is remem
   It reads their name, logo and colours with Firecrawl and writes `branding.json`. **Look
   at the logo it saves** (`.cache/brand_logo.*`), then show the student the name, logo,
   tagline and colours and ask if that is their brand; change what they say in
-  `branding.json` (colours stay `#rrggbb`). No website: copy `branding.example.json` to
+  `branding.json` (colours stay `#rrggbb`). No logo found, or the wrong one: ask them
+  to right-click their logo on their site, choose Copy image address, and paste it,
+  then re-run the same command with `--logo "<that>"`. No website: copy `branding.example.json` to
   `branding.json` and fill it in with them. Never edit the template to rebrand. Then run
   the check again.
 - **2, a key is blank or rejected:** it has already opened the kit's `.env` in Notepad

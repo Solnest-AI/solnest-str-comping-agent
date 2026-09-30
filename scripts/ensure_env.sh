@@ -43,7 +43,7 @@ fi
 
 venv_ok() { [ -f "$VPY" ] && "$VPY" -c 'import sys; sys.exit(sys.version_info < (3, 10))' >/dev/null 2>&1; }
 # find_spec locates each package without importing it: ~0.1s instead of ~3s.
-deps_ok() { "$VPY" -c 'import importlib.util as u, sys; sys.exit(any(u.find_spec(m) is None for m in ("httpx", "jinja2", "dotenv", "pydantic", "bs4", "anthropic")))' >/dev/null 2>&1; }
+deps_ok() { "$VPY" -c 'import importlib.util as u, sys; sys.exit(any(u.find_spec(m) is None for m in ("httpx", "jinja2", "dotenv", "pydantic", "bs4", "anthropic", "PIL")))' >/dev/null 2>&1; }
 # One "<checksum> <file>" line per requirements file, so a --dev install also
 # satisfies a plain run instead of reinstalling.
 want_stamp() { local r; for r in "${REQS[@]}"; do printf '%s %s
