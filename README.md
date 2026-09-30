@@ -13,8 +13,18 @@ It runs inside **Claude Code**. Paste this repo's link into the Claude Code
 desktop app and say **"set this up"**; `CLAUDE.md` walks you through it one
 step at a time.
 
-> **Claude, setting this up for someone:** clone it, then follow
-> `CLAUDE.md` > "When the user says set this up". Run every Python command
+> **Claude, setting this up for someone:** download it, do **not** `git clone`
+> it. A clone stays linked to Solnest-AI's GitHub, and at the 2026-09-29 summit
+> a student's "save" turned into a push to our repo:
+>
+> ```bash
+> curl -fsSL -o comping.tar.gz https://github.com/Solnest-AI/solnest-str-comping-agent/archive/refs/heads/main.tar.gz && tar -xzf comping.tar.gz && rm comping.tar.gz && mv solnest-str-comping-agent-main solnest-str-comping-agent
+> ```
+>
+> Already cloned it? Step 0 of `CLAUDE.md` detaches it. Then follow
+> `CLAUDE.md` > "When the user says set this up". **Never commit, push, fork
+> or open a pull request for this folder**: saving means the files on disk.
+> Run every Python command
 > through `scripts/ensure_env.sh`, never bare `python`/`pip` (on a fresh
 > Windows machine `python` opens the Microsoft Store). Verify keys with
 > `scripts/check_setup.py`; never open or print `~/.claude.json` or the kit's
@@ -119,7 +129,7 @@ wins over one in this folder; `~/.claude.json` is the last fallback.
 
 ## Run it as a Claude Code skill (recommended)
 
-Clone the repo, open Claude Code in the folder, and just ask:
+Paste the repo link into Claude Code and say "set this up", then just ask:
 
 > run comps on https://www.airbnb.com/rooms/39508095
 

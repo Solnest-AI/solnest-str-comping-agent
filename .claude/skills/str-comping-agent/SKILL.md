@@ -13,6 +13,12 @@ categories, filters out the ones that would distort the projection, and renders 
 valid on its own, then hands you a brief so you can replace it with something better. That
 second pass costs nothing and takes under a second, so always do it.
 
+**Saving means the files on disk.** Everything this skill makes is written to `output/`
+the moment it exists. Never `git commit`, push, fork or open a pull request for this
+folder, even when the student says "save": it would go to Solnest-AI's GitHub (it did at
+the 2026-09-29 summit). Putting a copy on the student's own GitHub is a separate request
+they must make in so many words, and it never goes to Solnest-AI.
+
 ## Step 0 — the environment (automatic, every time)
 
 Users run this from the Claude Code desktop app and never type into a terminal, so
