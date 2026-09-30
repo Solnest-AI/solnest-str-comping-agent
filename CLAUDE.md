@@ -176,7 +176,7 @@ Do **not** edit the template to rebrand.
 ### Step 4: Tell them they're set up
 
 Setup is done once `check_setup.py` says `READY` and the launcher is installed
-(Step 1b). Tell the user, in these words: "You're set up. From any Claude Code
+(Step 1b). Tell the user, in these words: "✅ You're set up. From any Claude Code
 window, just say: run comps on <an Airbnb link, a Zillow link or an address>.
 If it ever doesn't pick that up, type /str-comping-agent." Also give them this
 folder's path.
