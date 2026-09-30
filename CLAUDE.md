@@ -143,7 +143,11 @@ own website:
    dark site's light logo on its own background colour (`logo_background`).
 3. **Look at the logo it saved** (`.cache/brand_logo.*`), then show the student
    the name, logo, tagline and colours and ask if that is their brand. Change
-   what they say in `branding.json`; colours stay `#rrggbb`.
+   what they say in `branding.json`; colours stay `#rrggbb`. No logo found
+   (some sites draw it in code), or the wrong one: ask the student to
+   right-click their logo on their site, choose Copy image address, and paste
+   it, then re-run step 2 with `--logo "<that>"`. It checks the image loads and
+   puts a white logo on a dark plate so it shows on the report.
 4. Run `scripts/check_setup.py` again: it says `READY`.
 
 Exit 3 from the script means the site could not be read: ask for another page,

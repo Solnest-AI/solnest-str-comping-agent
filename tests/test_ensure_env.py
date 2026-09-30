@@ -53,7 +53,7 @@ def test_script_parses():
 def test_script_checks_every_runtime_requirement():
     """A package added to requirements.txt but not to the import check would
     let the fast path skip an install the run then crashes on."""
-    import_names = {"beautifulsoup4": "bs4", "python-dotenv": "dotenv"}
+    import_names = {"beautifulsoup4": "bs4", "python-dotenv": "dotenv", "Pillow": "PIL"}
     text = SCRIPT.read_text(encoding="utf-8")
     for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines():
         line = line.split("#")[0].strip()
