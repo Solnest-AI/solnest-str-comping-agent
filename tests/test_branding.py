@@ -121,13 +121,14 @@ def test_setup_asks_for_the_website_before_the_first_report(tmp_path, monkeypatc
         (kit_dir / marker).write_text("", encoding="utf-8")
     (kit_dir / ".env").write_text("AIRROI_API_KEY=a\nFIRECRAWL_API_KEY=f\n", encoding="utf-8")
     monkeypatch.setattr(cs.kit, "find_kit", lambda: kit_dir)
+    monkeypatch.setattr(cs.kit, "find_kits", lambda: [kit_dir])
     monkeypatch.setattr(cs, "PROBES", {n: (lambda key: "ok") for n in cs.REQUIRED})
     monkeypatch.setattr(cs, "STAMP", tmp_path / "stamp.json")
     monkeypatch.setattr(cs, "other_copy", lambda name: ("", ""))
     monkeypatch.setattr(cs, "BRANDING", tmp_path / "branding.json")
     assert cs.main(["--no-open"]) == 4
     assert "brand_from_website.py" in capsys.readouterr().out
-    (tmp_path / "branding.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "branding.json").write_text('{"company_name": "Acme Stays"}', encoding="utf-8")
     assert cs.main(["--no-open"]) == 0
 
 
@@ -214,5 +215,47 @@ def test_no_report_runs_before_the_student_is_branded(tmp_path, monkeypatch, cap
     out = capsys.readouterr().out
     assert "brand_from_website.py" in out and "Nothing has been spent" in out
 
-    (tmp_path / "branding.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "branding.json").write_text('{"company_name": "Acme Stays"}', encoding="utf-8")
     assert agent._require_branding()
+
+
+# ── one validator for setup and the run: READY means a real brand ─────────
+
+@pytest.mark.parametrize("text", [
+    "{}", "{", "[]", '"Acme"', '{"company_name": "Your Company"}', '{"company_name": "  "}',
+    '{"company_name": 42}', '{"company_name": "Acme", "primary_color": "red"}',
+    '{"company_name": "Acme", "logo_url": "javascript:alert(1)"}',
+    (ROOT / "branding.example.json").read_text(encoding="utf-8"),
+])
+def test_an_unusable_branding_file_is_not_ready_anywhere(tmp_path, monkeypatch, capsys, text):
+    path = tmp_path / "branding.json"
+    path.write_text(text, encoding="utf-8")
+    assert config.branding_problems(path)
+    monkeypatch.setattr(config, "_BRANDING_PATH", path)
+    assert config.branding_is_placeholder()
+    import agent
+    assert not agent._require_branding()
+    assert "not usable yet" in capsys.readouterr().out
+
+
+def test_a_name_only_brand_is_complete(tmp_path):
+    path = tmp_path / "branding.json"
+    path.write_text('{"company_name": "Acme Stays", "logo_url": "", "website_url": ""}', encoding="utf-8")
+    assert config.branding_problems(path) == []
+
+
+def test_setup_is_not_ready_on_a_placeholder_brand(tmp_path, monkeypatch, capsys):
+    kit_dir = tmp_path / "kit"
+    kit_dir.mkdir()
+    for m in ("CONNECTIONS.md", "fan-out-env.sh"):
+        (kit_dir / m).write_text("", encoding="utf-8")
+    (kit_dir / ".env").write_text("AIRROI_API_KEY=a\nFIRECRAWL_API_KEY=f\n", encoding="utf-8")
+    monkeypatch.setattr(cs.kit, "find_kit", lambda: kit_dir)
+    monkeypatch.setattr(cs.kit, "find_kits", lambda: [kit_dir])
+    monkeypatch.setattr(cs, "PROBES", {n: (lambda key: "ok") for n in cs.REQUIRED})
+    monkeypatch.setattr(cs, "STAMP", tmp_path / "stamp.json")
+    monkeypatch.setattr(cs, "other_copy", lambda name: ("", ""))
+    monkeypatch.setattr(cs, "BRANDING", tmp_path / "branding.json")
+    (tmp_path / "branding.json").write_text('{"company_name": "Your Company"}', encoding="utf-8")
+    assert cs.main(["--no-open"]) == 4
+    assert "placeholder" in capsys.readouterr().out

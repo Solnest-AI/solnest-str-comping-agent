@@ -609,8 +609,8 @@ def handoff_message(brief_path: Path, narratives_path: Path, rerun_command: str)
   NARRATIVE HANDOFF — this report shipped with template copy
 {bar}
 
-  No ANTHROPIC_API_KEY is set, which is the intended way to run this: you
-  already have Claude here in Claude Code. The report is complete and valid;
+  This is the intended way to run it: you already have Claude here in
+  Claude Code, so no Anthropic API key is used. The report is complete and valid;
   its narrative sections are data-driven boilerplate.
 
   To replace them with real copy, paste this to Claude Code:

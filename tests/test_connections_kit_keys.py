@@ -135,3 +135,44 @@ def test_blank_or_missing_stdio_env_is_no_key(tmp_path):
     p = _write(tmp_path, {"airroi": {"command": "python", "args": [str(server_dir / "server.py")]},
                           "gone": {"command": "python", "args": [str(tmp_path / "nope" / "server.py")]}})
     assert config.key_from_connections_kit("AIRROI_API_KEY", p) == ""
+
+
+def test_a_newer_blank_download_does_not_displace_the_working_kit(tmp_path, monkeypatch):
+    """A second clone in Downloads, newer but empty, must not win over the
+    sibling kit the student filled in (the old sort was newest .env first)."""
+    import os
+    import time
+
+    import kit
+    monkeypatch.delenv("STR_SECRETS_KIT", raising=False)
+    kit._FOUND.clear()
+    near = tmp_path / "Documents" / "SECRETS" / "comping"
+    working = _make_kit(near.parent / "str-secrets-connections",
+                        "AIRROI_API_KEY=a\nFIRECRAWL_API_KEY=f\n")
+    old = time.time() - 86400
+    os.utime(working / ".env", (old, old))
+    _make_kit(tmp_path / "Downloads" / "str-secrets-connections", "AIRROI_API_KEY=\nFIRECRAWL_API_KEY=\n")
+    assert kit.find_kit(home=tmp_path, near=near) == working.resolve()
+
+
+def test_the_explicit_override_wins_then_the_remembered_kit(tmp_path, monkeypatch):
+    import kit
+    kit._FOUND.clear()
+    near = tmp_path / "Documents" / "comping"
+    full = _make_kit(tmp_path / "Desktop" / "str-secrets-connections", "AIRROI_API_KEY=a\nFIRECRAWL_API_KEY=f\n")
+    other = _make_kit(tmp_path / "Downloads" / "kit-copy", "AIRROI_API_KEY=a\n")
+    monkeypatch.delenv("STR_SECRETS_KIT", raising=False)
+    assert kit.find_kit(home=tmp_path, near=near) == full.resolve()
+    kit.remember_kit(other)
+    assert kit.find_kit(home=tmp_path, near=near) == other.resolve()
+    monkeypatch.setenv("STR_SECRETS_KIT", str(full))
+    assert kit.find_kit(home=tmp_path, near=near) == full.resolve()
+
+
+def test_a_remembered_kit_that_was_deleted_falls_back_to_the_search(tmp_path, monkeypatch):
+    import kit
+    monkeypatch.delenv("STR_SECRETS_KIT", raising=False)
+    kit._FOUND.clear()
+    kit.KIT_CHOICE.write_text(str(tmp_path / "gone"), encoding="utf-8")
+    k = _make_kit(tmp_path / "Desktop" / "str-secrets-connections", "AIRROI_API_KEY=a\n")
+    assert kit.find_kit(home=tmp_path, near=tmp_path / "x" / "y") == k.resolve()

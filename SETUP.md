@@ -103,7 +103,7 @@ PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --input "<address>" --email
 
 ### What you get
 
-A self-contained HTML file with:
+One HTML file (it needs an internet connection to show photos, fonts and the chart) with:
 
 - Subject property details and hero image
 - Annual revenue, ADR, and occupancy projections in three tiers
@@ -129,13 +129,13 @@ agent prints the exact paths for you):
 ```
 Read output/<slug>.narrative-brief.json
 Write the narratives it asks for to output/<slug>.narratives.json
-Then re-run the agent with --narratives pointing at that file.
+Then re-render with --render and --narratives pointing at that file.
 ```
 
 Then:
 
 ```bash
-PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --input "<same input>" --narratives "output/<slug>.narratives.json"
+PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --render "output/<slug>.report-data.json" --narratives "output/<slug>.narratives.json"
 ```
 
 That is the whole loop. The brief tells Claude exactly what it is allowed to
@@ -152,14 +152,14 @@ write from, so the copy cannot invent numbers or seasons.
 | `Phase A sanity failed: <6 comps` | Not enough comparable listings nearby | Try `--no-feature-filter`, or a denser market. There is no radius lever: AirROI caps results at 25 and only accepts a 1-10 mile radius, so widening is not possible. |
 | `--narratives file not found` | You used `--narratives` before writing the file | Run once without it to generate the brief |
 | `not valid JSON` | The narratives file has markdown fences or commentary | Write the bare JSON object only |
-| Report shows the wrong company | No `branding.json` | `cp branding.example.json branding.json` and edit it |
+| Report shows the wrong company, or the run stops at `[Branding]` | No usable `branding.json` | Run `scripts/brand_from_website.py <your website>`, or copy `branding.example.json` to `branding.json` and put your company name in it |
 | `ModuleNotFoundError`, or `python` opens the Microsoft Store | Ran bare `python` | Run commands as `PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py ...` |
 
 ### Tests
 
 ```bash
-bash scripts/ensure_env.sh --dev   # adds pytest + ruff
-pytest -q
+PY="$(bash scripts/ensure_env.sh --dev)"   # adds pytest + ruff to the .venv
+"$PY" -m pytest -q
 ```
 
 They run offline against captured API responses. No keys needed.

@@ -267,6 +267,7 @@ def test_schema_requires_both_lists():
 
 def test_api_response_missing_the_lists_is_retried_then_accepted(monkeypatch):
     monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr(config, "NARRATIVES_VIA_API", True)
     bad = {k: v for k, v in _GOOD.items() if k != "positioning_cards"}
     calls: list = []
     monkeypatch.setattr(N, "anthropic", _fake_anthropic([bad, _GOOD], calls))
@@ -276,6 +277,7 @@ def test_api_response_missing_the_lists_is_retried_then_accepted(monkeypatch):
 
 def test_api_response_that_never_validates_falls_back_to_template_copy(monkeypatch):
     monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr(config, "NARRATIVES_VIA_API", True)
     calls: list = []
     monkeypatch.setattr(N, "anthropic", _fake_anthropic([{**_GOOD, "guest_profile": " "}], calls))
     comps = [_comp()]
@@ -534,6 +536,7 @@ def world(tmp_path, monkeypatch):
     results = {"AIRROI_API_KEY": "ok", "FIRECRAWL_API_KEY": "ok"}
     opened: list = []
     monkeypatch.setattr(cs.kit, "find_kit", lambda: kit_dir)
+    monkeypatch.setattr(cs.kit, "find_kits", lambda: [kit_dir])
     monkeypatch.setattr(cs, "PROBES", {n: (lambda key, n=n: results[n]) for n in cs.REQUIRED})
     monkeypatch.setattr(cs, "STAMP", tmp_path / "stamp.json")
     monkeypatch.setattr(cs, "other_copy", lambda name: ("", ""))

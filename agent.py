@@ -51,6 +51,7 @@ from generators.narrative_brief import report_data_path
 from generators.methodology import build_methodology
 from validators.sanity import (
     check_subject_hero, run_phase_a, run_phase_b, write_failure_report, validate_calculator_defaults,
+    url_ok,
 )
 from report.template_engine import save_report
 from report.email_sender import send_report_email
@@ -92,18 +93,14 @@ def _airbnb_id_to_url(c: dict) -> str:
 
 
 async def _check_liveness(urls: list[str]) -> list[bool]:
-    """Batch-check URL liveness with a single shared client."""
+    """Batch-check URL liveness with a single shared client.
+
+    Uses the sanity gate's own check (HEAD, then a small GET when a CDN
+    refuses HEAD with 403/405), so selection never drops a comp that Phase A
+    and B would have accepted. Redirects and 429 (throttled) count as live.
+    """
     async def _head(client: httpx.AsyncClient, url: str) -> bool:
-        if not url:
-            return False
-        try:
-            r = await client.head(url)
-            # Redirects are live (they are not followed here). 429 = throttled
-            # but the listing exists; do not drop a good comp just because
-            # Airbnb rate-limited our probe.
-            return r.status_code < 400 or r.status_code == 429
-        except Exception:
-            return False
+        return (await url_ok(client, url))[1]
 
     async with httpx.AsyncClient(
         headers={"User-Agent": "Mozilla/5.0 (airroi-report-agent sanity gate)"},
@@ -157,10 +154,15 @@ _CA_POSTAL = re.compile(r"\b[ABCEGHJ-NPRSTVXY]\d[A-Z] ?\d[A-Z]\d\b")
 # ── Setup verification ───────────────────────────────────────────────
 
 def _require_branding() -> bool:
-    """False (with what to do) until branding.json exists."""
-    if not config.branding_is_placeholder():
+    """False (with what to do) until branding.json holds a real brand."""
+    problems = config.branding_problems()
+    if not problems:
         return True
-    print("[Branding] No branding.json yet: the report would say 'Your Company' with no logo.")
+    if config._BRANDING_PATH.exists():
+        print("[Branding] branding.json is not usable yet: " + "; ".join(problems) + ".")
+        print(f"Fix those fields in {config._BRANDING_PATH} with the student, or rebuild it:")
+    else:
+        print("[Branding] No branding.json yet: the report would say 'Your Company' with no logo.")
     print("NEXT: ask the student for their company website (their own site, not a listing), then run:")
     print('    PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/brand_from_website.py <their website>')
     print("Look at the logo it saves, confirm the name, logo and colours with them, then run this again.")

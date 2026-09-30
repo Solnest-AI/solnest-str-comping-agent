@@ -64,7 +64,8 @@ _TRUSTED_HERO_HOSTS = (
 # ── HTTP helpers ──────────────────────────────────────────────────────
 
 async def _head_ok(client: httpx.AsyncClient, url: str) -> tuple[str, bool, int]:
-    """HEAD request. Returns (url, ok, status_code)."""
+    """HEAD request. Returns (url, ok, status_code). Also agent.py's comp
+    selection check (as url_ok): one rule for "this URL is live" everywhere."""
     if not url:
         return url, False, 0
     try:
@@ -81,6 +82,9 @@ async def _head_ok(client: httpx.AsyncClient, url: str) -> tuple[str, bool, int]
         return url, ok, status
     except Exception:
         return url, False, 0
+
+
+url_ok = _head_ok
 
 
 # ── Phase A: pre-render blocking checks ───────────────────────────────

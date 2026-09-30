@@ -3,7 +3,8 @@
 # STR Comping Agent: operating manual for Claude Code
 
 A Python CLI that turns a property (Airbnb URL, Zillow/Realtor URL, or a street
-address) into a branded, self-contained HTML income report built from real
+address) into a branded single-file HTML income report (needs internet to
+show photos, fonts and chart) built from real
 comparable Airbnb listings.
 
 You are the narrative engine for this tool. It ships with **no Anthropic API
@@ -47,10 +48,37 @@ machine takes a minute or two; tell the user that. After that it only checks,
 in under a second, and reinstalls by itself when `requirements.txt` changes.
 If it prints `[setup] FAILED:`, relay that line: it says what to do.
 
-**Windows with no Bash tool** (Claude answers in PowerShell): Git for Windows is
-missing, and everything here runs in Git Bash. Follow the connections kit's
-`connectors/system-git.md` to install it (it works from PowerShell), then have the
-student fully quit and reopen Claude Code, and start again.
+**Windows with no Bash tool** (Claude answers in PowerShell): everything here
+runs in Git Bash. First check whether Git is installed at all
+(`Test-Path "C:\Program Files\Git\bin\bash.exe"`):
+
+- **Not installed:** follow the connections kit's `connectors/system-git.md` to
+  install it (it works from PowerShell), then have the student fully quit and
+  reopen Claude Code, and start again.
+- **Installed, but Claude Code did not find it:** follow the kit's
+  `CLAUDE_CODE_GIT_BASH_PATH` fix in the same file (section 3: merge that one
+  `env` entry into `~/.claude/settings.json`, keeping everything else), then
+  quit and reopen. To keep going in this session, run every command
+  through a **login** shell, which
+  loads Git's own PATH; without `-l`, `dirname` / `uname` are not found:
+  `& "C:\Program Files\Git\bin\bash.exe" -l -c 'cd "<this folder>" && PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/check_setup.py'`
+
+### Step 1b: Install the launcher now, before anything can fail (required)
+
+This project's skill only loads when Claude Code is opened on this folder, and
+users will not do that: they cloned it from another window. Without the
+launcher a later "run comps on ..." never finds the tool and improvises comps
+from web searches instead (measured: no report, $6.48 spent). It needs only
+Step 1, so install it straight away, so that a key problem or a sample listing
+that fails later cannot leave the student without it:
+
+```bash
+PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/install_launcher.py
+```
+
+It prints where it installed (`~/.claude/skills/str-comping-agent/`). If the
+folder is ever moved, run it again from the new location. It works in local
+Claude Code sessions (desktop app or terminal), not cloud sessions.
 
 ### Step 2: The connections kit and keys (required, nothing skipped)
 
@@ -66,7 +94,11 @@ It finds the kit, reads `AIRROI_API_KEY` and `FIRECRAWL_API_KEY` from the
 AirROI is the comp data, Firecrawl is street addresses. Act on its exit code:
 
 - **0 `READY`:** keys work and the report is branded. Go to Step 4.
-- **4:** keys work but there is no `branding.json` yet. Go to Step 3.
+  If it lists other copies of the kit, ask the student which folder they set
+  up; if it is not the one in use, re-run the check with
+  `STR_SECRETS_KIT="<that folder>"` in front. The kit that passes is remembered.
+- **4:** keys work but `branding.json` is missing, not valid JSON, or still a
+  placeholder name; the output names the field. Go to Step 3.
 - **2:** a key is not working. Blank or rejected: the kit's `.env` is already
   open in Notepad / TextEdit and the output says which line and where to get
   the key. Tell the student that, one key at a time: paste straight after the
@@ -87,14 +119,17 @@ AirROI is the comp data, Firecrawl is street addresses. Act on its exit code:
 | `GMAIL_ADDRESS` + `GMAIL_APP_PASSWORD` | No | https://myaccount.google.com/apppasswords (only for `--email`) |
 
 **There is no `ANTHROPIC_API_KEY` step.** If the user offers one, tell them it
-is not needed and that you write the narratives yourself. Never ask for a key in
+is not needed and that you write the narratives yourself. A key already in
+their environment is ignored; the API is used only with `NARRATIVE_MODE=api`. Never ask for a key in
 chat, never type one into a file yourself, never read one back.
 
 ### Step 3: Set the branding
 
 The report is white-label: every colour, the logo, the name and the links come
 from `branding.json`. Without it the report says "Your Company" with no logo, so
-`check_setup.py` stops with exit 4 until it exists. Build it from the student's
+`check_setup.py` stops with exit 4 (and every run stops) until it holds a real
+company name. A name alone is a complete brand; logo, website and colours are
+optional. Build it from the student's
 own website:
 
 1. Ask the student for their company website (their own site, not a listing).
@@ -115,29 +150,24 @@ Exit 3 from the script means the site could not be read: ask for another page,
 or copy `branding.example.json` to `branding.json` and fill it in with them.
 Do **not** edit the template to rebrand.
 
-### Step 4: First report
+### Step 4: Tell them they're set up
+
+Setup is done once `check_setup.py` says `READY` and the launcher is installed
+(Step 1b). Tell the user, in these words: "You're set up. From any Claude Code
+window, just say: run comps on <an Airbnb link, a Zillow link or an address>.
+If it ever doesn't pick that up, type /str-comping-agent." Also give them this
+folder's path.
+
+### Step 5: First report
 
 ```bash
 PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --input "https://www.airbnb.com/rooms/39508095"
 ```
 
 The HTML lands in `output/`. Then do the narrative handoff below. The first
-report is not finished until you have.
-
-### Step 5: Make it work from any Claude Code window (required)
-
-This project's skill only loads when Claude Code is opened on this folder, and
-users will not do that: they cloned it from another window. Without this step a
-later "run comps on ..." never finds the tool and improvises comps from web
-searches instead (measured: no report, $6.48 spent). Install the launcher:
-
-```bash
-PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/install_launcher.py
-```
-
-Then tell the user, in these words: "You're set up. From any Claude Code
-window, just say: run comps on <an Airbnb link, a Zillow link or an address>."
-If the folder is ever moved, run the installer again from its new location.
+report is not finished until you have. If this sample listing fails (sparse
+market, delisted, vendor hiccup), setup is still complete: say so, and try the
+student's own property instead. Never make up comps to fill the gap.
 
 ---
 
@@ -197,8 +227,8 @@ The object has seven required string fields:
 }
 ```
 
-`amenity_badges` and `positioning_cards` are optional but the template renders
-holes without them, so write both.
+`amenity_badges` and `positioning_cards` are required too: the loader rejects
+the file without them (the template would render holes).
 
 **Hard rules when writing narrative copy:**
 
@@ -355,7 +385,7 @@ link it and `/api/openapi.json` 404s.
 | Comps look wrong (oversized, waterfront, dormant) | Filters too loose or too tight | `--require`, `--exclude`, `--allow-oceanfront-comps` |
 | Module import error, or `python` opens the Microsoft Store | Ran bare `python` instead of the `.venv` | Always prefix with `PY="$(bash scripts/ensure_env.sh)" &&` and run `"$PY"` |
 | `[setup] FAILED: ...` | No internet, or uv/Python blocked on this machine | Do what the message says, then run the same command again |
-| `[Branding] No branding.json yet` (the run stops, nothing spent) | The student has not been branded | Ask for their website and run `scripts/brand_from_website.py` (Step 3) |
+| `[Branding] No branding.json yet` or `branding.json is not usable yet` (the run stops, nothing spent) | The student has not been branded, or the file is broken / still a placeholder | Ask for their website and run `scripts/brand_from_website.py` (Step 3) |
 | Report says "Your Company" / no logo | No `branding.json` | Ask for the student's website and run `scripts/brand_from_website.py` (Step 3) |
 
 ---

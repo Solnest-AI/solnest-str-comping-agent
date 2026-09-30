@@ -85,19 +85,43 @@ def _walk(root: Path, depth: int, seen: dict[Path, int]):
 # check would otherwise each walk the disk). Only hits are kept: a kit cloned
 # mid-run must still be found by the next call.
 _FOUND: dict[tuple[str, str], Path] = {}
+# The two keys a kit must hold to run comps.
+REQUIRED_KEYS = ("AIRROI_API_KEY", "FIRECRAWL_API_KEY")
+# The kit scripts/check_setup.py last passed with. A second download or a
+# backup of the kit must not take over from the one the student set up.
+KIT_CHOICE = ROOT / ".cache" / "kit_path.txt"
 
 
-def find_kit(home: Path | None = None, near: Path = ROOT) -> Path | None:
-    """The kit folder, or None. $STR_SECRETS_KIT wins, then next to this folder,
-    Desktop, Documents, Downloads (and their OneDrive copies), home; 2 levels deep.
-    A kit that has been run (has a .env) beats an unused download."""
-    env = os.environ.get("STR_SECRETS_KIT")
-    if env and is_kit(Path(env).expanduser()):
-        return Path(env).expanduser().resolve()
+def keys_filled(d: Path) -> int:
+    """How many of the required keys this kit's .env holds (values never read out)."""
+    values = read_env(d / ".env")
+    return sum(1 for n in REQUIRED_KEYS if values.get(n))
+
+
+def _remembered() -> Path | None:
+    try:
+        d = Path(KIT_CHOICE.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    return d.resolve() if str(d) and is_kit(d) and (d / ".env").exists() else None
+
+
+def remember_kit(d: Path) -> None:
+    """Pin this kit for later runs (a path, never a key)."""
+    try:
+        KIT_CHOICE.parent.mkdir(parents=True, exist_ok=True)
+        KIT_CHOICE.write_text(str(Path(d).resolve()), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def find_kits(home: Path | None = None, near: Path = ROOT) -> list[Path]:
+    """Every kit folder on this computer, best first: the most required keys
+    filled in, then a kit that has been run (has a .env), then location order
+    (next to this folder, Desktop, Documents, Downloads, their OneDrive copies,
+    home; 2 levels deep). Never newest-first: a fresh blank download must not
+    beat the kit the student already filled in."""
     home = home or Path.home()
-    memo = (str(home), str(near))
-    if memo in _FOUND and is_kit(_FOUND[memo]):
-        return _FOUND[memo]
     roots = [near.parent, home / "Desktop", home / "Documents", home / "Downloads",
              home / "OneDrive" / "Desktop", home / "OneDrive" / "Documents", home]
     found: list[Path] = []
@@ -107,11 +131,26 @@ def find_kit(home: Path | None = None, near: Path = ROOT) -> Path | None:
             d = d.resolve()
             if d not in found:
                 found.append(d)
+    order = {d: i for i, d in enumerate(found)}
+    return sorted(found, key=lambda d: (-keys_filled(d), not (d / ".env").exists(), order[d]))
+
+
+def find_kit(home: Path | None = None, near: Path = ROOT) -> Path | None:
+    """The kit folder, or None. $STR_SECRETS_KIT wins, then the kit the setup
+    check last passed with, then the best of find_kits()."""
+    env = os.environ.get("STR_SECRETS_KIT")
+    if env and is_kit(Path(env).expanduser()):
+        return Path(env).expanduser().resolve()
+    chosen = _remembered()
+    if chosen is not None:
+        return chosen
+    home = home or Path.home()
+    memo = (str(home), str(near))
+    if memo in _FOUND and is_kit(_FOUND[memo]):
+        return _FOUND[memo]
+    found = find_kits(home, near)
     if not found:
         return None
-    found.sort(key=lambda d: ((d / ".env").exists(),
-                              (d / ".env").stat().st_mtime if (d / ".env").exists() else 0),
-               reverse=True)
     _FOUND[memo] = found[0]
     return found[0]
 

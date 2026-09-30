@@ -1,15 +1,15 @@
 """Narrative copy for the report. Three sources, in priority order.
 
     1. `--narratives <file>`   copy written by Claude Code (the intended path)
-    2. `ANTHROPIC_API_KEY`     the API, for headless/platform runs only
+    2. the Anthropic API       headless runs only: NARRATIVE_MODE=api plus a key
     3. template narratives     data-driven copy derived from the comp set
 
 This tool needs NO Anthropic API key. Users run it inside Claude Code, where
 they already have Claude, so the copy is written there and handed back in with
-`--narratives`. The API path stays for headless platforms that have a key and
-nobody at the keyboard.
+`--narratives`. The API path stays for headless platforms that opt in with
+NARRATIVE_MODE=api; a key merely present in the environment is ignored.
 
-On a keyless run the agent writes `<slug>.narrative-brief.json` beside the
+On every run without --narratives the agent writes `<slug>.narrative-brief.json` beside the
 report and prints the loop, so the handoff is discoverable instead of being
 something you have to already know about. See `generators.narrative_brief`.
 
@@ -539,7 +539,8 @@ async def generate_narratives(
 ) -> Narratives:
     """Produce the report's narrative copy.
 
-    Priority: `narratives_file` > `ANTHROPIC_API_KEY` > template narratives.
+    Priority: `narratives_file` > the API (only with NARRATIVE_MODE=api and a
+    key) > template narratives plus the brief.
 
     On the keyless path this also writes `<slug>.narrative-brief.json` into
     `output_dir` and prints the copy-pasteable loop for regenerating the copy
@@ -562,11 +563,11 @@ async def generate_narratives(
     if narratives_file:
         return load_narratives_from_file(narratives_file, peak_label, shoulder_label)
 
-    # ---- 2. the API, for headless platform runs -------------------------
-    if config.ANTHROPIC_API_KEY:
+    # ---- 2. the API, for headless platform runs (NARRATIVE_MODE=api) -----
+    if config.NARRATIVES_VIA_API and config.ANTHROPIC_API_KEY:
         if anthropic is None:
             print(
-                "[Narratives] ANTHROPIC_API_KEY is set but the `anthropic` "
+                "[Narratives] NARRATIVE_MODE=api but the `anthropic` "
                 "package is not installed (pip install anthropic). "
                 "Using template narratives."
             )
@@ -577,10 +578,11 @@ async def generate_narratives(
             if result is not None:
                 return result
             print("[Narratives] All API attempts failed. Using template narratives.")
-            return template_narratives(prop, comps, peak_label, shoulder_label)
 
     # ---- 3. template copy, plus the handoff -----------------------------
-    print("[Narratives] No ANTHROPIC_API_KEY set — using template narratives.")
+    # Always the default: Claude Code reads the brief and writes the copy.
+    # Also reached after a failed API run, so the handoff is never lost.
+    print("[Narratives] Template copy for now; the brief below is for Claude Code.")
     if write_brief and output_dir is not None:
         try:
             emit_narrative_brief(

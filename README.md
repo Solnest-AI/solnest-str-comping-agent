@@ -7,7 +7,7 @@
 
 Give it a property (an Airbnb link, a Zillow link, or a street address) and it
 pulls comparable Airbnb listings nearby, scores them, and generates a branded,
-self-contained HTML report with revenue projections.
+single-file HTML report (it needs an internet connection to show its photos, fonts and chart) with revenue projections.
 
 It runs inside **Claude Code**. Paste this repo's link into the Claude Code
 desktop app and say **"set this up"**; `CLAUDE.md` walks you through it one
@@ -71,7 +71,8 @@ point that shows its work. Not an appraisal, not investment advice.
   revenue distribution
 - **Written analysis from Claude Code.** The agent emits a brief, Claude writes
   the copy, you re-run. No API key, no per-report cost.
-- **Branded output.** One self-contained HTML file with your logo and colors
+- **Branded output.** One HTML file with your logo and colors (opened online:
+  photos, fonts and the chart load from the web)
 
 ## What it does not do
 
@@ -159,8 +160,8 @@ PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --input "https://www.airbnb
 #    The brief carries the comp table, the market's real peak and shoulder
 #    months, the calculator defaults, and the exact JSON shape to write.
 
-# 3. Re-run with the copy
-PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --input "https://www.airbnb.com/rooms/39508095" \
+# 3. Re-render with the copy: reuses the cached data, no paid vendor calls
+PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --render "output/<slug>.report-data.json" \
                 --narratives "output/<slug>.narratives.json"
 ```
 
@@ -226,9 +227,9 @@ str-comping-agent/
 ## Development
 
 ```bash
-bash scripts/ensure_env.sh --dev   # adds pytest + ruff
-pytest -q        # hermetic: no network, no keys
-ruff check .     # lint
+PY="$(bash scripts/ensure_env.sh --dev)"   # adds pytest + ruff to the .venv
+"$PY" -m pytest -q                          # hermetic: no network, no keys
+"$PY" -m ruff check .                       # lint
 ```
 
 The test suite is **hermetic**: no network, no API keys. It runs against real
@@ -243,7 +244,8 @@ build by design.
 ## Requirements
 
 - Python 3.10+
-- An AirROI API key. Everything else is optional.
+- The STR Secrets connections kit with both keys: AirROI (comp data) and
+  Firecrawl (branding and street addresses). Gmail is the only optional one.
 
 ---
 

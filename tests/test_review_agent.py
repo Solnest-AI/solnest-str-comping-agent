@@ -193,6 +193,32 @@ def test_any_redirect_counts_as_live(monkeypatch):
     assert asyncio.run(agent._check_liveness(urls)) == [True, True, True, True, False, False]
 
 
+def test_selection_and_the_sanity_gate_agree_on_a_cdn_that_refuses_head(monkeypatch):
+    """HEAD 403/405 then GET 200/206 is live in both places; a real 404 is not."""
+    from validators import sanity
+
+    head = {"/a": 403, "/b": 405, "/c": 404, "/d": 403}
+    get = {"/a": 200, "/b": 206, "/c": 404, "/d": 404}
+
+    def reply(r):
+        return httpx.Response((head if r.method == "HEAD" else get)[r.url.path])
+
+    class Fake(httpx.AsyncClient):
+        def __init__(self, *a, **kw):
+            kw["transport"] = httpx.MockTransport(reply)
+            super().__init__(*a, **kw)
+
+    monkeypatch.setattr(agent.httpx, "AsyncClient", Fake)
+    urls = [f"https://x.test{p}" for p in head]
+    picked = asyncio.run(agent._check_liveness(urls))
+
+    async def gate():
+        async with Fake() as client:
+            return [(await sanity._head_ok(client, u))[1] for u in urls]
+
+    assert picked == asyncio.run(gate()) == [True, True, False, False]
+
+
 # ── Widening obeys the main pool's filters ────────────────────────────
 
 def _raw(lid: str, name: str, amenities=()) -> dict:

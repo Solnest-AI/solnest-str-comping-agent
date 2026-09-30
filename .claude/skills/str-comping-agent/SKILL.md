@@ -1,6 +1,6 @@
 ---
 name: str-comping-agent
-description: Generate a short-term-rental income analysis report for any property from an Airbnb link, a Zillow/Realtor link, or a plain street address. Use this skill whenever someone says "run comps", "comp this property", "what would this earn on Airbnb", "STR income report", "run the comping agent", "underwrite this STR", "what's the revenue potential", "analyze this property", or pastes an Airbnb/Zillow/Realtor URL or an address with income or investment intent. Also trigger on "rerun the report", "redo the copy", or "make the narrative better" for a property that already has a report on disk. Produces a branded, self-contained HTML report backed by real comparable listings pulled from AirROI, with revenue, ADR, occupancy, a seasonality curve and an interactive projection calculator. Needs the AirROI and Firecrawl keys from the STR Secrets connections kit. YOU write the narrative copy in pass two; there is deliberately no Anthropic API key.
+description: Generate a short-term-rental income analysis report for any property from an Airbnb link, a Zillow/Realtor link, or a plain street address. Use this skill whenever someone says "run comps", "comp this property", "what would this earn on Airbnb", "STR income report", "run the comping agent", "underwrite this STR", "what's the revenue potential", "analyze this property", or pastes an Airbnb/Zillow/Realtor URL or an address with income or investment intent. Also trigger on "rerun the report", "redo the copy", or "make the narrative better" for a property that already has a report on disk. Produces a branded single-file HTML report backed by real comparable listings pulled from AirROI, with revenue, ADR, occupancy, a seasonality curve and an interactive projection calculator. Needs the AirROI and Firecrawl keys from the STR Secrets connections kit. YOU write the narrative copy in pass two; there is deliberately no Anthropic API key.
 ---
 
 # STR Comping Agent
@@ -48,8 +48,9 @@ tests each with one real request (AirROI $0.01, Firecrawl free). A pass is remem
 24 hours. Both keys are required: nothing is skipped. Act on the exit code:
 
 - **0 `READY`:** keys work and the report is branded. Go straight to the report.
-- **4, keys work but there is no `branding.json`:** the report would say "Your Company"
-  with no logo. Ask the student for their company website (their own site, not a
+- **4, keys work but there is no usable `branding.json`** (missing, not valid JSON, or
+  still a placeholder name; the output names the field): the report would say "Your
+  Company" with no logo. A name alone is a complete brand. Ask the student for their company website (their own site, not a
   listing), then run
   `PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/brand_from_website.py <website>`.
   It reads their name, logo and colours with Firecrawl and writes `branding.json`. **Look
