@@ -26,6 +26,7 @@ import httpx
 
 import config
 import kit
+import partners
 from schema import PropertyBasics, ReportData, RentalizerData
 from scrapers.airbnb import scrape_airbnb_listing
 from scrapers.airroi import (run_airroi_pipeline, get_listing, get_listing_metrics,
@@ -733,10 +734,18 @@ async def _render_only(args) -> None:
 
     before = report_data.calculator
     report_data.calculator = _apply_host_overrides(args, before)
-    changed_calculator = report_data.calculator is not before
-    if changed_calculator:
+    changed_data = report_data.calculator is not before
+    if changed_data:
         print(f"[Render] Nights listed set to {report_data.calculator.days_default} "
               f"(listed year-round, per the host)")
+
+    if getattr(args, "partner", None):
+        report_data.partner = _resolve_partner(args)
+        changed_data = True
+    elif getattr(args, "no_partner", False) and report_data.partner is not None:
+        report_data.partner = None
+        changed_data = True
+        print("[Render] Agent co-branding removed")
 
     if args.narratives:
         try:
@@ -755,8 +764,9 @@ async def _render_only(args) -> None:
     output_path = await _render_and_gate(report_data, slug)
 
     # Saved only after the report passed its gate, so a later copy-only
-    # re-render keeps 365 instead of quietly dropping back to Airbnb's figure.
-    if changed_calculator:
+    # re-render keeps 365 instead of quietly dropping back to Airbnb's figure,
+    # and keeps the agent's co-branding on it.
+    if changed_data:
         data_path.write_text(report_data.model_dump_json(indent=1), encoding="utf-8")
         print(f"[Render] Saved to {data_path.name}: later re-renders keep it")
 
@@ -830,12 +840,37 @@ Examples:
                         help="Link for the report's View Listing button")
     parser.add_argument("--currency", default=None, choices=["$", "CA$"],
                         help="Override currency (auto-detected from address: $ for US, CA$ for Canada)")
+    co_brand = parser.add_mutually_exclusive_group()
+    co_brand.add_argument("--partner", default=None, metavar="AGENT",
+                          help="Co-brand the report with a real estate agent saved by "
+                               "scripts/add_partner.py (their name or partners/<agent>.json). "
+                               "Works with --render too (free) and is saved into the "
+                               "report-data file.")
+    co_brand.add_argument("--no-partner", action="store_true",
+                          help="With --render: take the agent's co-branding off this report.")
     parser.add_argument("--year-round", action="store_true",
                         help="The host lists this property all year (Airbnb, VRBO, direct): "
                              "start Nights Listed at 365 instead of its open nights on the "
                              "Airbnb calendar. Works with --render too (free) and is saved "
                              "into the report-data file.")
     return parser
+
+
+def _resolve_partner(args):
+    """The agent co-branding this report, or None. Stops the run on a name
+    that is not saved or a profile that is not usable (S2-027)."""
+    ref = getattr(args, "partner", None)
+    if not ref:
+        return None
+    try:
+        partner = partners.load_partner(ref)
+    except partners.PartnerError as e:
+        print(f"[Partner] {e}")
+        print("Nothing has been spent.")
+        sys.exit(2)
+    extra = f", {partner.brokerage}" if partner.brokerage else ""
+    print(f"[Partner] Co-branded with {partner.name}{extra}")
+    return partner
 
 
 def _apply_host_overrides(args, calculator):
@@ -1616,6 +1651,9 @@ async def main() -> None:
         await _render_only(args)
         return
 
+    # A wrong agent name stops here, before anything is spent.
+    partner = _resolve_partner(args)
+
     if not _verify_setup():
         sys.exit(1)
 
@@ -1759,6 +1797,7 @@ async def main() -> None:
         narratives=narratives,
         methodology=methodology,
         report_date=date.today().strftime("%B %d, %Y"),
+        partner=partner,
         seasonal_data=season.data,
         seasonal_p25=season.p25,
         seasonal_p75=season.p75,

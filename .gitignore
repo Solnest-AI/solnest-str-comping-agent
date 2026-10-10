@@ -79,6 +79,10 @@ Thumbs.db
 # so a fresh clone renders with neutral placeholders rather than ours.
 branding.json
 
+# Real estate agents' details for co-branded reports (scripts/add_partner.py):
+# a real person's phone and email, local to the student's own copy only.
+partners/
+
 # Owner-only dev material. Kept locally, never published: the public repo
 # ships exactly what the distribution zip ships (see scripts/package.py).
 AGENTS.md

@@ -136,6 +136,29 @@ command. It starts the slider at 365, keeps Airbnb's own figure in the report be
 and is saved into `report-data.json`, so later re-renders keep it. If they say no, or are
 not sure, leave it off. Never add it without asking.
 
+## Co-branding a report for a real estate agent
+
+When the user wants the report to carry a real estate agent's branding next to theirs
+("co-brand it", "for my agent", "put Jane's logo on it"), the agent's logo, name and
+contact line go in the header and footer. The user's own brand and colours stay in charge.
+
+1. See who is saved: `PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/add_partner.py --list`.
+   If the agent is there, skip to step 3.
+2. A new agent: ask the user for the agent's name, brokerage, phone, email and website,
+   then **stop and wait for the answers.** Never look an agent up or fill any of it in
+   yourself: these go on a client document under a real person's name. Anything the user
+   does not give is left off. Then run
+   `"$PY" scripts/add_partner.py --name "<name>" --brokerage "<brokerage>" --phone "<phone>" --email "<email>" --website "<site>"`.
+   **Look at the logo it saves** (`.cache/partner_logo.*`) and show the user the details.
+   No logo or the wrong one: ask them to right-click it on the agent's site, Copy image
+   address, and re-run with `--logo "<that>"`. Re-running with the same `--name` updates
+   that agent and keeps everything else.
+3. Add `--partner <agent>` to the report command. On an existing report, the pass 2
+   `--render` command takes it for free. It is saved into `report-data.json`, so later
+   re-renders keep it. `--no-partner` on a `--render` takes it off.
+
+Agent profiles live in `partners/` in this folder only: a real person's phone and email.
+
 ## Rules for the narrative copy
 
 The report is a client deliverable attached to real money decisions. These are not style
@@ -170,6 +193,7 @@ preferences.
 | `--exclude "keyword"` | Drop a specific comp by name keyword. |
 | `--market "Name"` | The market was misidentified. |
 | `--email someone@example.com` | Send the finished report. Needs Gmail configured. |
+| `--partner <agent>` / `--no-partner` | Co-brand with a real estate agent saved by `scripts/add_partner.py`, or take it off. Free on `--render`. See co-branding above. |
 | `--year-round` | The user said the property is listed all year (Airbnb plus VRBO, direct or other sites). Starts Nights Listed at 365. Free on `--render`. Only after asking (see pass 2). |
 
 ## Reading the output
