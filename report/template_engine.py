@@ -161,6 +161,39 @@ def occupancy_basis_text(calc, sp) -> str:
     )
 
 
+def nights_basis_text(calc, sp) -> str:
+    """Say where the Nights Listed slider starts, under the slider (S2-009).
+
+    A summit student's own year-round listing started at 200 with no
+    explanation. AirROI's figure is open nights on the Airbnb calendar only,
+    so the report names it as that and keeps it visible when the host says
+    the property is listed all year.
+    """
+    basis = getattr(calc, "days_basis", "")
+    if basis == "year_round":
+        text = "Set to 365: listed year-round, per the host."
+        if sp is not None:
+            text += (
+                f" Its Airbnb calendar alone showed {sp.nights_listed} open "
+                f"nights over the last 12 months (AirROI), because nights "
+                f"booked on other sites and owner stays count as closed there."
+            )
+        return text
+    if basis == "subject" and sp is not None:
+        return (
+            f"This listing was open {sp.nights_listed} nights on its Airbnb "
+            f"calendar over the last 12 months (AirROI). Nights booked on VRBO "
+            f"or direct, and owner stays, count as closed there. Listed "
+            f"year-round? Slide to 365."
+        )
+    if basis == "comp_set":
+        return (
+            "Starts at the median open nights of the six comparables below. "
+            "Allow for maintenance, cleaning, and personal use."
+        )
+    return "Account for maintenance, cleaning, and personal use"
+
+
 def render_report(data: ReportData) -> str:
     """Render the Jinja2 template with all report data. Returns HTML string."""
     env = jinja2.Environment(
@@ -199,6 +232,7 @@ def render_report(data: ReportData) -> str:
         comp_summary=_comp_summary(data),
         subject_performance=sp,
         occ_basis_text=occ_basis_text,
+        nights_basis_text=nights_basis_text(calc, sp),
         branding=config.BRANDING,
         property=data.property,
         rentalizer=data.rentalizer,

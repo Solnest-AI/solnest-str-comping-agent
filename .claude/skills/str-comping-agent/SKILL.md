@@ -127,6 +127,15 @@ PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --render "output/<slug>.rep
 **Pass 2 makes no API calls, spends nothing, and finishes in under a second.** It re-renders
 the same HTML with your copy and re-runs the post-render safety gate.
 
+**Nights Listed on the user's own listing.** If pass 1 printed `ASK THE USER: is this
+listed year-round`, ask exactly that before pass 2, then wait for the answer. The slider
+starts at the listing's open nights on its Airbnb calendar (AirROI), and AirROI cannot see
+VRBO or direct bookings, so those and owner stays count as closed: a summit student's
+year-round listing started at 200. If they say yes, add `--year-round` to the pass 2
+command. It starts the slider at 365, keeps Airbnb's own figure in the report beside it,
+and is saved into `report-data.json`, so later re-renders keep it. If they say no, or are
+not sure, leave it off. Never add it without asking.
+
 ## Rules for the narrative copy
 
 The report is a client deliverable attached to real money decisions. These are not style
@@ -161,6 +170,7 @@ preferences.
 | `--exclude "keyword"` | Drop a specific comp by name keyword. |
 | `--market "Name"` | The market was misidentified. |
 | `--email someone@example.com` | Send the finished report. Needs Gmail configured. |
+| `--year-round` | The user said the property is listed all year (Airbnb plus VRBO, direct or other sites). Starts Nights Listed at 365. Free on `--render`. Only after asking (see pass 2). |
 
 ## Reading the output
 

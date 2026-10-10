@@ -463,7 +463,12 @@ def build_narrative_brief(
                 "the market median in every month it ran; 'market_pool' = "
                 "median of every comparable AirROI returned; 'comp_set' = "
                 "median of the six shown. Never describe a market-based "
-                "default as this property's own result."
+                "default as this property's own result. days.basis "
+                "'subject' = open nights on the listing's Airbnb calendar "
+                "only (VRBO, direct and owner nights count as closed); "
+                "'year_round' = 365 per the host. The user can re-render "
+                "with --year-round, so never quote the nights-listed "
+                "default in the copy."
             ),
             "occupancy_pct": {
                 "min": calculator.occ_min,
@@ -481,6 +486,7 @@ def build_narrative_brief(
                 "min": calculator.days_min,
                 "max": calculator.days_max,
                 "default": calculator.days_default,
+                "basis": calculator.days_basis,
             },
         },
         "field_guide": FIELD_GUIDE,

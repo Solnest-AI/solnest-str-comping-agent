@@ -293,7 +293,16 @@ the file without them (the template would render holes).
 PY="$(bash scripts/ensure_env.sh)" && "$PY" agent.py --render "output/<slug>.report-data.json" --narratives "output/<slug>.narratives.json"
 ```
 
-The brief carries a ready-made `rerun_command` field. Use it verbatim.
+The brief carries a ready-made `rerun_command` field. Use it verbatim, plus
+`--year-round` when the step below says so.
+
+If step 1 printed `ASK THE USER: is this listed year-round`, ask the user that
+before this step and wait. Nights Listed starts at the listing's open nights on
+its Airbnb calendar (AirROI). AirROI cannot see VRBO or direct bookings, so
+those and owner stays count as closed, and a year-round listing can start at
+200. On a yes, add `--year-round`: the slider starts at 365, the report still
+shows Airbnb's figure, and it is saved into `report-data.json`. Never add it
+without asking.
 
 `--narratives` is strict on purpose: if the file is missing, malformed, or a
 field is absent, the run **fails loudly with every problem listed**. It does not
@@ -324,6 +333,7 @@ specifically. Fix the JSON and re-run.
 | `--allow-other-unit` | Accept a listing for a different unit at the same street address. The address search stops before AirROI and asks otherwise; only pass it after the user confirms that unit is a fair stand-in |
 | `--listing-url URL` | Link the report's "View Listing" button |
 | `--render DATA_JSON` | Re-render a report from its `*.report-data.json`, no AirROI calls. Pair with `--narratives` |
+| `--year-round` | The user says the property is listed all year: Nights Listed starts at 365 instead of its Airbnb open nights. Free with `--render`, saved into the data file. Only after asking |
 
 Run `"$PY" agent.py --help` if a flag here disagrees with the code; the code wins.
 
