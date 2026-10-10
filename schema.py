@@ -269,6 +269,16 @@ class CalculatorDefaults(BaseModel):
     # selected for quality, so they sit well above the market median).
     occ_basis: str = "comp_set"
     adr_basis: str = "comp_set"
+    # Where the nights-listed default came from (S2-009):
+    # "subject" = the property's own OPEN nights on its Airbnb calendar over
+    #   the last 12 months (AirROI: total minus blocked). AirROI only sees
+    #   Airbnb, so VRBO/direct bookings synced over as blocks and owner holds
+    #   all count as closed: a year-round multi-channel listing can show 200,
+    # "comp_set" = median open nights of the six comps,
+    # "year_round" = 365 because the host says it is listed all year
+    #   (--year-round),
+    # "" = written before this field existed; the report claims no basis.
+    days_basis: str = ""
 
 
 class PositioningCard(BaseModel):

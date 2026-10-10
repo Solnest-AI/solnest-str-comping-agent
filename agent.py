@@ -41,7 +41,7 @@ import comp_filters
 import comp_similarity
 
 
-from generators.calculator import (derive_calculator_defaults,
+from generators.calculator import (apply_year_round, derive_calculator_defaults,
                                    derive_seasonal_data_with_basis, derive_season_labels,
                                    market_occupancy_band, market_months_missing)
 from generators.narratives import (
@@ -731,6 +731,13 @@ async def _render_only(args) -> None:
     print(f"[Render] Loaded pipeline output from {data_path.name} "
           f"({len(report_data.comps)} comps, no API calls needed)")
 
+    before = report_data.calculator
+    report_data.calculator = _apply_host_overrides(args, before)
+    changed_calculator = report_data.calculator is not before
+    if changed_calculator:
+        print(f"[Render] Nights listed set to {report_data.calculator.days_default} "
+              f"(listed year-round, per the host)")
+
     if args.narratives:
         try:
             report_data.narratives = load_narratives_from_file(
@@ -746,6 +753,12 @@ async def _render_only(args) -> None:
     report_data.report_date = date.today().strftime("%B %d, %Y")
     slug = _file_slug(report_data.property.market)
     output_path = await _render_and_gate(report_data, slug)
+
+    # Saved only after the report passed its gate, so a later copy-only
+    # re-render keeps 365 instead of quietly dropping back to Airbnb's figure.
+    if changed_calculator:
+        data_path.write_text(report_data.model_dump_json(indent=1), encoding="utf-8")
+        print(f"[Render] Saved to {data_path.name}: later re-renders keep it")
 
     if args.email:
         print(f"\n--- Emailing report to {args.email} ---")
@@ -817,7 +830,22 @@ Examples:
                         help="Link for the report's View Listing button")
     parser.add_argument("--currency", default=None, choices=["$", "CA$"],
                         help="Override currency (auto-detected from address: $ for US, CA$ for Canada)")
+    parser.add_argument("--year-round", action="store_true",
+                        help="The host lists this property all year (Airbnb, VRBO, direct): "
+                             "start Nights Listed at 365 instead of its open nights on the "
+                             "Airbnb calendar. Works with --render too (free) and is saved "
+                             "into the report-data file.")
     return parser
+
+
+def _apply_host_overrides(args, calculator):
+    """Facts only the host knows, applied on top of the derived defaults.
+
+    Returns the same object when nothing applies, so callers can tell.
+    """
+    if getattr(args, "year_round", False):
+        return apply_year_round(calculator)
+    return calculator
 
 
 # ── Pipeline steps ───────────────────────────────────────────────────
@@ -1512,6 +1540,12 @@ _BASIS_LABEL = {
     "comp_set":       "comp-set median (no pool or subject history available)",
 }
 
+_NIGHTS_BASIS_LABEL = {
+    "subject":    "this listing's own open nights on its Airbnb calendar (AirROI, last 12 months)",
+    "comp_set":   "median open nights of the six comps",
+    "year_round": "365, listed year-round per the host",
+}
+
 _SEASONAL_SOURCE = {
     "market": "AirROI market curve (p50, with p25-p75 band)",
     "comps": "AirROI per-comp average",
@@ -1528,6 +1562,14 @@ def _print_calculator(prop: PropertyBasics, calculator, n_pool: int,
     print(f"[Calculator] ADR: {prop.currency}{calculator.adr_min:,} - {prop.currency}{calculator.adr_max:,} (default {prop.currency}{calculator.adr_default:,})")
     print(f"[Calculator]   rate basis: {labels.get(calculator.adr_basis, calculator.adr_basis)}")
     print(f"[Calculator] Nights listed default: {calculator.days_default}")
+    print(f"[Calculator]   nights basis: "
+          f"{_NIGHTS_BASIS_LABEL.get(calculator.days_basis, calculator.days_basis or 'unknown')}")
+    if calculator.days_basis == "subject" and calculator.days_default < calculator.days_max:
+        # S2-009: only the host knows whether the closed nights are VRBO or
+        # direct bookings (listed year-round) or real time off the market.
+        print(f"[Calculator] ASK THE USER: is this listed year-round (Airbnb plus VRBO, "
+              f"direct or other sites)? Airbnb alone showed {calculator.days_default} open "
+              f"nights. If yes, add --year-round to the --render command (free) to start at 365.")
     print(f"[Seasonal] Source: {_SEASONAL_SOURCE.get(season.basis, 'unknown')}")
     print(f"[Seasonal] Monthly occ: {[int(v) for v in season.data]}")
 
@@ -1671,6 +1713,7 @@ async def main() -> None:
         market_occupancy=season.market_occ,
         subject_monthly=season.subject_monthly,
     )
+    calculator = _apply_host_overrides(args, calculator)
     _print_calculator(prop, calculator, len(pool_occupancies), season)
 
     # Derive the season labels from THIS market's actual revenue distribution

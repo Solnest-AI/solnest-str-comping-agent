@@ -286,6 +286,7 @@ def derive_calculator_defaults(
     # 365-night projection just because the comps run year-round.
     sp = getattr(prop, "subject_performance", None)
     comp_days = [c.nights_listed for c in comps]
+    days_basis = "subject"
     if sp is not None and sp.is_stabilized and sp.nights_listed > 0:
         days_default = int(sp.nights_listed)
     else:
@@ -296,8 +297,10 @@ def derive_calculator_defaults(
         # genuinely blocks half the year at their own number while refusing to
         # bill a launch date as a lifestyle decision.
         days_default = int(round(statistics.median(comp_days)))
+        days_basis = "comp_set"
         if sp is not None and sp.nights_listed > days_default:
             days_default = int(sp.nights_listed)
+            days_basis = "subject"
     days_min = max(100, _round_down(min(min(comp_days), days_default), 5))
     days_default = max(days_min, min(365, days_default))
 
@@ -335,7 +338,25 @@ def derive_calculator_defaults(
         adr_range_text=adr_range_text,
         occ_basis=occ_basis,
         adr_basis=adr_basis,
+        days_basis=days_basis,
     )
+
+
+def apply_year_round(calc: CalculatorDefaults) -> CalculatorDefaults:
+    """The host says the property is listed all year: start the slider at 365.
+
+    S2-009. The measured default stays the default because a host who blocks
+    half the year must not be shown a 365-night projection. But AirROI only
+    sees the Airbnb calendar, so a listing booked on VRBO or direct (synced
+    over as blocks) or held for the owner reads as "not listed" there, and a
+    summit student's year-round listing started at 200. Only the host knows
+    which it is, so this is applied only when they say so (--year-round).
+    Occupancy and rate are untouched: their own bases still hold.
+    """
+    return calc.model_copy(update={
+        "days_default": calc.days_max,
+        "days_basis": "year_round",
+    })
 
 
 # Data sources may clip peak-season occupancy at exactly 100.0.
