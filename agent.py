@@ -48,6 +48,7 @@ from generators.calculator import (apply_year_round, derive_calculator_defaults,
 from generators.narratives import (
     generate_narratives, load_narratives_from_file, NarrativeFileError,
 )
+from generators import proforma as pf
 from generators.narrative_brief import report_data_path
 from generators.methodology import build_methodology
 from validators.sanity import (
@@ -454,6 +455,16 @@ def _accept_trusted_hero(url: str) -> bool:
     return not check_subject_hero(url)
 
 
+def _list_price(listing_data: dict) -> float | None:
+    """The price on a listing page, when it can be a purchase price. Only
+    pre-fills the proforma (labelled); a figure under MIN_PURCHASE_PRICE is
+    a rent, not a price."""
+    price = (listing_data or {}).get("price")
+    if isinstance(price, (int, float)) and price >= pf.MIN_PURCHASE_PRICE:
+        return float(price)
+    return None
+
+
 async def _subject_from_search(raw: str, args) -> PropertyBasics:
     """Path B - any listing URL (Zillow, Redfin, realtor.ca, VRBO, ...).
     Path C - plain address: search the internet for the property."""
@@ -515,6 +526,7 @@ async def _subject_from_search(raw: str, args) -> PropertyBasics:
         description=listing_data.get("description"),
         title=listing_data.get("title"),
         sqft=_as_int(listing_data.get("sqft")) or None,
+        list_price=_list_price(listing_data),
         # The listing's own features (porch, deck, hot tub...). Without
         # them an address subject reached the feature gate with nothing,
         # and six hot-tub comps priced a house with no hot tub.
@@ -747,6 +759,15 @@ async def _render_only(args) -> None:
         changed_data = True
         print("[Render] Agent co-branding removed")
 
+    if getattr(args, "proforma", None) is not None:
+        report_data.proforma = _load_proforma_arg(args, report_data.property.list_price)
+        changed_data = True
+        print("[Render] Pro forma applied")
+    elif getattr(args, "no_proforma", False) and report_data.proforma is not None:
+        report_data.proforma = None
+        changed_data = True
+        print("[Render] Pro forma removed")
+
     if args.narratives:
         try:
             report_data.narratives = load_narratives_from_file(
@@ -848,6 +869,14 @@ Examples:
                                "report-data file.")
     co_brand.add_argument("--no-partner", action="store_true",
                           help="With --render: take the agent's co-branding off this report.")
+    pro_forma = parser.add_mutually_exclusive_group()
+    pro_forma.add_argument("--proforma", nargs="?", const="", default=None, metavar="FILE",
+                           help="Add the pro forma (expenses, NOI, optional financing). Alone it "
+                                "uses the student's saved rates in proforma.json; with FILE, that "
+                                "property's numbers on top. On automatically when proforma.json "
+                                "exists. Works with --render too (free).")
+    pro_forma.add_argument("--no-proforma", action="store_true",
+                           help="Leave the pro forma out (with --render: take it off).")
     parser.add_argument("--year-round", action="store_true",
                         help="The host lists this property all year (Airbnb, VRBO, direct): "
                              "start Nights Listed at 365 instead of its open nights on the "
@@ -871,6 +900,45 @@ def _resolve_partner(args):
     extra = f", {partner.brokerage}" if partner.brokerage else ""
     print(f"[Partner] Co-branded with {partner.name}{extra}")
     return partner
+
+
+def _load_proforma_arg(args, list_price):
+    """The proforma for this report, or None. On when asked (--proforma) or
+    when the student has saved their rates (proforma.json); --no-proforma
+    wins. Stops the run on an unusable number, before anything is spent."""
+    if getattr(args, "no_proforma", False):
+        return None
+    ref = getattr(args, "proforma", None)
+    if ref is None and not pf.DEFAULTS_PATH.exists():
+        return None
+    try:
+        return pf.load_proforma(file_path=ref or None, list_price=list_price)
+    except pf.ProformaError as e:
+        print(f"[Proforma] {e}")
+        print("Nothing has been spent.")
+        sys.exit(2)
+
+
+def _print_proforma(report_data: ReportData) -> None:
+    """Say what the pro forma still needs, so Claude asks the student for it
+    instead of the report going out with blanks nobody noticed."""
+    p = report_data.proforma
+    if p is None:
+        return
+    calc = report_data.calculator
+    occupied = pf.js_round(calc.days_default * calc.occ_default / 100)
+    r = pf.compute(p, occupied * calc.adr_default, occupied)
+    if p.price_source == "listing":
+        print(f"[Proforma] Purchase price pre-filled from the listing page: "
+              f"{pf.fmt_money(p.purchase_price, report_data.property.currency)}")
+    blank_financing = [f for f in pf.FINANCING_FIELDS if getattr(p, f) is None]
+    if r["missing"] or blank_financing:
+        print(f"[Proforma] ASK THE USER for the blank numbers (or 0 where a cost does not "
+              f"apply), then re-render with --proforma <file> (free). Expenses: "
+              f"{', '.join(r['missing']) or 'all set'}. Financing (optional): "
+              f"{', '.join(blank_financing) or 'all set'}.")
+    else:
+        print(f"[Proforma] Complete: NOI {pf.fmt_money(r['noi'], report_data.property.currency)}")
 
 
 def _apply_host_overrides(args, calculator):
@@ -1651,8 +1719,11 @@ async def main() -> None:
         await _render_only(args)
         return
 
-    # A wrong agent name stops here, before anything is spent.
+    # A wrong agent name or an unusable proforma number stops here, before
+    # anything is spent. The proforma is loaded again once the listing price
+    # is known.
     partner = _resolve_partner(args)
+    proforma = _load_proforma_arg(args, list_price=None)
 
     if not _verify_setup():
         sys.exit(1)
@@ -1798,6 +1869,8 @@ async def main() -> None:
         methodology=methodology,
         report_date=date.today().strftime("%B %d, %Y"),
         partner=partner,
+        proforma=(_load_proforma_arg(args, list_price=prop.list_price)
+                  if proforma is not None else None),
         seasonal_data=season.data,
         seasonal_p25=season.p25,
         seasonal_p75=season.p75,
@@ -1819,6 +1892,7 @@ async def main() -> None:
         # Same exit as every other blocking sanity gate.
         sys.exit(2)
 
+    _print_proforma(report_data)
     _write_report_data(report_data)
     output_path = await _render_and_gate(report_data, slug)
     _maybe_email(args, prop.short_address, output_path)

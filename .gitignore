@@ -83,6 +83,9 @@ branding.json
 # a real person's phone and email, local to the student's own copy only.
 partners/
 
+# The student's own standard proforma rates (copy proforma.example.json).
+proforma.json
+
 # Owner-only dev material. Kept locally, never published: the public repo
 # ships exactly what the distribution zip ships (see scripts/package.py).
 AGENTS.md
