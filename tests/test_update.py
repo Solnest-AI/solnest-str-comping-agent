@@ -55,10 +55,12 @@ def _tarball(files: dict[str, str], top: str = "solnest-str-comping-agent-1.2.0"
 
 
 def _plain_copy(tmp_path: Path, files=V1, manifest: bool = True, user=USER) -> Path:
+    """A student's copy as a tarball or zip install leaves it: byte for byte what the
+    release shipped (write_bytes, because write_text writes CRLF on Windows)."""
     root = tmp_path / "solnest-str-comping-agent"
     for rel, body in {**files, **user}.items():
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
-        (root / rel).write_text(body, encoding="utf-8")
+        (root / rel).write_bytes(body.encode())
     if manifest:
         update.write_manifest(root, list(files))
     return root
@@ -296,8 +298,8 @@ def test_the_latest_release_comes_from_the_github_redirect_not_the_api(monkeypat
 def test_the_manifest_round_trips_paths_with_spaces(tmp_path):
     root = tmp_path / "copy"
     (root / "docs").mkdir(parents=True)
-    (root / "docs/read me.md").write_text("hi\n", encoding="utf-8")
-    (root / "agent.py").write_text("x\n", encoding="utf-8")
+    (root / "docs/read me.md").write_bytes(b"hi\n")
+    (root / "agent.py").write_bytes(b"x\n")
     update.write_manifest(root, ["docs/read me.md", "agent.py", ".env"])
     assert update.load_manifest(root) == {"docs/read me.md": update.file_hash(b"hi\n"),
                                           "agent.py": update.file_hash(b"x\n")}
