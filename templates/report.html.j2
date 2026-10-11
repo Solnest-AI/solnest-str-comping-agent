@@ -637,7 +637,13 @@
 
     @media print {
       body { background: white; }
-      .no-print { display: none; }
+      /* !important: the same elements carry Tailwind's flex / inline-flex,
+         which load later and otherwise printed the buttons on every PDF. */
+      .no-print { display: none !important; }
+      /* Sections fade in from opacity 0; a PDF must never catch one mid-fade. */
+      .fade-in-up, .delay-1, .delay-2, .delay-3 {
+        animation: none !important; opacity: 1 !important; transform: none !important;
+      }
       .glass-card { background: white; border: 1px solid #e5e7eb; }
     }
   </style>
