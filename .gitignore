@@ -97,3 +97,8 @@ _pre-sync-backup-*/
 docs/superpowers/
 scripts/calibrate_against_ledger.py
 solneststays-full.png
+
+# scripts/update.py: the files the installed release shipped, and the backups
+# it keeps for --undo. Local to each student's copy.
+.comping-files.txt
+.update-backup/

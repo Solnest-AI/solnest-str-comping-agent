@@ -129,6 +129,43 @@ wins over one in this folder; `~/.claude.json` is the last fallback.
 
 ---
 
+## Updating
+
+Say **"update the comping agent"** in Claude Code, in this folder. Claude runs
+`scripts/update.py`, which downloads the latest release from GitHub and
+replaces the tool's own files, then reruns setup (new packages, key check).
+Files a release no longer needs are removed, so nothing stale is left behind
+to break setup.
+
+It never touches your `.env`, `branding.json`, `proforma.json`, `partners/`
+(your agents), `output/` (your reports), `.cache/` or `.venv`. Every file it
+replaces is saved in `.update-backup/` first, and if you had edited one it
+tells you which. To go back, say "undo the comping agent update"
+(`scripts/update.py --undo`).
+
+When a newer release is out, the end of each report run says "Update
+available". It checks at most once a day, says nothing when you are offline,
+and `COMPING_NO_UPDATE_CHECK=1` turns it off. What changed in each release is
+on the [releases page](https://github.com/Solnest-AI/solnest-str-comping-agent/releases),
+in plain English.
+
+Your copy is a plain folder, not linked to GitHub, so nothing you do here can
+be pushed to Solnest-AI. A copy from before version 1.4.0 updates once the old
+way (Claude follows the instructions already in that copy), and uses this
+updater from then on.
+
+Developers: a git clone is never updated by this (it says so); use
+`git pull --ff-only`. Setup never unlinks a clone with local edits, branches,
+unpushed commits or stashes, and `touch .git/str-keep-attached` keeps git on a
+clean one.
+
+Releasing (maintainers): bump `VERSION` in the pull request, merge, then tag
+`vX.Y.Z` on main and publish a release with plain-English notes. Students only
+ever get tagged releases, never untagged work on main. The updater refuses a
+release whose `VERSION` does not match its tag.
+
+---
+
 ## Run it as a Claude Code skill (recommended)
 
 Paste the repo link into Claude Code and say "set this up", then just ask:
@@ -226,6 +263,8 @@ str-comping-agent/
 ├── report/                ← HTML rendering + optional email
 ├── templates/             ← the report template
 ├── scripts/package.py     ← builds the distribution zip from the git manifest
+├── scripts/update.py      ← "update the comping agent": latest release, keeps your files
+├── VERSION                ← the release this copy is
 ├── tests/                 ← hermetic tests, run against captured API responses
 │
 ├── .env.example           ← copy to .env
@@ -248,8 +287,8 @@ The test suite is **hermetic**: no network, no API keys. It runs against real
 AirROI responses captured in `tests/fixtures/` covering six markets, so a change
 to the scorer is checked against data that actually exists rather than against
 mocks that agree with the code. CI runs lint and tests on Python 3.10, 3.11, and
-3.12 with no secrets configured. Any test that reaches the network fails the
-build by design.
+3.12 with no secrets configured. Any test that reaches the network fails, on
+your machine as well as in CI: `tests/conftest.py` blocks it at the socket.
 
 ---
 

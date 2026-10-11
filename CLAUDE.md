@@ -36,7 +36,9 @@ A `git clone` links this folder to Solnest-AI's GitHub. This removes that link
 and the `.git` folder, so nothing here can be pushed back. It only touches an
 untouched copy of the public repo (never a working copy with edits, branches
 or unpushed commits) and always exits 0: relay the one line it prints. The
-tool never needs git to run.
+tool never needs git to run. Before `.git` goes it records the tool's files in
+`.comping-files.txt`, so the first update knows exactly what it may replace or
+remove.
 
 **Never run bare `python`, `python3` or `pip`.** On a fresh Windows machine
 `python` is the Microsoft Store stub and opens the Store instead of running.
@@ -202,15 +204,34 @@ student's own property instead. Never make up comps to fill the gap.
 
 ## When the user says "update the comping agent"
 
-Their copy is a plain folder (Step 0), so it updates by download, not
-`git pull`. `branding.json`, `.env`, `.venv`, `output/` and `.cache/` are not
-in the download and stay as they are:
+Their copy is a plain folder (Step 0), so it updates by release, not
+`git pull`:
 
 ```bash
-T="$(mktemp -d)" && curl -fsSL -o "$T/c.tar.gz" https://github.com/Solnest-AI/solnest-str-comping-agent/archive/refs/heads/main.tar.gz && tar -xzf "$T/c.tar.gz" -C "$T" && cp -R "$T/solnest-str-comping-agent-main/." . && rm -rf "$T"
+PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/update.py
 ```
 
-Then run Step 1 (it reinstalls anything new) and `scripts/check_setup.py`.
+It downloads the latest published release from GitHub (never untagged work on
+main) and replaces the tool's own files. It removes files the new release
+dropped, so nothing stale is left to break setup. It never touches `.env`,
+`branding.json`, `proforma.json`, `partners/`, `output/`, `.cache/` or
+`.venv`. Every file it replaces or removes is copied to `.update-backup/`
+first, and it names any file the student had edited. Relay the lines it
+prints. Then run Step 1 (it installs any new packages) and
+`scripts/check_setup.py`.
+
+- "Already on the latest release": nothing to do; say so.
+- To go back one step: `"$PY" scripts/update.py --undo`, then Step 1.
+- `"$PY" scripts/update.py --check` only says whether a newer release exists.
+- "could not reach GitHub": offline or GitHub is down. Nothing changed; try
+  again later.
+- "still linked to git": a developer's clone. Update it with
+  `git pull --ff-only` instead.
+
+When a run ends with "Update available: Comping Agent X.Y.Z", tell the student
+what it says and offer to update. Never update without their yes: it changes
+the tool under them. The check runs at most once a day, stays silent offline,
+and `COMPING_NO_UPDATE_CHECK=1` turns it off.
 
 ---
 

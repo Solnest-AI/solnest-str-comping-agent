@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import asyncio
+import importlib.util
 import os
 import re
 import sys
@@ -1904,15 +1905,36 @@ async def main() -> None:
     print(f"\n  File: {output_path.resolve()}\n")
 
 
+def _update_notice_line(root: Path | None = None) -> str | None:
+    """"Update available: ..." when a newer release is out, else None.
+
+    scripts/update.py checks GitHub at most once a day and stays silent offline
+    (COMPING_NO_UPDATE_CHECK=1 turns it off). It is loaded by path because
+    scripts/ is not a package, and a missing or broken updater never costs the
+    student a report."""
+    try:
+        root = root or Path(__file__).parent
+        spec = importlib.util.spec_from_file_location("comping_update", root / "scripts" / "update.py")
+        updater = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(updater)
+        return updater.notice(root)
+    except BaseException:  # a broken updater may even raise SystemExit
+        return None
+
+
 def run() -> None:
     """main(), stopped cleanly when a vendor rejects the key or is out of
-    credit anywhere in the run (kit.KeyFailure skips every fallback)."""
+    credit anywhere in the run (kit.KeyFailure skips every fallback). A run
+    that finished ends with the update notice, when there is one."""
     try:
         asyncio.run(main())
     except kit.KeyFailure as e:
         kit.forget_setup_pass()
         print(f"\n{e}", file=sys.stderr)
         sys.exit(2)
+    line = _update_notice_line()
+    if line:
+        print(f"\n{line}")
 
 
 if __name__ == "__main__":
