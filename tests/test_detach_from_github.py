@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ import pytest
 from test_ensure_env import _git_bash
 
 ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT / "scripts"))
 SCRIPT = ROOT / "scripts" / "detach_from_github.sh"
 PUBLIC = "https://github.com/Solnest-AI/solnest-str-comping-agent.git"
 
@@ -34,7 +36,7 @@ def _git(cwd: Path, *args: str) -> str:
     return r.stdout
 
 
-def _student_copy(tmp_path: Path, origin: str = PUBLIC) -> Path:
+def _student_copy(tmp_path: Path, origin: str = PUBLIC, extra: dict | None = None) -> Path:
     """What a `git clone` of the public repo looks like: main, tracking origin/main."""
     remote = tmp_path / "remote.git"
     _git(tmp_path, "init", "-q", "--bare", "-b", "main", str(remote))
@@ -43,6 +45,9 @@ def _student_copy(tmp_path: Path, origin: str = PUBLIC) -> Path:
     (work / "scripts").mkdir()
     shutil.copy(SCRIPT, work / "scripts" / SCRIPT.name)
     (work / "agent.py").write_text("print('hi')\n", encoding="utf-8")
+    for rel, body in (extra or {}).items():
+        (work / rel).parent.mkdir(parents=True, exist_ok=True)
+        (work / rel).write_text(body, encoding="utf-8")
     _git(work, "add", "-A")
     _git(work, "commit", "-qm", "init")
     _git(work, "push", "-q", "origin", "main")
@@ -63,6 +68,31 @@ def test_a_fresh_clone_is_detached(tmp_path):
     assert not (work / ".git").exists() and "detached" in out
     assert (work / "agent.py").exists(), "only .git goes; the tool stays"
     assert "not attached" in _run(work), "running it again is a no-op"
+
+
+def test_a_fresh_clone_remembers_its_files_for_the_updater(tmp_path):
+    """Before .git goes, git's tracked files (and their hashes) are written as
+    scripts/update.py's manifest, so the first update knows exactly which files
+    are the tool's: what it may replace or remove, and what the student edited."""
+    import update
+
+    work = _student_copy(tmp_path, extra={"docs/read me.md": "spaces survive\n"})
+    (work / ".env").write_text("AIRROI_API_KEY=keep-me\n", encoding="utf-8")  # gitignored in real life
+    _run(work)
+    assert not (work / ".git").exists()
+    files = update.load_manifest(work)
+    assert set(files) == {"agent.py", "scripts/detach_from_github.sh", "docs/read me.md"}, \
+        "the manifest is git's tracked files, never .env"
+    for rel, digest in files.items():
+        assert digest == update.file_hash((work / rel).read_bytes()), rel
+    assert (work / ".env").read_text(encoding="utf-8") == "AIRROI_API_KEY=keep-me\n"
+
+
+def test_a_kept_copy_gets_no_manifest(tmp_path):
+    work = _student_copy(tmp_path)
+    (work / "agent.py").write_text("print('changed')\n", encoding="utf-8")
+    _run(work)
+    assert (work / ".git").is_dir() and not (work / ".comping-files.txt").exists()
 
 
 def test_the_ssh_and_mixed_case_addresses_count(tmp_path):

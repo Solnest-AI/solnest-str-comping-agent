@@ -244,6 +244,11 @@ Tell the user what actually happened, not just that it finished:
   the normal path. A per-comp average or a revenue-distribution fallback is weaker
   and worth naming.
 - **Anything the sanity gate flagged.**
+- **"Update available: Comping Agent X.Y.Z"** as the last line: a newer release is out.
+  Tell the user, once, and offer it. Never update without their yes. On a yes, follow
+  `CLAUDE.md` > "When the user says "update the comping agent"" in this folder: it runs
+  `scripts/update.py`, which keeps their keys, branding, agents and reports, and
+  `scripts/update.py --undo` goes back.
 
 **Address input:** the search rejects listings at another street number and prefers the
 exact unit. If it can only find a different unit in the same building, the run stops with

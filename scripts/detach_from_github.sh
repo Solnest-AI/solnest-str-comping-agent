@@ -59,6 +59,26 @@ if [ "$(git branch --format='%(refname:short)' 2>/dev/null | grep -vxc main)" !=
     say "GitHub: kept attached. This copy has branches, commits or stashed work that are not on GitHub."
     exit 0
 fi
+# Last chance to ask git which files are the tool's. scripts/update.py reads
+# this manifest to know what it may replace or remove on the first update, and
+# which files the student edited since. Python is not installed yet (Step 1), so
+# git writes it: "<blob hash> <path>" per line, hashed as the bytes on disk.
+MANIFEST=".comping-files.txt"
+write_manifest() {
+    local tmp="$MANIFEST.tmp" paths hashes
+    paths="$(git ls-files -z | tr '\0' '\n')" || return 1
+    [ -n "$paths" ] || return 1
+    hashes="$(printf '%s\n' "$paths" | git hash-object --no-filters --stdin-paths)" || return 1
+    [ "$(printf '%s\n' "$paths" | wc -l | tr -d ' ')" = "$(printf '%s\n' "$hashes" | wc -l | tr -d ' ')" ] || return 1
+    {
+        echo "# Files the comping agent shipped (scripts/update.py). Do not edit."
+        paste -d' ' <(printf '%s\n' "$hashes") <(printf '%s\n' "$paths")
+    } > "$tmp" && mv -f "$tmp" "$MANIFEST"
+}
+if ! write_manifest; then
+    rm -f "$MANIFEST.tmp" "$MANIFEST"
+    say "GitHub: could not list the tool's files; the first update will replace files but remove none."
+fi
 git remote remove origin >/dev/null 2>&1 || true
 
 # Git makes its object files read-only; on Windows plain rm refuses them.
@@ -69,6 +89,6 @@ if [ -e .git ]; then
     say "        close other windows on this folder and run: bash scripts/detach_from_github.sh"
     exit 0
 fi
-say "GitHub: detached. This is now a plain folder, not linked to GitHub. To update later, paste the"
-say "        GitHub link into Claude Code and say \"update the comping agent\"."
+say "GitHub: detached. This is now a plain folder, not linked to GitHub. To update later, say"
+say "        \"update the comping agent\"."
 exit 0

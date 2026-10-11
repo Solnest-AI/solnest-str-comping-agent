@@ -1,0 +1,30 @@
+name: Release guard
+
+# Students update by tagged release (scripts/update.py). A tag whose VERSION
+# file was not bumped would leave every copy "behind" forever: the updater
+# refuses such a release rather than re-download it on every run, so no student
+# gets it at all. Catch it here, the moment the tag is pushed, not when a
+# student says "update the comping agent".
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  version-matches-tag:
+    name: VERSION matches the tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare VERSION with the tag
+        run: |
+          v="$(tr -d '[:space:]' < VERSION)"
+          if [ "v$v" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::VERSION says $v but the tag is $GITHUB_REF_NAME. Delete the tag and its release, bump VERSION in a PR, merge, tag again."
+            exit 1
+          fi
+          echo "OK - VERSION $v matches $GITHUB_REF_NAME."
