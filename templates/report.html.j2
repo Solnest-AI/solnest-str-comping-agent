@@ -649,7 +649,12 @@
     <!-- 1) Branded Header -->
     <header class="mb-10 rounded-3xl glass-card shadow-luxury overflow-hidden fade-in-up">
       <div class="luxury-header px-8 py-8 flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6">
-        <div class="flex flex-col sm:flex-row items-start gap-6">
+        {% set partner_logo = partner.logo_url | safe_url if partner else "" %}
+        {# Two logos beside the title squeeze it to three lines: stack them above it. #}
+        <div class="flex flex-col{% if not partner_logo %} sm:flex-row{% endif %} items-start gap-6">
+
+          {% if branding.logo_url or partner_logo %}
+          <div class="shrink-0 flex flex-wrap items-center gap-4">
           {% if branding.logo_url %}
           <div class="shrink-0 rounded-2xl{% if branding.logo_background %} px-5 py-4{% endif %}"
                {% if branding.logo_background %}style="background:{{ branding.logo_background }};"{% endif %}>
@@ -658,6 +663,22 @@
               alt="{{ branding.company_name }} Logo"
               class="h-16 md:h-20 w-auto max-w-[220px] object-contain"
             />
+          </div>
+          {% endif %}
+          {% if partner_logo %}
+          {# The x travels with the agent's logo, so on a phone they wrap together. #}
+          <div class="shrink-0 flex items-center gap-4">
+            {% if branding.logo_url %}<span class="text-2xl font-light" style="color:var(--sol-muted);" aria-hidden="true">&times;</span>{% endif %}
+            <div class="shrink-0 rounded-2xl{% if partner.logo_background %} px-5 py-4{% endif %}"
+                 {% if partner.logo_background %}style="background:{{ partner.logo_background }};"{% endif %}>
+              <img
+                src="{{ partner_logo }}"
+                alt="{{ partner.brokerage or partner.name }} Logo"
+                class="h-16 md:h-20 w-auto max-w-[220px] object-contain"
+              />
+            </div>
+          </div>
+          {% endif %}
           </div>
           {% endif %}
 
@@ -671,6 +692,16 @@
             <p class="text-base md:text-lg font-semibold mt-3" style="color:var(--sol-muted);">
               Subject: {{ property.bedrooms }} Bed / {{ property.bathrooms | format_bath }} Bath {{ property.property_type }} · STR Underwriting &amp; Comp Benchmarking
             </p>
+            {% if partner %}
+            <p class="text-sm md:text-base font-bold mt-3" style="color:var(--sol-forest);">
+              Prepared in partnership with {{ partner.name }}{% if partner.brokerage %}, {{ partner.brokerage }}{% endif %}
+            </p>
+            {% if partner.phone or partner.email %}
+            <p class="text-sm mt-1" style="color:var(--sol-muted);">
+              {{ partner.phone }}{% if partner.phone and partner.email %} · {% endif %}{{ partner.email }}
+            </p>
+            {% endif %}
+            {% endif %}
           </div>
         </div>
 
@@ -1186,6 +1217,16 @@
       <p class="text-xs text-gray-300 mt-2">
         <a href="{{ branding.website_url | safe_url }}" class="hover:text-sol-forest transition">{{ branding.website_url | replace("https://","") | replace("http://","") | trim("/") }}</a>
       </p>
+      {% endif %}
+      {% if partner %}
+      <p class="text-xs text-gray-400 font-medium mt-4">
+        In partnership with {{ partner.name }}{% if partner.brokerage %}, {{ partner.brokerage }}{% endif %}{% if partner.phone %} · {{ partner.phone }}{% endif %}{% if partner.email %} · {{ partner.email }}{% endif %}
+      </p>
+      {% if partner.website_url | safe_url %}
+      <p class="text-xs text-gray-300 mt-1">
+        <a href="{{ partner.website_url | safe_url }}" class="hover:text-sol-forest transition">{{ partner.website_url | replace("https://","") | replace("http://","") | trim("/") }}</a>
+      </p>
+      {% endif %}
       {% endif %}
       <p class="text-xs text-gray-300 mt-1">
         Report generated {{ report_date }}

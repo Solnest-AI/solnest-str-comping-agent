@@ -37,6 +37,8 @@ TOP_LEVEL = "str-comping-agent"
 NEVER_SHIP = (
     ".env",
     "branding.json",
+    # Agent profiles for co-branded reports: a real person's phone and email.
+    "partners",
     "AGENTS.md",
     "branding-logo.png",
     # Merge-time reference material. These are snapshots of the OLD public repo

@@ -311,6 +311,20 @@ specifically. Fix the JSON and re-run.
 
 ---
 
+## Co-branding for a real estate agent
+
+The report can carry a real estate agent's logo, name and contact line beside
+the user's own brand. Each agent is one file, `partners/<agent>.json`, written
+by `scripts/add_partner.py` from what the user says (`--list` shows them).
+Ask the user for the agent's name, brokerage, phone, email and website and
+**wait for the answers**: never look an agent up or fill in details yourself.
+Look at the logo it saves (`.cache/partner_logo.*`) and confirm with the user,
+then add `--partner <agent>` to the report command. The skill has the steps.
+`partners/` holds a real person's contact details: it is gitignored and never
+shipped.
+
+---
+
 ## CLI reference
 
 `--input` is the only required flag.
@@ -333,6 +347,7 @@ specifically. Fix the JSON and re-run.
 | `--allow-other-unit` | Accept a listing for a different unit at the same street address. The address search stops before AirROI and asks otherwise; only pass it after the user confirms that unit is a fair stand-in |
 | `--listing-url URL` | Link the report's "View Listing" button |
 | `--render DATA_JSON` | Re-render a report from its `*.report-data.json`, no AirROI calls. Pair with `--narratives` |
+| `--partner AGENT` | Co-brand with a real estate agent saved by `scripts/add_partner.py` (their name or a path). Free with `--render`, saved into the data file. `--no-partner` on a `--render` takes it off |
 | `--year-round` | The user says the property is listed all year: Nights Listed starts at 365 instead of its Airbnb open nights. Free with `--render`, saved into the data file. Only after asking |
 
 Run `"$PY" agent.py --help` if a flag here disagrees with the code; the code wins.
@@ -363,6 +378,7 @@ Run `"$PY" agent.py --help` if a flag here disagrees with the code; the code win
 | `report/email_sender.py` | Optional Gmail SMTP delivery |
 | `templates/report.html.j2` | The report template |
 | `scripts/brand_from_website.py` | Builds `branding.json` (name, logo, colours) from the student's website via Firecrawl |
+| `scripts/add_partner.py` / `partners.py` | Saves and validates real estate agent profiles for co-branded reports |
 | `scripts/package.py` | Builds the distribution zip from the git manifest |
 
 ### Data semantics you must not get wrong

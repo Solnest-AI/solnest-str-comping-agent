@@ -233,6 +233,7 @@ def render_report(data: ReportData) -> str:
         subject_performance=sp,
         occ_basis_text=occ_basis_text,
         nights_basis_text=nights_basis_text(calc, sp),
+        partner=data.partner,
         branding=config.BRANDING,
         property=data.property,
         rentalizer=data.rentalizer,

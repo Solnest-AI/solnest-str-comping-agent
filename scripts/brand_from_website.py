@@ -302,8 +302,11 @@ def read_brand(site: str) -> dict:
     return ((r.json() or {}).get("data") or {}).get("branding") or {}
 
 
-def fetch_logo(url: str) -> Path | None:
-    """Download the logo so it can be looked at; None if it is not an image."""
+def fetch_logo(url: str, stem: str = "brand_logo") -> Path | None:
+    """Download the logo so it can be looked at; None if it is not an image.
+
+    `stem` names the saved file: an agent's logo (scripts/add_partner.py) must
+    not replace the student's own .cache/brand_logo.*."""
     try:
         r = httpx.get(url, follow_redirects=True, timeout=30,
                       headers={"User-Agent": "Mozilla/5.0 (brand check)"})
@@ -314,9 +317,9 @@ def fetch_logo(url: str) -> Path | None:
         return None
     ext = {"image/svg+xml": ".svg", "image/jpeg": ".jpg", "image/webp": ".webp"}.get(kind, ".png")
     CACHE.mkdir(exist_ok=True)
-    for old in CACHE.glob("brand_logo.*"):
+    for old in CACHE.glob(f"{stem}.*"):
         old.unlink()
-    path = CACHE / f"brand_logo{ext}"
+    path = CACHE / f"{stem}{ext}"
     path.write_bytes(r.content)
     return path
 

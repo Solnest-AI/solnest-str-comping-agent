@@ -308,6 +308,23 @@ class MethodologyData(BaseModel):
     performance_drivers: list[str] = Field(default_factory=list)
 
 
+class PartnerBrand(BaseModel):
+    """A real estate agent co-branding one report (S2-027).
+
+    Loaded from partners/<agent>.json by partners.load_partner(), which
+    validates every field before it gets here. The student's own brand
+    (branding.json) still leads: colours, title and logo stay theirs, and the
+    agent's logo, name and contact line sit beside them.
+    """
+    name: str
+    brokerage: str = ""
+    phone: str = ""
+    email: str = ""
+    website_url: str = ""
+    logo_url: str = ""
+    logo_background: str = ""
+
+
 class ReportData(BaseModel):
     property: PropertyBasics
     rentalizer: RentalizerData
@@ -316,6 +333,8 @@ class ReportData(BaseModel):
     narratives: Narratives = Field(default_factory=Narratives)
     methodology: MethodologyData = Field(default_factory=MethodologyData)
     report_date: str = ""
+    # Saved with the report so a copy-only --render keeps the agent on it.
+    partner: Optional[PartnerBrand] = None
     seasonal_data: list[float] = Field(default_factory=list)      # 12 monthly occupancy values
 
     # The market spread behind seasonal_data, so the chart can shade a band
