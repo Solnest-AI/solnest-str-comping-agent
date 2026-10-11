@@ -323,6 +323,19 @@ then add `--partner <agent>` to the report command. The skill has the steps.
 `partners/` holds a real person's contact details: it is gitignored and never
 shipped.
 
+## Pro forma
+
+Under the revenue projection the report can show expenses, NOI and optional
+financing. **Every expense and financing number is the user's own**: the tool
+has no tax, insurance, HOA or expense data, so never estimate, look up or fill
+one in. Their standard rates go in `proforma.json` (copy
+`proforma.example.json`, plain numbers, `null` when not given); when it
+exists every report includes the pro forma. A property's own numbers go in
+`output/<slug>.proforma.json` and onto the pass 2 render with
+`--proforma "<that file>"`. A blank line is never a zero: NOI waits for it,
+and pass 1 prints `[Proforma] ASK THE USER for the blank numbers`. The skill
+has the steps. `proforma.json` is gitignored and never shipped.
+
 ---
 
 ## CLI reference
@@ -347,6 +360,7 @@ shipped.
 | `--allow-other-unit` | Accept a listing for a different unit at the same street address. The address search stops before AirROI and asks otherwise; only pass it after the user confirms that unit is a fair stand-in |
 | `--listing-url URL` | Link the report's "View Listing" button |
 | `--render DATA_JSON` | Re-render a report from its `*.report-data.json`, no AirROI calls. Pair with `--narratives` |
+| `--proforma [FILE]` | Add the pro forma: the saved rates in `proforma.json`, plus this property's numbers from FILE. On by itself when `proforma.json` exists. Free with `--render`, saved into the data file. `--no-proforma` leaves it out |
 | `--partner AGENT` | Co-brand with a real estate agent saved by `scripts/add_partner.py` (their name or a path). Free with `--render`, saved into the data file. `--no-partner` on a `--render` takes it off |
 | `--year-round` | The user says the property is listed all year: Nights Listed starts at 365 instead of its Airbnb open nights. Free with `--render`, saved into the data file. Only after asking |
 
@@ -378,6 +392,7 @@ Run `"$PY" agent.py --help` if a flag here disagrees with the code; the code win
 | `report/email_sender.py` | Optional Gmail SMTP delivery |
 | `templates/report.html.j2` | The report template |
 | `scripts/brand_from_website.py` | Builds `branding.json` (name, logo, colours) from the student's website via Firecrawl |
+| `generators/proforma.py` | Pro forma: loads and validates the user's numbers, and the NOI and financing arithmetic the page's JavaScript mirrors |
 | `scripts/add_partner.py` / `partners.py` | Saves and validates real estate agent profiles for co-branded reports |
 | `scripts/package.py` | Builds the distribution zip from the git manifest |
 

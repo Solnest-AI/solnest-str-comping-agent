@@ -159,6 +159,33 @@ contact line go in the header and footer. The user's own brand and colours stay 
 
 Agent profiles live in `partners/` in this folder only: a real person's phone and email.
 
+## Pro forma (expenses, NOI, financing)
+
+The report can carry a pro forma under the revenue projection: expense lines, net
+operating income, and optional financing (cap rate, debt service, cash flow,
+cash-on-cash). **Every expense and financing number is the user's own.** The tool has no
+tax, insurance, HOA or expense data for any property: never estimate, look up or fill in
+one yourself. A blank line stays blank (NOI waits for it); 0 means "none".
+
+1. **Their standard rates, once.** When the user first wants a pro forma, ask for the
+   numbers they use on every property: management %, platform fee %, cleaning cost per
+   stay and average nights per stay, repairs and maintenance %, supplies %, and if they
+   like their usual down payment %, interest rate and loan term. Wait for the answers.
+   Copy `proforma.example.json` to `proforma.json` and put in only what they said (plain
+   numbers, `null` for anything not given). From then on every report includes the pro
+   forma by itself.
+2. **This property's numbers.** If pass 1 printed `[Proforma] ASK THE USER for the blank
+   numbers`, ask for those (usually property tax, insurance, HOA, utilities, purchase
+   price, furnishing and setup) and wait. Write what they say to
+   `output/<slug>.proforma.json` (same keys, plain numbers), then add
+   `--proforma "output/<slug>.proforma.json"` to the pass 2 `--render` command. It is
+   free and saved into `report-data.json`. Anything still blank shows as "not set" and the
+   report says which lines are missing.
+3. If the run says the purchase price was pre-filled from the listing page, tell the user
+   and ask whether to replace it with their offer price.
+4. `--proforma` alone adds it with only the saved rates; `--no-proforma` leaves it out.
+   Anyone viewing the HTML report can also change the numbers in place before printing.
+
 ## Rules for the narrative copy
 
 The report is a client deliverable attached to real money decisions. These are not style
@@ -193,6 +220,7 @@ preferences.
 | `--exclude "keyword"` | Drop a specific comp by name keyword. |
 | `--market "Name"` | The market was misidentified. |
 | `--email someone@example.com` | Send the finished report. Needs Gmail configured. |
+| `--proforma [FILE]` / `--no-proforma` | Add the pro forma (saved rates in `proforma.json`, plus this property's numbers from FILE), or leave it out. Free on `--render`. See pro forma above. |
 | `--partner <agent>` / `--no-partner` | Co-brand with a real estate agent saved by `scripts/add_partner.py`, or take it off. Free on `--render`. See co-branding above. |
 | `--year-round` | The user said the property is listed all year (Airbnb plus VRBO, direct or other sites). Starts Nights Listed at 365. Free on `--render`. Only after asking (see pass 2). |
 

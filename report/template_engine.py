@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 import jinja2
 
+from generators import proforma
 from generators.narrative_brief import slugify
 from schema import ReportData
 import config
@@ -234,6 +235,21 @@ def render_report(data: ReportData) -> str:
         occ_basis_text=occ_basis_text,
         nights_basis_text=nights_basis_text(calc, sp),
         partner=data.partner,
+        proforma=data.proforma,
+        # Values printed before any JS runs (the emailed copy); the page's
+        # updateProforma() recomputes the same way on every slider move.
+        pf=(proforma.compute(data.proforma, initial_revenue, initial_occ_nights)
+            if data.proforma else None),
+        pf_lines=proforma.EXPENSE_LINES,
+        pf_fields=proforma.FIELDS,
+        pf_money=proforma.fmt_money,
+        pf_pct=proforma.fmt_pct,
+        pf_input=proforma.input_value,
+        pf_missing_text=proforma.missing_text,
+        pf_money_fields=proforma.MONEY_FIELDS,
+        pf_fin_fields=proforma.FINANCING_FIELDS,
+        pf_fin_labels=proforma.FINANCING_LABELS,
+        pf_js_lines=proforma.JS_LINES,
         branding=config.BRANDING,
         property=data.property,
         rentalizer=data.rentalizer,

@@ -635,16 +635,44 @@
       .metric[style*="grid-column"] { grid-column: auto !important; }
     }
 
+    /* Pro forma (S2-027): label | the student's numbers | annual amount. */
+    .pf-row {
+      display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.7fr) minmax(0, .8fr);
+      gap: .75rem; align-items: center; padding: .6rem 0;
+      border-bottom: 1px solid rgba(var(--brand-rgb), .08);
+    }
+    .pf-label { font-weight: 600; color: var(--sol-forest); }
+    .pf-inputs, .pf-fin { display: flex; flex-wrap: wrap; gap: .5rem 1rem; }
+    .pf-field { display: inline-flex; align-items: center; gap: .35rem; font-size: .8rem; color: var(--sol-muted); }
+    .pf-input {
+      width: 6.5rem; padding: .3rem .5rem; border: 1px solid rgba(var(--brand-rgb), .25);
+      border-radius: .5rem; background: #fff; color: var(--sol-forest); font-weight: 600; text-align: right;
+    }
+    .pf-amt { text-align: right; font-weight: 700; color: var(--sol-forest); font-variant-numeric: tabular-nums; }
+    .pf-missing { color: var(--sol-muted); font-weight: 500; font-style: italic; }
+    .pf-strong .pf-label, .pf-strong .pf-amt { font-weight: 800; }
+    .pf-noi { border-top: 2px solid rgba(var(--brand-rgb), .3); border-bottom: none; }
+    .pf-noi .pf-label, .pf-noi .pf-amt { font-size: 1.15rem; font-weight: 800; }
+    @media (max-width: 640px) {
+      .pf-row { grid-template-columns: minmax(0, 1fr) auto; }
+      .pf-label { grid-row: 1; grid-column: 1; }
+      .pf-amt { grid-row: 1; grid-column: 2; }
+      .pf-inputs { grid-row: 2; grid-column: 1 / -1; }
+    }
+
     @media print {
       body { background: white; }
       /* !important: the same elements carry Tailwind's flex / inline-flex,
          which load later and otherwise printed the buttons on every PDF. */
       .no-print { display: none !important; }
       /* Sections fade in from opacity 0; a PDF must never catch one mid-fade. */
-      .fade-in-up, .delay-1, .delay-2, .delay-3 {
+      .fade-in-up, .delay-1, .delay-2, .delay-3, .delay-4 {
         animation: none !important; opacity: 1 !important; transform: none !important;
       }
       .glass-card { background: white; border: 1px solid #e5e7eb; }
+      /* The proforma prints as figures, not as an empty form. */
+      .pf-input { border: none; background: transparent; padding: 0; }
+      .pf-input::placeholder { color: transparent; }
     }
   </style>
 </head>
@@ -1035,6 +1063,92 @@
           <div class="v">{{ property.currency }}<wbr><span id="revPar">{{ '{:,}'.format(initial_revpar) }}</span></div>
         </div>
       </div>
+      {% if proforma %}
+      <!-- Pro Forma -->
+      <div id="proforma" class="mt-10 pt-8" style="border-top:1px solid rgba(var(--brand-rgb), .15);">
+        <h3 class="section-title text-2xl md:text-3xl gradient-text">Pro Forma (Annual)</h3>
+        <p class="text-sm mt-1 mb-5" style="color:var(--sol-muted);">
+          Gross revenue follows the sliders above. Change any number below and the totals update.
+        </p>
+        <div class="pf-row pf-strong">
+          <span class="pf-label">Gross revenue (incl. cleaning and guest fees)</span>
+          <span class="pf-inputs"></span>
+          <span class="pf-amt" id="pfGross">{{ pf_money(pf.gross, property.currency) }}</span>
+        </div>
+        {% for key, label, fields, kind in pf_lines %}
+        {% set amt = pf.lines[loop.index0].amount %}
+        <div class="pf-row">
+          <span class="pf-label">{{ label }}</span>
+          <span class="pf-inputs">
+            {% for f in fields %}
+            <label class="pf-field">
+              {% if f in pf_money_fields %}<span>{{ property.currency }}</span>{% endif %}
+              <input type="number" class="pf-input" data-key="{{ f }}" value="{{ pf_input(proforma | attr(f)) }}"
+                     min="{{ pf_fields[f][0] }}" max="{{ pf_fields[f][1] }}" step="any" inputmode="decimal"
+                     placeholder="enter" aria-label="{{ label }}, {{ pf_fields[f][2] }}">
+              <span>{{ pf_fields[f][2] }}</span>
+            </label>
+            {% endfor %}
+          </span>
+          <span class="pf-amt{% if amt is none %} pf-missing{% endif %}" id="pfAmt-{{ key }}">{{ pf_money(amt, property.currency) }}</span>
+        </div>
+        {% endfor %}
+        <div class="pf-row pf-strong">
+          <span class="pf-label">Total operating expenses</span>
+          <span class="pf-inputs"></span>
+          <span class="pf-amt" id="pfTotal">{{ pf_money(pf.total_expenses, property.currency) }}</span>
+        </div>
+        <div class="pf-row pf-noi">
+          <span class="pf-label">Net operating income (NOI)</span>
+          <span class="pf-inputs"></span>
+          <span class="pf-amt" id="pfNoi">{{ pf_money(pf.noi, property.currency) }}</span>
+        </div>
+        <p id="pfStatus" class="text-xs mt-2" style="color:var(--sol-muted);">{{ pf_missing_text(pf.missing) }}</p>
+
+        <div class="text-sm font-bold uppercase tracking-wider mt-8 mb-3" style="color:var(--sol-forest);">Financing (optional)</div>
+        <div class="pf-fin">
+          {% for f in pf_fin_fields %}
+          <label class="pf-field">
+            <span class="font-semibold" style="color:var(--sol-forest);">{{ pf_fin_labels[f] }}</span>
+            {% if f in pf_money_fields %}<span>{{ property.currency }}</span>{% endif %}
+            <input type="number" class="pf-input" data-key="{{ f }}" value="{{ pf_input(proforma | attr(f)) }}"
+                   min="{{ pf_fields[f][0] }}" max="{{ pf_fields[f][1] }}" step="any" inputmode="decimal"
+                   placeholder="enter" aria-label="{{ pf_fin_labels[f] }}">
+            {% if pf_fields[f][2] %}<span>{{ pf_fields[f][2] }}</span>{% endif %}
+          </label>
+          {% endfor %}
+        </div>
+        {% if proforma.price_source == "listing" %}
+        <p class="text-xs mt-2" style="color:var(--sol-muted);">
+          Purchase price is pre-filled from the price shown on the listing page. Change it to the real offer price.
+        </p>
+        {% endif %}
+        <div class="metric-grid mt-5">
+          <div class="metric">
+            <div class="k">Cap rate (NOI / price)</div>
+            <div class="v" id="pfCapRate">{{ pf_pct(pf.cap_rate_pct) }}</div>
+          </div>
+          <div class="metric">
+            <div class="k">Annual debt service</div>
+            <div class="v" id="pfDebt">{{ pf_money(pf.debt_service, property.currency) }}</div>
+          </div>
+          <div class="metric">
+            <div class="k">Cash flow after debt</div>
+            <div class="v" id="pfCashFlow">{{ pf_money(pf.cash_flow, property.currency) }}</div>
+          </div>
+          <div class="metric">
+            <div class="k">Cash-on-cash return</div>
+            <div class="v" id="pfCoc">{{ pf_pct(pf.cash_on_cash_pct) }}</div>
+            <div class="text-xs mt-1" style="color:var(--sol-muted);">on <span id="pfInvested">{{ pf_money(pf.cash_invested, property.currency) }}</span> down plus setup</div>
+          </div>
+        </div>
+        <p class="text-xs mt-5 leading-relaxed" style="color:var(--sol-muted);">
+          Expense and financing figures are entered by {{ branding.company_name }} for this report, not market data, and can be changed above.
+          Estimates before income tax and depreciation. Results only show once every number they need is filled in. Not financial advice.
+        </p>
+      </div>
+      <!-- /Pro Forma -->
+      {% endif %}
     </section>
 
     <!-- 5) Chart Section -->
@@ -1241,6 +1355,77 @@
   </div>
 
   <script>
+    {%- if proforma %}
+    // Pro forma: mirrors generators/proforma.py compute() line for line. A
+    // blank input is a blank, never a zero.
+    const PF_CUR = {{ property.currency | tojson }};
+    const PF_LINES = {{ pf_js_lines | tojson }};
+    let pfGross = {{ pf.gross | tojson }}, pfOccupied = {{ initial_occ_nights | tojson }};
+    function pfVal(key) {
+      const el = document.querySelector('.pf-input[data-key="' + key + '"]');
+      if (!el || el.value.trim() === '') return null;
+      const v = parseFloat(el.value);
+      return Number.isFinite(v) ? v : null;
+    }
+    function pfMoney(v) {
+      if (v === null) return 'not set';
+      const w = Math.round(v);
+      return (w < 0 ? '-' : '') + PF_CUR + Math.abs(w).toLocaleString('en-US');
+    }
+    function pfPct(v) {
+      return v === null ? 'not set' : (Math.round(v * 10) / 10).toFixed(1) + '%';
+    }
+    function updateProforma(gross, occupied) {
+      pfGross = gross; pfOccupied = occupied;
+      let total = 0;
+      const missing = [];
+      for (const line of PF_LINES) {
+        const vals = line.fields.map(pfVal);
+        let amt = null;
+        if (!vals.includes(null)) {
+          if (line.kind === 'pct') amt = gross * vals[0] / 100;
+          else if (line.kind === 'cleaning') amt = vals[1] > 0 ? vals[0] * Math.round(occupied / vals[1]) : null;
+          else if (line.kind === 'monthly') amt = vals[0] * 12;
+          else amt = vals[0];
+        }
+        const el = document.getElementById('pfAmt-' + line.key);
+        el.textContent = pfMoney(amt);
+        el.classList.toggle('pf-missing', amt === null);
+        if (amt === null) missing.push(line.label); else total += amt;
+      }
+      const totalExp = missing.length ? null : total;
+      const noi = totalExp === null ? null : gross - totalExp;
+      const price = pfVal('purchase_price'), down = pfVal('down_payment_pct');
+      const rate = pfVal('interest_rate_pct'), years = pfVal('loan_years'), startup = pfVal('startup_costs');
+      const cap = (noi !== null && price) ? noi / price * 100 : null;
+      let debt = null;
+      if (price !== null && down !== null && rate !== null && years !== null && years > 0) {
+        const loan = price * (1 - down / 100);
+        if (loan <= 0) debt = 0;
+        else {
+          const n = years * 12, r = rate / 100 / 12;
+          debt = (r === 0 ? loan / n : loan * r / (1 - Math.pow(1 + r, -n))) * 12;
+        }
+      }
+      const cash = (noi !== null && debt !== null) ? noi - debt : null;
+      const invested = (price !== null && down !== null && startup !== null) ? price * down / 100 + startup : null;
+      const coc = (cash !== null && invested) ? cash / invested * 100 : null;
+      document.getElementById('pfGross').textContent = pfMoney(gross);
+      document.getElementById('pfTotal').textContent = pfMoney(totalExp);
+      document.getElementById('pfNoi').textContent = pfMoney(noi);
+      document.getElementById('pfCapRate').textContent = pfPct(cap);
+      document.getElementById('pfDebt').textContent = pfMoney(debt);
+      document.getElementById('pfCashFlow').textContent = pfMoney(cash);
+      document.getElementById('pfCoc').textContent = pfPct(coc);
+      document.getElementById('pfInvested').textContent = pfMoney(invested);
+      document.getElementById('pfStatus').textContent = missing.length
+        ? 'Fill in the blank lines to see NOI (enter 0 for a cost that does not apply): ' + missing.join(', ') + '.'
+        : '';
+    }
+    document.querySelectorAll('.pf-input').forEach(
+      el => el.addEventListener('input', () => updateProforma(pfGross, pfOccupied)));
+    {%- endif %}
+
     // Revenue Calculator with 3 Toggles
     const occSlider = document.getElementById('occSlider');
     const adrSlider = document.getElementById('adrSlider');
@@ -1280,6 +1465,7 @@
       occNights.textContent = booked;
       revPerNight.textContent = adr.toLocaleString();
       revPar.textContent = rpa.toLocaleString();
+      if (typeof updateProforma === 'function') updateProforma(revenue, booked);
     }
 
     [occSlider, adrSlider, daysSlider].forEach(s => s.addEventListener('input', updateCalculator));

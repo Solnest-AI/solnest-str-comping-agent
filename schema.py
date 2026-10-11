@@ -138,6 +138,9 @@ class PropertyBasics(BaseModel):
     rating: Optional[float] = None
     review_count: Optional[int] = None
     sqft: Optional[int] = None
+    # The price on a Zillow/Realtor page (list price or the site's estimate).
+    # Only used to pre-fill the proforma's purchase price, labelled as such.
+    list_price: Optional[float] = None
     is_superhost: bool = False
     amenities: list[str] = Field(default_factory=list)
     # Premium features the subject's own listing shows it does NOT have
@@ -308,6 +311,34 @@ class MethodologyData(BaseModel):
     performance_drivers: list[str] = Field(default_factory=list)
 
 
+class ProformaInputs(BaseModel):
+    """The student's expense and financing figures for one report (S2-027).
+
+    Every field is the student's own number (generators/proforma.py loads and
+    validates them). None is a BLANK, never a zero: NOI waits until every
+    expense line has a number. Percentages are of fee-inclusive gross revenue.
+    """
+    management_pct: Optional[float] = None
+    platform_fee_pct: Optional[float] = None
+    cleaning_per_stay: Optional[float] = None
+    avg_stay_nights: Optional[float] = None
+    utilities_monthly: Optional[float] = None
+    insurance_annual: Optional[float] = None
+    property_tax_annual: Optional[float] = None
+    hoa_monthly: Optional[float] = None
+    maintenance_pct: Optional[float] = None
+    supplies_pct: Optional[float] = None
+    other_annual: Optional[float] = None
+    purchase_price: Optional[float] = None
+    down_payment_pct: Optional[float] = None
+    interest_rate_pct: Optional[float] = None
+    loan_years: Optional[float] = None
+    startup_costs: Optional[float] = None
+    # "listing" when purchase_price came from the price on the listing page,
+    # so the report can say so; "" when the student gave it.
+    price_source: str = ""
+
+
 class PartnerBrand(BaseModel):
     """A real estate agent co-branding one report (S2-027).
 
@@ -335,6 +366,8 @@ class ReportData(BaseModel):
     report_date: str = ""
     # Saved with the report so a copy-only --render keeps the agent on it.
     partner: Optional[PartnerBrand] = None
+    # None = no proforma block; saved for the same reason.
+    proforma: Optional[ProformaInputs] = None
     seasonal_data: list[float] = Field(default_factory=list)      # 12 monthly occupancy values
 
     # The market spread behind seasonal_data, so the chart can shade a band
