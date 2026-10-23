@@ -129,6 +129,20 @@ GMAIL_APP_PASSWORD: str = _get("GMAIL_APP_PASSWORD")
 
 # ── Output ──
 OUTPUT_DIR: Path = Path(_get("OUTPUT_DIR", "./output"))
+# Report file name before the address, e.g. STR-Investment-Report. Blank keeps
+# "<Company>-Report".
+REPORT_FILENAME_PREFIX: str = _get("REPORT_FILENAME_PREFIX")
+
+# ── Operator options (all off unless set in .env) ──
+_ON = {"1", "true", "yes", "on"}
+# Conservative / Base / Optimistic cards from the comps' actual trailing year,
+# with the calculator opening on the Base Case.
+PROJECTION_TIERS: bool = _get("PROJECTION_TIERS").lower() in _ON
+# The STR permitting pre-check (regulations.py) and its banner.
+PERMITTING_CHECK: bool = _get("PERMITTING_CHECK").lower() in _ON
+# Comp-name keywords dropped on every run, on top of --exclude
+# (e.g. a manager whose listings are mostly booked direct).
+COMP_EXCLUDE: str = _get("COMP_EXCLUDE")
 
 # ── HTTP ──
 HTTP_TIMEOUT: int = 30

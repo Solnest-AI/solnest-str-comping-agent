@@ -356,6 +356,39 @@ class PartnerBrand(BaseModel):
     logo_background: str = ""
 
 
+class RevenueProjection(BaseModel):
+    """Conservative / Base / Optimistic from the comps' actual trailing year.
+
+    Only built when PROJECTION_TIERS is on in .env. Each tier's revenue is a
+    percentile of observed revenue; its ADR is back-solved from that revenue at
+    the tier's occupancy, so every card multiplies back to its own headline.
+    """
+    conservative: float = 0                          # 25th percentile of comp revenues
+    base_case: float = 0                             # median of comp revenues
+    optimistic: float = 0                            # 75th percentile of comp revenues
+    conservative_adr: float = 0
+    base_case_adr: float = 0
+    optimistic_adr: float = 0
+    conservative_occ: float = 0
+    base_case_occ: float = 0
+    optimistic_occ: float = 0
+    airroi_estimate: float = 0                       # AirROI's model estimate (footnote)
+    airroi_divergence_pct: float = 0                 # % divergence from the comp median
+    airroi_divergence_flag: bool = False             # True above 30%
+    source_description: str = "Based on trailing 12-month performance of 6 comparable properties"
+
+
+class PermittingVerdict(BaseModel):
+    """STR permitting pre-check for the subject location (PERMITTING_CHECK on)."""
+    status: str = "unknown"                          # permitted | restricted | prohibited | unknown
+    jurisdiction: str = ""
+    headline: str = ""
+    details: list[str] = Field(default_factory=list)
+    source_url: str = ""
+    registry_note: str = ""
+    verify_note: str = ""
+
+
 class ReportData(BaseModel):
     property: PropertyBasics
     rentalizer: RentalizerData
@@ -368,6 +401,12 @@ class ReportData(BaseModel):
     partner: Optional[PartnerBrand] = None
     # None = no proforma block; saved for the same reason.
     proforma: Optional[ProformaInputs] = None
+    # None = no tier cards (PROJECTION_TIERS off) / no permitting banner.
+    projection: Optional[RevenueProjection] = None
+    permitting: Optional[PermittingVerdict] = None
+    # The file pass 1 wrote, so --render rewrites that report instead of
+    # overwriting a same-day report of the same property.
+    report_file: str = ""
     seasonal_data: list[float] = Field(default_factory=list)      # 12 monthly occupancy values
 
     # The market spread behind seasonal_data, so the chart can shade a band

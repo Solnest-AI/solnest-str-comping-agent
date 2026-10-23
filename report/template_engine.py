@@ -1,6 +1,7 @@
 """Jinja2 template rendering for the HTML report."""
 
 import math
+import re
 import statistics
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
@@ -35,6 +36,16 @@ def safe_url(value) -> str:
     except ValueError:
         return ""
     return url if parts.scheme in ("http", "https") and parts.netloc else ""
+
+
+_EMBEDDED_IMAGE = re.compile(r"data:image/(?:jpeg|png|webp|gif);base64,[A-Za-z0-9+/=]+")
+
+
+def safe_img_src(value) -> str:
+    """safe_url, plus an embedded raster image (--hero-url with a local file).
+    SVG is left out: an SVG data URI can carry script."""
+    url = str(value or "").strip()
+    return url if _EMBEDDED_IMAGE.fullmatch(url) else safe_url(url)
 
 
 def format_currency_k(value: float, prefix: str = "CA$") -> str:
@@ -212,6 +223,7 @@ def render_report(data: ReportData) -> str:
     env.filters["rgb"] = rgb
     env.filters["lighten"] = lighten
     env.filters["safe_url"] = safe_url
+    env.filters["safe_img_src"] = safe_img_src
     env.globals["revenue_breakdown"] = revenue_breakdown
 
     template = env.get_template("report.html.j2")
@@ -235,6 +247,8 @@ def render_report(data: ReportData) -> str:
         occ_basis_text=occ_basis_text,
         nights_basis_text=nights_basis_text(calc, sp),
         partner=data.partner,
+        projection=data.projection,
+        permitting=data.permitting,
         proforma=data.proforma,
         # Values printed before any JS runs (the emailed copy); the page's
         # updateProforma() recomputes the same way on every slider move.
@@ -296,15 +310,15 @@ def _comp_summary(data: ReportData) -> dict | None:
     }
 
 
-def save_report(data: ReportData, output_dir: Path) -> Path:
-    """Render and save the report HTML. Returns the output file path.
+def report_filename(data: ReportData) -> str:
+    """The report's file name: the one pass 1 reserved, else a fresh one.
 
     Filename priority: subject's short_address (the listing name for Airbnb-URL
     inputs, the address for address inputs) > market name > generic "report".
-    Falls back gracefully if any source is empty.
+    REPORT_FILENAME_PREFIX in .env replaces the "<Company>-Report" prefix.
     """
-    output_dir.mkdir(parents=True, exist_ok=True)
-
+    if data.report_file:
+        return data.report_file
     # Prefer short_address (which is the Airbnb listing name for URL inputs,
     # the street address for address inputs). Drop "Unknown Market" sentinel.
     identity = (
@@ -315,8 +329,25 @@ def save_report(data: ReportData, output_dir: Path) -> Path:
     slug = slugify(identity)
     today = date.today().isoformat()
     brand_slug = slugify(config.BRANDING.get("company_name", "STR"), max_len=20) or "STR"
-    filename = f"{brand_slug}-Report-{slug}-{today}.html"
-    output_path = output_dir / filename
+    prefix = config.REPORT_FILENAME_PREFIX or f"{brand_slug}-Report"
+    return f"{prefix}-{slug}-{today}.html"
+
+
+def reserve_report_filename(data: ReportData, output_dir: Path) -> str:
+    """A file name in `output_dir` no earlier report has: a same-day re-run of
+    the same property gets -2, -3 rather than replacing the report already
+    there (possibly already sent to a client)."""
+    name = report_filename(data.model_copy(update={"report_file": ""}))
+    stem, n = name[:-len(".html")], 2
+    while (Path(output_dir) / name).exists():
+        name, n = f"{stem}-{n}.html", n + 1
+    return name
+
+
+def save_report(data: ReportData, output_dir: Path) -> Path:
+    """Render and save the report HTML. Returns the output file path."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / report_filename(data)
 
     html = render_report(data)
     output_path.write_text(html, encoding="utf-8")

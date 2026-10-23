@@ -3,7 +3,7 @@
 import math
 import statistics
 
-from schema import CompProperty, RentalizerData, PropertyBasics, CalculatorDefaults
+from schema import CompProperty, RentalizerData, PropertyBasics, CalculatorDefaults, RevenueProjection
 
 
 def _round_down(value: float, step: int) -> int:
@@ -356,6 +356,96 @@ def apply_year_round(calc: CalculatorDefaults) -> CalculatorDefaults:
     return calc.model_copy(update={
         "days_default": calc.days_max,
         "days_basis": "year_round",
+    })
+
+
+def _percentile(values: list[float], pct: float) -> float:
+    """Linear-interpolated percentile of an already sorted list."""
+    idx = pct / 100 * (len(values) - 1)
+    low = int(idx)
+    high = min(low + 1, len(values) - 1)
+    return values[low] + (idx - low) * (values[high] - values[low])
+
+
+def _occupied_nights(days: int, occ_pct: float) -> int:
+    """Booked nights exactly as report.html.j2's updateCalculator() counts them."""
+    return math.floor(days * occ_pct / 100 + 0.5)
+
+
+def derive_revenue_projection(
+    comps: list[CompProperty],
+    rentalizer: RentalizerData,
+    days: int = 365,
+) -> RevenueProjection:
+    """Conservative / Base / Optimistic from the comps' actual trailing year
+    (PROJECTION_TIERS). Revenue is the 25th / 50th / 75th percentile of the
+    comps' observed revenue and occupancy the same percentiles of theirs.
+
+    Three percentiles of three different sorts do not multiply back to each
+    other: a card reading "CA$66,712 / 31% occ / CA$493 ADR" was arithmetically
+    false (0.31 x 365 x 493 = CA$55,780). So each tier's ADR is back-solved
+    from its own revenue at its own occupancy over `days` (the calculator's
+    Nights Listed), and occupancy carries the spread between tiers. AirROI's
+    model estimate stays as a footnote, flagged above 30% divergence.
+    """
+    airroi_est = rentalizer.adr * 365 * (rentalizer.occupancy_pct / 100)
+    revs = sorted(c.annual_revenue for c in comps if c.annual_revenue > 0)
+    occs = sorted(c.occupancy_pct for c in comps if c.annual_revenue > 0)
+    if not revs:
+        return RevenueProjection(
+            base_case=round(airroi_est),
+            base_case_adr=round(rentalizer.adr),
+            base_case_occ=round(rentalizer.occupancy_pct),
+            airroi_estimate=round(airroi_est),
+            source_description="Based on the AirROI market estimate (no comparable revenue available)",
+        )
+
+    def tier(pct: float) -> tuple[int, int, int]:
+        revenue = round(_percentile(revs, pct))
+        occ = round(_percentile(occs, pct))
+        nights = _occupied_nights(days, occ)
+        adr = round(revenue / nights) if nights else round(rentalizer.adr)
+        return revenue, occ, adr
+
+    (c_rev, c_occ, c_adr), (b_rev, b_occ, b_adr), (o_rev, o_occ, o_adr) = (
+        tier(25), tier(50), tier(75))
+    divergence = round(abs(airroi_est - b_rev) / b_rev * 100, 1) if b_rev else 0.0
+    return RevenueProjection(
+        conservative=c_rev, base_case=b_rev, optimistic=o_rev,
+        conservative_adr=c_adr, base_case_adr=b_adr, optimistic_adr=o_adr,
+        conservative_occ=c_occ, base_case_occ=b_occ, optimistic_occ=o_occ,
+        airroi_estimate=round(airroi_est),
+        airroi_divergence_pct=divergence,
+        airroi_divergence_flag=divergence > 30,
+        source_description=(f"Based on trailing 12-month performance of {len(revs)} "
+                            f"comparable properties"),
+    )
+
+
+def align_calculator_to_base_case(
+    calc: CalculatorDefaults, projection: RevenueProjection,
+) -> CalculatorDefaults:
+    """Open the calculator on the Base Case, so the report never shows two
+    different headline numbers (a CA$77k Base Case above a CA$47k calculator,
+    2026-06-17). The sliders start at the Base Case's occupancy and its
+    back-solved ADR, with a 1-dollar ADR step so the browser does not snap the
+    default to a grid value nobody computed. Bounds widen to bracket them.
+    """
+    occ = int(projection.base_case_occ)
+    nights = _occupied_nights(calc.days_default, occ)
+    if not projection.base_case or not nights:
+        return calc
+    adr = round(projection.base_case / nights)
+    return calc.model_copy(update={
+        "occ_default": occ,
+        "occ_min": min(calc.occ_min, occ),
+        "occ_max": max(calc.occ_max, occ),
+        "adr_default": adr,
+        "adr_min": min(calc.adr_min, adr),
+        "adr_max": max(calc.adr_max, adr),
+        "adr_step": 1,
+        "occ_basis": "comp_set",
+        "adr_basis": "base_case",
     })
 
 

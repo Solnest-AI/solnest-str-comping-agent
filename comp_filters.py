@@ -677,10 +677,14 @@ def apply_keyword_exclusions(
     comps: Iterable,
     exclude_terms: Sequence[str],
 ) -> tuple[list, list[str]]:
-    """Drop comps whose listing NAME contains any of `exclude_terms`.
+    """Drop comps whose listing NAME or HOST contains any of `exclude_terms`.
 
     Case-insensitive substring match, so `--exclude "oversized"` and a full
-    listing name both work. Returns (kept, names_dropped) in input order.
+    listing name both work. The host name is matched too: a manager names
+    itself in some titles and not others ("Stone's Throw #55 | 3 Peaks
+    Rentals", but "The Solstice Lodge at Altitude #21", same host), so
+    `--exclude "3 Peaks"` has to reach all of them. Returns (kept,
+    names_dropped) in input order.
     """
     terms = [t.strip().lower() for t in exclude_terms if t and t.strip()]
     if not terms:
@@ -689,7 +693,10 @@ def apply_keyword_exclusions(
     dropped: list[str] = []
     for comp in comps:
         name, _, _ = extract_listing_fields(comp)
-        if any(t in name.lower() for t in terms):
+        host = ""
+        if isinstance(comp, dict):
+            host = str((comp.get("host_info") or {}).get("host_name") or comp.get("host_name") or "")
+        if any(t in name.lower() or t in host.lower() for t in terms):
             dropped.append(name)
             continue
         kept.append(comp)

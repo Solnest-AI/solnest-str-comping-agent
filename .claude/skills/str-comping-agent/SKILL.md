@@ -223,6 +223,19 @@ preferences.
 | `--proforma [FILE]` / `--no-proforma` | Add the pro forma (saved rates in `proforma.json`, plus this property's numbers from FILE), or leave it out. Free on `--render`. See pro forma above. |
 | `--partner <agent>` / `--no-partner` | Co-brand with a real estate agent saved by `scripts/add_partner.py`, or take it off. Free on `--render`. See co-branding above. |
 | `--year-round` | The user said the property is listed all year (Airbnb plus VRBO, direct or other sites). Starts Nights Listed at 365. Free on `--render`. Only after asking (see pass 2). |
+| `--pin-comps <ids>` | The user wants specific listings in the comp set (e.g. a unit in the same building). AirROI listing ids, in order. |
+| `--address-label "..."` | The found address reads badly ("5050 VALLEY Drive Unit# 2"): the report shows this instead. |
+| `--sqft N` | The listing's square footage is wrong or missing. |
+| `--hero-url <file>` | A local photo instead of a URL: embedded in the report so it cannot break later. |
+| `--output-dir <path>` | A test run that must stay out of the user's reports folder. |
+| `--pdf` | The user wants a PDF too. Needs Playwright, see `report/pdf_export.py`. |
+
+A report already on disk is never replaced: a same-day re-run is saved with `-2`, `-3`, and
+pass 2 rewrites the report its own pass 1 wrote. Operator options in `.env` (`.env.example`
+lists them, all off when blank) can add Conservative / Base / Optimistic tier cards
+(`PROJECTION_TIERS`), an STR-permitting check (`PERMITTING_CHECK`), always-excluded comp
+keywords (`COMP_EXCLUDE`) and a file-name prefix (`REPORT_FILENAME_PREFIX`). With tiers on,
+the Base Case is the headline: quote it, and the Conservative to Optimistic range, in your copy.
 
 ## Reading the output
 

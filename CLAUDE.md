@@ -372,18 +372,33 @@ has the steps. `proforma.json` is gitignored and never shipped.
 | `--market "City"` | Override market detection |
 | `--no-cache` | Bypass the 24h vendor-response cache and force fresh (paid) AirROI calls |
 | `--require "pool,hot_tub"` | Require comps to have these features |
-| `--exclude "oceanfront,beachfront"` | Drop comps whose names contain these keywords (alias `--exclude-comps`; also takes a full listing name to drop one specific comp) |
+| `--exclude "oceanfront,beachfront"` | Drop comps whose names or hosts contain these keywords (alias `--exclude-comps`; also takes a full listing name to drop one specific comp) |
 | `--no-feature-filter` | Disable the automatic must-have feature filter |
 | `--subject-on-water` | Declare the subject is on water (skips the auto water-proximity filter) |
 | `--allow-oceanfront-comps` | Keep waterfront comps even when the subject is inland |
 | `--currency "$"` / `"CA$"` | Override currency (auto-detected from the address) |
-| `--hero-url URL` | Supply the hero photo when the listing scrape is blocked, or when the run stops with "Subject photo refused" |
+| `--hero-url URL` | Supply the hero photo when the listing scrape is blocked, or when the run stops with "Subject photo refused". A local image file also works: it is embedded in the report |
 | `--allow-other-unit` | Accept a listing for a different unit at the same street address. The address search stops before AirROI and asks otherwise; only pass it after the user confirms that unit is a fair stand-in |
 | `--listing-url URL` | Link the report's "View Listing" button |
 | `--render DATA_JSON` | Re-render a report from its `*.report-data.json`, no AirROI calls. Pair with `--narratives` |
 | `--proforma [FILE]` | Add the pro forma: the saved rates in `proforma.json`, plus this property's numbers from FILE. On by itself when `proforma.json` exists. Free with `--render`, saved into the data file. `--no-proforma` leaves it out |
 | `--partner AGENT` | Co-brand with a real estate agent saved by `scripts/add_partner.py` (their name or a path). Free with `--render`, saved into the data file. `--no-partner` on a `--render` takes it off |
 | `--year-round` | The user says the property is listed all year: Nights Listed starts at 365 instead of its Airbnb open nights. Free with `--render`, saved into the data file. Only after asking |
+| `--pin-comps IDS` | Force these AirROI listing ids into the comp set, in order (e.g. a unit in the same building). They still need a live listing and photo |
+| `--address-label "TEXT"` | The address the report shows (headline, title, file name). Lookups still use the found address |
+| `--sqft N` | Override the subject's square footage |
+| `--output-dir PATH` | Write this report somewhere other than `OUTPUT_DIR` (a test run). `--render` writes beside its data file |
+| `--pdf` | Also save a PDF next to the HTML. Needs Playwright (see `report/pdf_export.py`) |
+
+A report already on disk is never replaced: a same-day re-run of the same property is
+saved with `-2`, `-3`. `--render` rewrites the report its own pass 1 wrote.
+
+Operator options in `.env`, all off when blank (see `.env.example`):
+`REPORT_FILENAME_PREFIX` (file name before the address), `PROJECTION_TIERS=on`
+(Conservative / Base / Optimistic cards from the comps' actual trailing year, and the
+calculator opens on the Base Case), `PERMITTING_CHECK=on` (the verified STR-permitting
+table in `regulations.py` and its banner) and `COMP_EXCLUDE` (comp-name keywords dropped
+on every run).
 
 Run `"$PY" agent.py --help` if a flag here disagrees with the code; the code wins.
 

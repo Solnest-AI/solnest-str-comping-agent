@@ -11,7 +11,9 @@ Usage:
 
 import argparse
 import asyncio
+import base64
 import importlib.util
+import io
 import os
 import re
 import sys
@@ -45,7 +47,8 @@ import comp_similarity
 
 from generators.calculator import (apply_year_round, derive_calculator_defaults,
                                    derive_seasonal_data_with_basis, derive_season_labels,
-                                   market_occupancy_band, market_months_missing)
+                                   market_occupancy_band, market_months_missing,
+                                   derive_revenue_projection, align_calculator_to_base_case)
 from generators.narratives import (
     generate_narratives, load_narratives_from_file, NarrativeFileError,
 )
@@ -56,8 +59,9 @@ from validators.sanity import (
     check_subject_hero, run_phase_a, run_phase_b, write_failure_report, validate_calculator_defaults,
     url_ok,
 )
-from report.template_engine import save_report
+from report.template_engine import reserve_report_filename, save_report
 from report.email_sender import send_report_email
+from regulations import check_str_permitting
 
 # Force UTF-8 output on Windows (cp1252 can't encode emoji in listing names).
 # reconfigure() keeps line buffering; a fresh TextIOWrapper did not, so a piped
@@ -83,6 +87,78 @@ def _listing_id(c: dict) -> str:
     """The Airbnb listing id of a raw AirROI listing or a mapped scorer dict."""
     li = c.get("listing_info") or {}
     return str(li.get("listing_id") or c.get("airbnbId") or "")
+
+
+def _pin_ids(args) -> list[str]:
+    return [s.strip() for s in (getattr(args, "pin_comps", None) or "").split(",") if s.strip()]
+
+
+def _pin_comps(pin_ids: list[str], result: dict, pool_unfiltered: list[dict],
+               subject_for_scoring: dict) -> list[str]:
+    """--pin-comps: move these AirROI listing ids to the front of the ranking,
+    whatever the scorer and the pool filters made of them, and return the ids
+    that were found. A comp in the same building is usually the most relevant
+    one a person would want shown even when the scorer docks it (Trappers
+    Landing #23, 2026-09-25). Pinned comps still need a live listing and photo.
+    """
+    if not pin_ids:
+        return []
+    ranked_by_id = {_listing_id(c): c for c in result["ranked"]}
+    failed_by_id = {_listing_id(c): c for c in result.get("hard_fails", [])}
+    raw_by_id = {_listing_id(c): c for c in pool_unfiltered}
+    pinned, missing = [], []
+    for pid in pin_ids:
+        cand = ranked_by_id.get(pid) or failed_by_id.get(pid)
+        if cand is None and pid in raw_by_id:
+            # Dropped by a pool filter (feature, water, --exclude): score it alone.
+            scored = rank_comps(subject_for_scoring, map_batch_for_scorer([raw_by_id[pid]]), top_n=1)
+            cand = next(iter(scored["ranked"] or scored["hard_fails"]), None)
+        if cand is None:
+            missing.append(pid)
+            continue
+        cand["hard_fail"] = False
+        cand["pinned"] = True
+        pinned.append(cand)
+    pinned_objs = {id(c) for c in pinned}
+    result["ranked"] = pinned + [c for c in result["ranked"] if id(c) not in pinned_objs]
+    result["hard_fails"] = [c for c in result.get("hard_fails", []) if id(c) not in pinned_objs]
+    print(f"[Scorer] Pinned {len(pinned)}/{len(pin_ids)} comps to the front: "
+          f"{[c.get('name', '?')[:35] for c in pinned]}")
+    if missing:
+        print(f"[Scorer] WARNING: --pin-comps ids not in the candidate pool: {missing}")
+    return [_listing_id(c) for c in pinned]
+
+
+def _embed_local_hero(path: str, max_width: int = 1600, quality: int = 85) -> str:
+    """A local image file as a self-contained data: URI, so the hero travels
+    with the emailed HTML and cannot break when a hotlinked host changes.
+
+    With Pillow the image is downscaled to max_width and re-encoded as JPEG to
+    keep the report small; without it the raw bytes are embedded.
+    """
+    try:
+        from PIL import Image  # optional dependency
+        with Image.open(path) as im:
+            im = im.convert("RGB")
+            if im.width > max_width:
+                im = im.resize((max_width, int(im.height * max_width / im.width)), Image.LANCZOS)
+            buf = io.BytesIO()
+            im.save(buf, format="JPEG", quality=quality, optimize=True)
+            raw, mime = buf.getvalue(), "image/jpeg"
+    except Exception:
+        raw = Path(path).read_bytes()
+        ext = Path(path).suffix.lower().lstrip(".")
+        mime = {"png": "image/png", "webp": "image/webp", "gif": "image/gif"}.get(ext, "image/jpeg")
+    return f"data:{mime};base64," + base64.b64encode(raw).decode("ascii")
+
+
+def _hero_from_arg(value: str) -> str:
+    """--hero-url: a URL as given, or a local image file embedded."""
+    if value and not value.startswith(("http://", "https://", "data:")) and Path(value).is_file():
+        hero = _embed_local_hero(value)
+        print(f"[Hero] Embedded local image ({len(hero) // 1024} KB): {value}")
+        return hero
+    return value
 
 
 def _airroi_currency(prop: PropertyBasics) -> str:
@@ -344,11 +420,12 @@ def _require_details(prop: PropertyBasics) -> None:
 # ── Subject enrichment ────────────────────────────────────────────────
 
 def _apply_size_overrides(prop: PropertyBasics, args) -> None:
-    """--beds/--baths/--guests/--market are overrides: they always win."""
+    """--beds/--baths/--guests/--market/--sqft are overrides: they always win."""
     if args.beds:   prop.bedrooms = args.beds
     if args.baths:  prop.bathrooms = args.baths
     if args.guests: prop.max_guests = args.guests
     if args.market: prop.market = args.market
+    if getattr(args, "sqft", None): prop.sqft = args.sqft
 
 
 def _subject_from_airroi(data: dict, raw: str, listing_id: int, args) -> PropertyBasics:
@@ -569,7 +646,7 @@ async def _resolve_subject(args) -> PropertyBasics:
     # Manual overrides from CLI flags (always take precedence). The Airbnb
     # path returned before these, so --hero-url could not fix a refused photo.
     if args.hero_url:
-        prop.hero_image_url = args.hero_url
+        prop.hero_image_url = _hero_from_arg(args.hero_url)
     if args.listing_url:
         prop.listing_url = args.listing_url
 
@@ -744,6 +821,10 @@ async def _render_only(args) -> None:
 
     print(f"[Render] Loaded pipeline output from {data_path.name} "
           f"({len(report_data.comps)} comps, no API calls needed)")
+    # The report goes beside its data file (where pass 1 wrote it), so a run
+    # made with --output-dir is re-rendered in place without repeating it.
+    if not getattr(args, "output_dir", None):
+        config.OUTPUT_DIR = data_path.parent
 
     before = report_data.calculator
     report_data.calculator = _apply_host_overrides(args, before)
@@ -751,6 +832,12 @@ async def _render_only(args) -> None:
     if changed_data:
         print(f"[Render] Nights listed set to {report_data.calculator.days_default} "
               f"(listed year-round, per the host)")
+        if report_data.projection is not None:
+            # The tier ADRs and the calculator's opening rate depend on Nights Listed.
+            report_data.projection = derive_revenue_projection(
+                report_data.comps, report_data.rentalizer, report_data.calculator.days_default)
+            report_data.calculator = align_calculator_to_base_case(
+                report_data.calculator, report_data.projection)
 
     if getattr(args, "partner", None):
         report_data.partner = _resolve_partner(args)
@@ -792,6 +879,7 @@ async def _render_only(args) -> None:
         data_path.write_text(report_data.model_dump_json(indent=1), encoding="utf-8")
         print(f"[Render] Saved to {data_path.name}: later re-renders keep it")
 
+    await _maybe_pdf(args, output_path)
     if args.email:
         print(f"\n--- Emailing report to {args.email} ---")
         try:
@@ -827,9 +915,9 @@ Examples:
                         help="Market name override (e.g. 'Sun Peaks')")
     # ── Comp-set filters (ported from the public release) ──────────────
     parser.add_argument("--exclude", "--exclude-comps", default=None, dest="exclude",
-                        help="Comma-separated keywords to drop from comp listing names "
-                             "(e.g. 'oceanfront,beachfront'). Also accepts a full listing "
-                             "name to drop one specific comp.")
+                        help="Comma-separated keywords to drop from comp listing names or "
+                             "host names (e.g. 'oceanfront,beachfront'). Also accepts a full "
+                             "listing name to drop one specific comp.")
     parser.add_argument("--subject-on-water", action="store_true",
                         help="Declare the subject is on the ocean/lake, which keeps waterfront "
                              "comps in the set (skips the auto water-proximity filter).")
@@ -854,7 +942,8 @@ Examples:
                         help="Path to a narratives JSON file (as written by Claude Code from the "
                              "emitted *.narrative-brief.json). Skips any LLM call.")
     parser.add_argument("--hero-url", default=None,
-                        help="Manual subject hero image URL (use when MLS scrape is blocked)")
+                        help="Manual subject hero image: a URL, or a local image file, which is "
+                             "embedded in the report (use when MLS scrape is blocked)")
     parser.add_argument("--allow-other-unit", action="store_true",
                         help="Accept a listing for a different unit at the same street address "
                              "(the address search stops and asks otherwise)")
@@ -883,7 +972,80 @@ Examples:
                              "start Nights Listed at 365 instead of its open nights on the "
                              "Airbnb calendar. Works with --render too (free) and is saved "
                              "into the report-data file.")
+    # ── Operator options ───────────────────────────────────────────────
+    parser.add_argument("--pin-comps", default=None, metavar="IDS",
+                        help="Comma-separated AirROI listing ids to force into the comp set, "
+                             "in order, whatever the scorer and filters made of them (e.g. a "
+                             "unit in the same building). They still need a live listing and photo.")
+    parser.add_argument("--address-label", default=None,
+                        help="The address the report shows (headline, title, file name), e.g. "
+                             "'2-5050 Valley Drive, Sun Peaks, BC'. Lookups still use the found address.")
+    parser.add_argument("--sqft", type=int, default=None,
+                        help="Override the subject's interior square footage")
+    parser.add_argument("--output-dir", default=None,
+                        help="Write the report here instead of OUTPUT_DIR from .env (e.g. a test "
+                             "run that should stay out of the client reports folder)")
+    parser.add_argument("--pdf", action="store_true",
+                        help="Also save a PDF next to the HTML (headless Chromium, needs "
+                             "Playwright). Same as: python -m report.pdf_export <html>")
     return parser
+
+
+async def _maybe_pdf(args, output_path: Path) -> None:
+    """--pdf: a client-ready PDF next to the report. A failure never costs the HTML."""
+    if not getattr(args, "pdf", False):
+        return
+    try:
+        from report.pdf_export import export_pdf
+        # Playwright's sync API refuses to run inside this event loop: use a thread.
+        pdf_path = await asyncio.to_thread(export_pdf, output_path)
+        print(f"[PDF] Saved to: {pdf_path.resolve()}")
+    except ImportError:
+        print("[PDF] Playwright is not installed, so no PDF was made (the HTML report is saved). "
+              "See report/pdf_export.py for the one-time install.")
+    except Exception as e:
+        print(f"[PDF] Export failed ({e}). The HTML report was still saved.")
+
+
+def _permitting_check(prop: PropertyBasics):
+    """PERMITTING_CHECK: the verified STR-permitting table for the subject's
+    location (regulations.py), printed and returned; None when it is off."""
+    if not config.PERMITTING_CHECK:
+        return None
+    verdict = check_str_permitting(prop.address, prop.market)
+    icon = {"prohibited": "⛔", "restricted": "⚠️", "permitted": "✅"}.get(verdict.status, "❓")
+    print(f"[Permitting] {icon} {verdict.status.upper()} - {verdict.jurisdiction}")
+    if verdict.headline:
+        print(f"[Permitting] {verdict.headline}")
+    if verdict.status == "prohibited":
+        print("[Permitting] ASK THE USER before relying on this report: short-term rental "
+              "is prohibited here.")
+    return verdict
+
+
+def _apply_display_overrides(args, prop: PropertyBasics) -> None:
+    """--address-label changes only how the subject is labelled (headline,
+    title, file name), after every lookup that needed the real address."""
+    label = getattr(args, "address_label", None)
+    if label:
+        prop.short_address = prop.address = label
+        prop.title = None
+        print(f"[Subject] Display address: {label}")
+
+
+def _apply_projection(comps, rentalizer, calculator, prop: PropertyBasics):
+    """PROJECTION_TIERS: the three tier cards, and the calculator opened on the
+    Base Case so the report shows one headline number. (projection, calculator)."""
+    if not config.PROJECTION_TIERS:
+        return None, calculator
+    projection = derive_revenue_projection(comps, rentalizer, calculator.days_default)
+    calculator = align_calculator_to_base_case(calculator, projection)
+    cur = prop.currency
+    print(f"[Projection] Conservative: {cur}{projection.conservative:,.0f} / "
+          f"Base: {cur}{projection.base_case:,.0f} / Optimistic: {cur}{projection.optimistic:,.0f}")
+    print(f"[Projection] AirROI model: {cur}{projection.airroi_estimate:,.0f} "
+          f"({projection.airroi_divergence_pct}% from the Base Case)")
+    return projection, calculator
 
 
 def _resolve_partner(args):
@@ -1179,10 +1341,9 @@ def _decide_filters(args, prop: PropertyBasics) -> PoolFilters:
             prop.description, prop.amenities):
         print("[Filters] Subject amenities could not be read — comps not matched on pool/hot tub/ski access")
 
-    exclude_terms = (
-        [t.strip() for t in args.exclude.split(",") if t.strip()]
-        if args.exclude else []
-    )
+    # COMP_EXCLUDE in .env applies to every run, on top of --exclude.
+    exclude_terms = [t.strip() for t in f"{args.exclude or ''},{config.COMP_EXCLUDE}".split(",")
+                     if t.strip()]
     return PoolFilters(drop_on_water, required, lacking, exclude_terms)
 
 
@@ -1708,6 +1869,8 @@ async def main() -> None:
 
     if args.no_cache:
         os.environ["AIRROI_CACHE"] = "0"
+    if args.output_dir:
+        config.OUTPUT_DIR = Path(args.output_dir)
 
     # Every student brands the report before the first run: without
     # branding.json it would ship as "Your Company" with no logo (2026-09-28).
@@ -1741,6 +1904,7 @@ async def main() -> None:
     _apply_currency(args, prop)
     _print_subject(prop)
     _stop_if_hero_refused(prop)
+    permitting = _permitting_check(prop)
 
     # Steps 2-3: AirROI estimate + comparables
     estimate_data, candidates_raw, rentalizer = await _fetch_estimate_and_pool(prop)
@@ -1761,6 +1925,7 @@ async def main() -> None:
     subject_for_scoring = subject_for_scorer(prop, estimate_data)
     # Over-select so we have replacement candidates for any dead Airbnb listings
     result = rank_comps(subject_for_scoring, mapped, top_n=12)
+    _pin_comps(_pin_ids(args), result, pool.unfiltered, subject_for_scoring)
     result["selected"] = await _pick_live_comps(result, subject_for_scoring)
 
     comp_funnel = {
@@ -1789,6 +1954,7 @@ async def main() -> None:
     print(f"[Scorer] Selected {len(comps)} comps:")
     for i, c in enumerate(comps, 1):
         print(f"         #{i} {c.bedrooms}BR sleeps {c.sleeps} / {prop.currency}{c.annual_revenue:,.0f}/yr / {c.occupancy_pct:.0f}% / {c.name[:40]}")
+    _apply_display_overrides(args, prop)
 
     # Step 6: Sanity checks — Phase A (blocking, pre-render)
     print("\n--- Step 6: Sanity Phase A (pre-render, blocking) ---")
@@ -1824,6 +1990,7 @@ async def main() -> None:
         subject_monthly=season.subject_monthly,
     )
     calculator = _apply_host_overrides(args, calculator)
+    projection, calculator = _apply_projection(comps, rentalizer, calculator, prop)
     _print_calculator(prop, calculator, len(pool_occupancies), season)
 
     # Derive the season labels from THIS market's actual revenue distribution
@@ -1870,6 +2037,8 @@ async def main() -> None:
         methodology=methodology,
         report_date=date.today().strftime("%B %d, %Y"),
         partner=partner,
+        projection=projection,
+        permitting=permitting,
         proforma=(_load_proforma_arg(args, list_price=prop.list_price)
                   if proforma is not None else None),
         seasonal_data=season.data,
@@ -1894,8 +2063,11 @@ async def main() -> None:
         sys.exit(2)
 
     _print_proforma(report_data)
+    # Never replace a report already on disk; --render rewrites this one.
+    report_data.report_file = reserve_report_filename(report_data, config.OUTPUT_DIR)
     _write_report_data(report_data)
     output_path = await _render_and_gate(report_data, slug)
+    await _maybe_pdf(args, output_path)
     _maybe_email(args, prop.short_address, output_path)
 
     print()

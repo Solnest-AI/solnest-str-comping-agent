@@ -760,6 +760,27 @@
       <div class="accent-line"></div>
     </header>
 
+    {% if permitting and permitting.status != 'permitted' %}
+    {% set _cfg = {'prohibited': ('#fef2f2', '#b91c1c', '⛔ Short-Term Rentals Prohibited'),
+                   'restricted': ('#fffbeb', '#b45309', '⚠️ Short-Term Rentals Restricted'),
+                   'unknown':    ('#f8fafc', '#475569', '❓ STR Rules Not Verified')} %}
+    {% set _c = _cfg.get(permitting.status, _cfg['unknown']) %}
+    <!-- 1b) STR permitting pre-check (PERMITTING_CHECK) -->
+    <section style="background:{{ _c[0] }}; border:1px solid {{ _c[1] }}33; border-left:5px solid {{ _c[1] }}; border-radius:14px; padding:20px 24px; margin-bottom:28px;">
+      <div style="font-weight:700; font-size:15px; color:{{ _c[1] }}; letter-spacing:.02em;">{{ _c[2] }}{% if permitting.jurisdiction %} · {{ permitting.jurisdiction }}{% endif %}</div>
+      {% if permitting.headline %}<div style="font-weight:600; color:#1f2937; margin-top:6px;">{{ permitting.headline }}</div>{% endif %}
+      {% if permitting.details %}
+      <ul style="margin:10px 0 0 0; padding-left:18px; color:#374151; font-size:13.5px; line-height:1.55;">
+        {% for d in permitting.details %}<li style="margin-bottom:5px;">{{ d }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+      {% if permitting.registry_note %}<div style="margin-top:10px; font-size:13px; color:#374151;">{{ permitting.registry_note }}</div>{% endif %}
+      {% if permitting.verify_note %}<div style="margin-top:6px; font-size:13px; color:#374151;"><strong>Verify:</strong> {{ permitting.verify_note }}</div>{% endif %}
+      {% if permitting.source_url | safe_url %}<div style="margin-top:10px; font-size:12px;"><a href="{{ permitting.source_url | safe_url }}" target="_blank" rel="noopener" style="color:{{ _c[1] }};">Source &amp; details</a></div>{% endif %}
+      <div style="margin-top:12px; font-size:11.5px; color:#6b7280; font-style:italic;">This revenue analysis assumes a legally operable STR. Confirm permitting before relying on these projections.</div>
+    </section>
+    {% endif %}
+
     <!-- 2) Subject Property Details -->
     <section class="glass-card rounded-3xl shadow-luxury p-8 mb-10 fade-in-up delay-1">
       <div class="flex items-start justify-between gap-4 mb-6">
@@ -793,7 +814,7 @@
         <div class="lg:col-span-2 subject-card shadow-soft glass-card">
           <div class="subject-img-wrap">
             <img
-              src="{{ property.hero_image_url | safe_url }}"
+              src="{{ property.hero_image_url | safe_img_src }}"
               alt="{{ property.short_address }} hero image"
               onerror="this.onerror=null; this.src='https://placehold.co/1200x800/f7f3ee/1f3c34?text=Subject+Image';"
             />
@@ -923,7 +944,56 @@
     <!-- 4) Revenue Calculator -->
     <section class="glass-card rounded-3xl shadow-luxury p-8 mb-10 fade-in-up delay-3">
       <span class="pill mb-4">💰 Revenue Projections</span>
+      {% if projection %}
+      <h2 class="section-title text-3xl mb-6" style="color:var(--sol-forest);">Comp-Based Revenue Projection</h2>
+
+      <!-- Three-tier projection (PROJECTION_TIERS) -->
+      <div class="grid md:grid-cols-3 gap-6 mb-8">
+        <div class="glass-card-dark rounded-2xl p-6 text-center">
+          <div class="text-xs font-bold uppercase tracking-wider mb-2" style="color:var(--sol-muted);">Conservative</div>
+          <div class="stat-number text-3xl font-black" style="color:var(--sol-forest);">
+            {{ projection.conservative | format_currency(property.currency) }}
+          </div>
+          <div class="text-xs mt-2" style="color:var(--sol-muted);">
+            {{ projection.conservative_occ | round | int }}% occ · {{ projection.conservative_adr | format_currency(property.currency) }} ADR
+          </div>
+        </div>
+        <div class="rounded-2xl p-6 text-center" style="background: var(--sol-gradient-3);">
+          <div class="text-xs font-bold uppercase tracking-wider mb-2 text-white/80">Base Case</div>
+          <div class="stat-number text-4xl font-black text-white">
+            {{ projection.base_case | format_currency(property.currency) }}
+          </div>
+          <div class="text-xs mt-2 text-white/70">
+            {{ projection.base_case_occ | round | int }}% occ · {{ projection.base_case_adr | format_currency(property.currency) }} ADR
+          </div>
+        </div>
+        <div class="glass-card-dark rounded-2xl p-6 text-center">
+          <div class="text-xs font-bold uppercase tracking-wider mb-2" style="color:var(--sol-muted);">Optimistic</div>
+          <div class="stat-number text-3xl font-black" style="color:var(--sol-forest);">
+            {{ projection.optimistic | format_currency(property.currency) }}
+          </div>
+          <div class="text-xs mt-2" style="color:var(--sol-muted);">
+            {{ projection.optimistic_occ | round | int }}% occ · {{ projection.optimistic_adr | format_currency(property.currency) }} ADR
+          </div>
+        </div>
+      </div>
+      <div class="text-xs text-center mb-6" style="color:var(--sol-muted);">
+        {{ projection.source_description }}
+      </div>
+      {% if projection.airroi_divergence_flag %}
+      <div class="highlight-box mb-6" style="border-left: 4px solid #e67e22;">
+        <div class="text-sm" style="color:#57534e;">
+          <strong>Note:</strong> A third-party market model estimates {{ projection.airroi_estimate | format_currency(property.currency) }}
+          ({{ projection.airroi_divergence_pct }}% {{ 'above' if projection.airroi_estimate > projection.base_case else 'below' }} the comp median).
+          This divergence may reflect differences in comparable property selection criteria.
+        </div>
+      </div>
+      {% endif %}
+
+      <h3 class="text-xl font-bold mb-4" style="color:var(--sol-forest);">Interactive Performance Model</h3>
+      {% else %}
       <h2 class="section-title text-3xl mb-6" style="color:var(--sol-forest);">Interactive Performance Model</h2>
+      {% endif %}
 
       <!-- Interactive Controls -->
       <div class="grid md:grid-cols-3 gap-8 mt-8">
