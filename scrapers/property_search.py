@@ -490,6 +490,43 @@ def _clean_features(raw) -> list[str]:
     return out
 
 
+# A portal's page title ends the address at " - 10394991 | REALTOR.ca",
+# " | MLS #123 | Zillow" and the like.
+_TITLE_TAIL = re.compile(r"\s+[-|–—]\s+")
+
+
+def complete_address(address: str, market: str = "", metadata: Optional[dict] = None) -> str:
+    """The extracted address with its town, so AirROI can find it.
+
+    Firecrawl's extraction sometimes returns only the street: realtor.ca gave
+    "5050 VALLEY Drive Unit# 2" on one run and the full address on the next
+    (2026-10-22), and AirROI answers a bare street with "No results found".
+    The page title carries the whole address on realtor.ca, Zillow and Redfin
+    ("For sale: 5050 VALLEY Drive Unit# 2, Sun Peaks, British Columbia V0E5N0
+    - 10394991 | REALTOR.ca"), so take it from there; failing that, add the
+    extracted town. An address that already has a comma is left alone.
+    """
+    address = (address or "").strip()
+    if not address or "," in address:
+        return address
+    for key in ("ogTitle", "og:title", "title"):
+        title = (metadata or {}).get(key)
+        if isinstance(title, list):
+            title = title[0] if title else ""
+        if not isinstance(title, str):
+            continue
+        start = title.lower().find(address.lower())
+        if start < 0:
+            continue
+        found = _TITLE_TAIL.split(title[start:], maxsplit=1)[0].strip(" ,.")
+        if "," in found:
+            return found
+    market = (market or "").strip()
+    if market and _norm(market) not in _norm(address):
+        return f"{address}, {market}"
+    return address
+
+
 def _parse_firecrawl_result(
     raw: dict, source_url: str, metadata: Optional[dict] = None,
 ) -> dict:
@@ -497,7 +534,8 @@ def _parse_firecrawl_result(
     property dict shape that agent.py expects (same keys as old MLS scraper).
 
     `metadata` is the page metadata from the same Firecrawl response; its
-    og:image outranks the extracted hero on listing portals.
+    og:image outranks the extracted hero on listing portals, and its title
+    completes an address extracted without its town.
     """
     return {
         "hero_image_url": pick_hero_image(raw.get("hero_image_url"), metadata),
@@ -507,7 +545,7 @@ def _parse_firecrawl_result(
         "max_guests":     _stated_guests(raw),
         "property_type":  raw.get("property_type") or "Property",
         "listing_url":    source_url,
-        "raw_address":    raw.get("address") or "",
+        "raw_address":    complete_address(raw.get("address"), raw.get("market"), metadata),
         "title":          raw.get("title") or "",
         "description":    raw.get("description") or "",
         "market":         raw.get("market") or "",
