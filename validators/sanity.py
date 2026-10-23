@@ -185,9 +185,14 @@ def check_subject_hero(url: str) -> list[str]:
     house. The same host also serves Static Maps tiles, and one shipped as an
     address subject's hero (Gatlinburg, 2026-09-25), so maps are refused here
     even though the host is trusted.
+
+    A photo embedded from a local file (--hero-url <path>) is a data:image
+    URI: the operator chose that file themselves, so there is no host to trust.
     """
     if not url:
         return ["Subject hero_image_url is empty"]
+    if url.startswith("data:image/"):
+        return []
     # hostname, not a substring of the netloc: "evilmuscache.com" and
     # "muscache.com@evil.com" both contain a trusted name.
     try:
@@ -300,7 +305,8 @@ async def run_phase_a(data: ReportData) -> list[str]:
         url_tasks: list = []
         url_meta: list[tuple[str, str]] = []  # (kind, url)
 
-        if prop.hero_image_url:
+        # An embedded local photo (data: URI) is already in the report.
+        if prop.hero_image_url and not prop.hero_image_url.startswith("data:"):
             url_tasks.append(_head_ok(client, prop.hero_image_url))
             url_meta.append(("subject hero", prop.hero_image_url))
         for c in data.comps:
