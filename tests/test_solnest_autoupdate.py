@@ -2,6 +2,7 @@
 and puts the old version back when a new one fails setup."""
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -70,3 +71,11 @@ def test_paused_does_nothing(au, tmp_path):
     au.PAUSED.write_text("paused", encoding="utf-8")
     au.run_all(force=True)
     assert (Path(t["folder"]) / "VERSION").read_text(encoding="utf-8").strip() == "1.0.0"
+
+
+def test_starter_survives_a_deleted_tool_python(au, tmp_path):
+    gone = tmp_path / "gone" / "python"
+    au.write_starter({"a": {"python": str(gone)}, "b": {"python": sys.executable}})
+    text = au.STARTER.read_text(encoding="utf-8")
+    assert str(gone).replace("\\", "/") in text and sys.executable.replace("\\", "/") in text
+    assert "bash" in au._hook_command() and str(au.STARTER).replace("\\", "/") in au._hook_command()

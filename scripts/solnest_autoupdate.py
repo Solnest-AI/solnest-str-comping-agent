@@ -40,15 +40,16 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-RUNNER_VERSION = 1
-HOME = Path(os.environ.get("SOLNEST_HOME") or (Path.home() / ".solnest"))
-SETTINGS = Path(os.environ.get("SOLNEST_CLAUDE_SETTINGS") or (Path.home() / ".claude" / "settings.json"))
+RUNNER_VERSION = 2
+HOME = Path(os.environ.get("SOLNEST_HOME") or (Path.home() / ".solnest")).expanduser().absolute()
+SETTINGS = Path(os.environ.get("SOLNEST_CLAUDE_SETTINGS") or (Path.home() / ".claude" / "settings.json")).expanduser().absolute()
 TOOLS = HOME / "tools.json"
 STATE = HOME / "state.json"
 LOG = HOME / "autoupdate.log"
 LOCK = HOME / ".autoupdate.lock"
 PAUSED = HOME / "paused"
 INSTALLED = HOME / "autoupdate.py"
+STARTER = HOME / "start.sh"
 HOOK_TAG = "solnest-autoupdate"
 EVERY_SECONDS = 20 * 3600          # once a day, with slack so a daily start always qualifies
 UPDATE_TIMEOUT = 300
@@ -122,10 +123,31 @@ def _one_line(text: str) -> str:
 
 # ---------- the Claude Code start hook ----------
 
-def _hook_command() -> str:
-    py = sys.executable.replace("\\", "/")
+def write_starter(tools: dict) -> None:
+    """~/.solnest/start.sh tries every registered tool's Python, so deleting one tool
+    (and its .venv) never stops the others from updating."""
+    pys = []
+    for t in tools.values():
+        p = str(t.get("python") or "").replace("\\", "/")
+        if p and p not in pys:
+            pys.append(p)
+    me = sys.executable.replace("\\", "/")
+    if me not in pys:
+        pys.insert(0, me)
     script = str(INSTALLED).replace("\\", "/")
-    return f'"{py}" "{script}" run >/dev/null 2>&1 || true  # {HOOK_TAG}'
+    lines = ["#!/usr/bin/env bash", "# Written by solnest_autoupdate.py. Starts the daily update check in the background.",
+             f'S="{script}"']
+    for p in pys:
+        lines.append(f'if [ -x "{p}" ]; then exec "{p}" "$S" run; fi')
+    lines += ['for p in python3 python; do', '  if command -v "$p" >/dev/null 2>&1 && "$p" -c "import sys; sys.exit(sys.version_info < (3, 9))" 2>/dev/null; then exec "$p" "$S" run; fi',
+              "done", "exit 0", ""]
+    HOME.mkdir(parents=True, exist_ok=True)
+    STARTER.write_text("\n".join(lines), encoding="utf-8", newline="\n")
+
+
+def _hook_command() -> str:
+    starter = str(STARTER).replace("\\", "/")
+    return f'bash "{starter}" >/dev/null 2>&1 || true  # {HOOK_TAG}'
 
 
 def ensure_hook() -> str:
@@ -203,8 +225,10 @@ def cmd_register(a) -> int:
     install_self()
     tools = _read_json(TOOLS, {})
     tools[a.name] = {"folder": str(folder), "update": a.update, "after": a.after or "",
-                     "undo": a.undo or "", "registered": datetime.now().isoformat(timespec="seconds")}
+                     "undo": a.undo or "", "python": sys.executable,
+                     "registered": datetime.now().isoformat(timespec="seconds")}
     _write_json(TOOLS, tools)
+    write_starter(tools)
     (HOME / a.name).mkdir(parents=True, exist_ok=True)
     hook = ensure_hook()
     log(f"{a.name}: registered {folder} (v{_version(folder) or '?'})")
@@ -216,7 +240,9 @@ def cmd_remove(a) -> int:
     tools = _read_json(TOOLS, {})
     tools.pop(a.name, None)
     _write_json(TOOLS, tools)
-    if not tools:
+    if tools:
+        write_starter(tools)
+    else:
         remove_hook()
     print(f"[autoupdate] {a.name} removed." + ("" if tools else " No tools left, start hook removed."))
     return 0
