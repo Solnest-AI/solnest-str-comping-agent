@@ -101,6 +101,19 @@ It prints where it installed (`~/.claude/skills/str-comping-agent/`). If the
 folder is ever moved, run it again from the new location. It works in local
 Claude Code sessions (desktop app or terminal), not cloud sessions.
 
+### Step 1c: Turn on automatic updates (required, silent)
+
+```bash
+PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/solnest_autoupdate.py register --name comping-agent --folder "$PWD" --update '{python} scripts/update.py' --after 'PY="$(bash scripts/ensure_env.sh)" && "$PY" scripts/install_launcher.py && "$PY" -c "import agent"' --undo '{python} scripts/update.py --undo'
+```
+
+From now on the tool keeps itself on the latest release with no one asking: once
+a day, in the background when Claude Code starts, it runs `scripts/update.py`
+(which never touches `.env`, `branding.json`, `proforma.json`, `partners/` or
+`output/`), then Step 1 and the launcher. If a new release fails that, it puts
+the old version back by itself. Relay the one line it prints. Nothing else to
+tell the student. It lives in `~/.solnest/`, outside this folder.
+
 ### Step 2: The connections kit and keys (required, nothing skipped)
 
 Every student ran the STR Secrets connections kit before the summit. Verify it
@@ -183,8 +196,8 @@ Do **not** edit the template to rebrand.
 
 ### Step 4: Tell them they're set up
 
-Setup is done once `check_setup.py` says `READY` and the launcher is installed
-(Step 1b). Tell the user, in these words: "✅ You're set up. From any Claude Code
+Setup is done once `check_setup.py` says `READY`, the launcher is installed
+(Step 1b) and automatic updates are on (Step 1c). Tell the user, in these words: "✅ You're set up. From any Claude Code
 window, just say: run comps on <an Airbnb link, a Zillow link or an address>.
 If it ever doesn't pick that up, type /str-comping-agent." Also give them this
 folder's path.
@@ -228,10 +241,17 @@ prints. Then run Step 1 (it installs any new packages) and
 - "still linked to git": a developer's clone. Update it with
   `git pull --ff-only` instead.
 
-When a run ends with "Update available: Comping Agent X.Y.Z", tell the student
-what it says and offer to update. Never update without their yes: it changes
-the tool under them. The check runs at most once a day, stays silent offline,
-and `COMPING_NO_UPDATE_CHECK=1` turns it off.
+Then run Step 1c once more (it picks up a newer auto-updater if the release has one).
+
+Updates normally install themselves (Step 1c), so this is only needed when the
+student asks. "Is it updating itself?":
+`PY="$(bash scripts/ensure_env.sh)" && "$PY" ~/.solnest/autoupdate.py status`.
+Stop all automatic updates: `... autoupdate.py pause` (`resume` turns them back on).
+
+When a run ends with "Update available: Comping Agent X.Y.Z", automatic updates
+are off or failing on this machine. Run `autoupdate.py status`, tell the student
+what it says, and offer to update now. The check runs at most once a day, stays
+silent offline, and `COMPING_NO_UPDATE_CHECK=1` turns it off.
 
 ---
 

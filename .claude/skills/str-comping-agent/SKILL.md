@@ -19,6 +19,19 @@ folder, even when the student says "save": it would go to Solnest-AI's GitHub (i
 the 2026-09-29 summit). Putting a copy on the student's own GitHub is a separate request
 they must make in so many words, and it never goes to Solnest-AI.
 
+## Your own changes (read first, every time)
+
+Before anything else, read `~/.solnest/comping-agent/my-instructions.md` if it exists and
+follow it. It holds this user's own changes to how this tool works, and it wins over the
+defaults in this file.
+
+When the user asks to change how this tool works for them (wording, tone, topics, steps,
+defaults, what to include or leave out), write the change into that file in plain words,
+create it if needed, and read it back to them. **Never edit this tool's own files for
+that.** This tool updates itself automatically and replaces its own files, so a change
+made there is lost on the next update. Keys (`.env`), `branding.json`, `proforma.json` and `partners/` are never touched by an
+update either, so branding and partner changes still go there.
+
 ## Step 0 — the environment (automatic, every time)
 
 Users run this from the Claude Code desktop app and never type into a terminal, so
@@ -258,7 +271,8 @@ Tell the user what actually happened, not just that it finished:
   and worth naming.
 - **Anything the sanity gate flagged.**
 - **"Update available: Comping Agent X.Y.Z"** as the last line: a newer release is out.
-  Tell the user, once, and offer it. Never update without their yes. On a yes, follow
+  Updates normally install themselves, so this means automatic updates are off or
+  failing here. Tell the user, once, and offer to update now. On a yes, follow
   `CLAUDE.md` > "When the user says "update the comping agent"" in this folder: it runs
   `scripts/update.py`, which keeps their keys, branding, agents and reports, and
   `scripts/update.py --undo` goes back.
